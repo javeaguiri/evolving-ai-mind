@@ -7,7 +7,8 @@
 // Shared by table.mjs (getRows) and entity.mjs (listEntities) — the two places a
 // caller-supplied orderBy becomes an ORDER BY clause. Kept in one place so the two
 // cannot drift: before this module existed they disagreed, and entity.mjs accepted
-// only the object form while table.mjs also accepted a string.
+// only the object form while table.mjs also accepted a string. `resolveReadLimit` is
+// getRows's alone: which bound a read applies, and who chose it.
 
 /**
  * Normalise orderBy to an array of { column, direction }, whatever form it arrives in.
@@ -80,4 +81,39 @@ export function buildOrderClause(terms, prefix = '') {
   if (!terms?.length) return '';
   const rendered = terms.map(t => `${prefix}"${t.column}" ${t.direction === 'desc' ? 'DESC' : 'ASC'}`);
   return `ORDER BY ${rendered.join(', ')}`;
+}
+
+// SERV's read bounds. A read that states no limit gets DEFAULT_READ_LIMIT rows; no read,
+// however large its stated limit, gets more than MAX_READ_LIMIT.
+export const DEFAULT_READ_LIMIT = 100;
+export const MAX_READ_LIMIT     = 1000;
+
+function parseLimit(raw) {
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 1 ? n : null;
+}
+
+/**
+ * The bound a getRows read applies, and who chose it.
+ *
+ * A read that fills its bound is only a silent cut if the caller never chose that bound,
+ * so the attribution matters as much as the number. A similarity search's own
+ * `vectorSearch.limit` is a stated bound exactly as `limit` is: "the five nearest" is a
+ * complete answer at five. Treating it as inherited failed every top-k search that found k
+ * rows (run 815). Where both are stated the tighter one is the bound that applies.
+ *
+ *   'caller'  — the caller stated the bound that applied
+ *   'default' — the caller stated none, and DEFAULT_READ_LIMIT applied
+ *   'ceiling' — the caller asked for more than MAX_READ_LIMIT, and the ceiling applied
+ *
+ * @param {{ limit?: *, vectorSearch?: { limit?: * }|null }} body  the getRows request body
+ * @returns {{ limit: number, chosenBy: 'caller'|'default'|'ceiling' }}
+ */
+export function resolveReadLimit({ limit, vectorSearch } = {}) {
+  const stated = [limit, vectorSearch?.limit].map(parseLimit).filter(n => n !== null);
+  if (stated.length === 0) return { limit: DEFAULT_READ_LIMIT, chosenBy: 'default' };
+
+  const tightest = Math.min(...stated);
+  if (tightest > MAX_READ_LIMIT) return { limit: MAX_READ_LIMIT, chosenBy: 'ceiling' };
+  return { limit: tightest, chosenBy: 'caller' };
 }

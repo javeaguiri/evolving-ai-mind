@@ -651,7 +651,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       call_id: activeCall.call_id,
       // `seq` is the entry this result was just persisted under — the same number the rebuild
       // reads back off the row, so both renderings of a capped result are byte-identical.
-      output:  capOutput(JSON.stringify(result ?? null), seq),
+      output:  capOutput(JSON.stringify(result ?? null), seq, activeCall.name),
     });
   };
 
@@ -858,7 +858,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
 
       } else if (HOUSEKEEPING_TOOLS.has(action)) {
         const enrichedParams = action === 'write_memory'
-          ? { ...params, scope: deriveScope(workingHistory) }
+          ? { ...params, scope: mergeMemoryScope(deriveScope(workingHistory), params.scope) }
           : params;
         const hkResult = await executeWriteTool(action, enrichedParams, traceId);
         const hkEntry  = JSON.stringify({ tool: action, params: enrichedParams, result: hkResult, items: entryItems, turn: turnCount });
@@ -1031,6 +1031,22 @@ export function turnSucceeded(result) {
   return true;
 }
 
+/**
+ * The tool part of a progress line.
+ *
+ * A recall page is labelled with what it pages. `read_session_entry` alone reads as "looking
+ * at the conversation", while the entry is usually a stored tool result — session 1211's
+ * pages of a PGC_StepType query were reported beside reasoning about step type contracts,
+ * which was accurate and read as a contradiction. Pure, and exported for tests.
+ */
+export function describeTurnAction(action, result) {
+  if (action !== 'read_session_entry' || typeof result?.total_chars !== 'number') return `\`${action}\``;
+  const n    = v => Number(v).toLocaleString('en-US');
+  const what = result.tool ? `saved \`${result.tool}\` result` : 'saved message';
+  const end  = result.offset + result.returned_chars;
+  return `\`${action}\` · ${what} (entry ${result.sequence}), characters ${n(result.offset)}–${n(end)} of ${n(result.total_chars)}`;
+}
+
 async function notifyTurnProgress({ callback, traceId, turn, action, reasoning, result }) {
   if (!callback) return;
   if (!turnSucceeded(result)) {
@@ -1039,9 +1055,10 @@ async function notifyTurnProgress({ callback, traceId, turn, action, reasoning, 
   }
 
   const detail = String(reasoning ?? '').trim();
+  const label  = describeTurnAction(action, result);
   const line   = detail
-    ? `_Turn ${turn} · \`${action}\`_ — ${detail}`
-    : `_Turn ${turn} · \`${action}\`_`;
+    ? `_Turn ${turn} · ${label}_ — ${detail}`
+    : `_Turn ${turn} · ${label}_`;
 
   await enqueueCallback(callback, {
     type:    'HUMAN_NOTIFICATION',
@@ -1241,18 +1258,40 @@ async function simulateForRegistration(steps, traceId) {
  * genuinely is the human's to determine.
  */
 async function preGateRefusal(action, params, traceId) {
-  if (action !== 'register_workflow') return null;
-  const steps = params?.steps;
-  if (!Array.isArray(steps) || steps.length === 0) return null;
+  if (action === 'register_workflow') {
+    const steps = params?.steps;
+    if (!Array.isArray(steps) || steps.length === 0) return null;
 
-  const sim = await simulateForRegistration(steps, traceId);
-  if (sim.passed) return null;
+    const sim = await simulateForRegistration(steps, traceId);
+    if (sim.passed) return null;
 
-  return {
-    error:      'Workflow failed validation — not registered, and not sent for approval. Correct the steps and simulate again.',
-    validation: sim.error_summary,
-    issues:     sim.issues,
-  };
+    return {
+      error:      'Workflow failed validation — not registered, and not sent for approval. Correct the steps and simulate again.',
+      validation: sim.error_summary,
+      issues:     sim.issues,
+    };
+  }
+
+  // The repair path had no validation gate at either end: nothing here, and no runSimulation
+  // in the write. A workflow could be edited into a state register_workflow would have
+  // refused outright, which is the wrong way round — the array being changed is already live.
+  if (action === 'propose_workflow_fix') {
+    const resolved = await resolveProposedSteps(params);
+    if (resolved.error) return resolved;
+    if (!Array.isArray(resolved.merged) || resolved.merged.length === 0) return null;
+
+    const sim = await simulateForRegistration(resolved.merged, traceId);
+    if (sim.passed) return null;
+
+    return {
+      error:      'The merged workflow fails validation — nothing was written, and it was not sent for approval. Correct the patch and simulate again.',
+      validation: sim.error_summary,
+      issues:     sim.issues,
+      ...mergeOutcome(resolved.mergeReport, resolved.merged),
+    };
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1302,6 +1341,199 @@ export function renderGateValue(value) {
     : text;
 }
 
+/**
+ * Merge a patch of complete steps into a stored step array, keyed by `step` identifier.
+ *
+ * The unit is the step, never the field. A patch entry REPLACES the stored step of that
+ * identifier outright, so every submitted step stays a valid simulatable unit and the gate
+ * diff is exact rather than inferred. Field-level merging would put the engine in the
+ * business of reassembling fragments, and would let a half-specified step reach the gate.
+ *
+ * Absence means unchanged — that is the whole point of a patch — so deletion cannot be
+ * expressed by omission and is named explicitly in `removeSteps`. The full-array form could
+ * always delete by leaving a step out; without an explicit list that capability would be
+ * lost silently.
+ *
+ * Order is preserved for steps that already exist, and new steps are appended in patch
+ * order. Routing is explicit in each step, so array position carries no meaning of its own
+ * — except at index 0, which `run-workflow.mjs` uses to seed the root frame. Replacing a
+ * step in place rather than re-appending it is what keeps that stable.
+ *
+ * Pure. Reports what it did rather than deciding what to do about it: a caller refuses on
+ * `duplicatePatchKeys` or `unknownRemovals`, and the simulation refuses on the result.
+ */
+export function mergeStepPatch(currentSteps = [], { patch = [], removeSteps = [] } = {}) {
+  const removals   = new Set(removeSteps.map(String));
+  const patchByKey = new Map();
+  const duplicatePatchKeys = [];
+
+  for (const step of patch) {
+    const key = String(step?.step);
+    if (patchByKey.has(key)) duplicatePatchKeys.push(key);
+    patchByKey.set(key, step);
+  }
+
+  const currentKeys    = new Set(currentSteps.map(s => String(s.step)));
+  const unknownRemovals = [...removals].filter(k => !currentKeys.has(k));
+
+  const replaced = [];
+  const removed  = [];
+  const merged   = [];
+
+  for (const step of currentSteps) {
+    const key = String(step.step);
+    if (removals.has(key)) { removed.push(key); continue; }
+    if (patchByKey.has(key)) {
+      merged.push(patchByKey.get(key));
+      replaced.push(key);
+      patchByKey.delete(key);
+      continue;
+    }
+    merged.push(step);
+  }
+
+  // An added step is placed after the step that routes to it, never appended.
+  //
+  // Appending looks harmless because routing is followed by key, and L1 does reject an
+  // unreachable step or a dead target. But L1's data-flow trace walks the array in what it
+  // calls "canonical (top-to-bottom) execution order", so a step appended at the end is
+  // treated as writing its output_key AFTER every step already in the array. Session 1196:
+  // a patch replaced steps 16 and 17 and added 16b between them; 16b landed at index 37,
+  // past 17 and past the `end` step, and the merged array was refused with
+  // `unresolved_template_variable` on step 17 for a key 16b plainly writes. The patch was
+  // correct and there was no observation available to her that said otherwise.
+  //
+  // Placing by router, not by name: "16b" sorting after "16" is a convention the engine
+  // does not read, and a patch is free to add a step called anything. Chains are resolved
+  // by repeating the pass — 16c placed after 16b once 16b itself has a position. Anything
+  // nothing routes to is appended, where L1's unreachable-step check is the right answer.
+  const added   = [...patchByKey.keys()];
+  const pending = new Set(added);
+
+  let placedOne = true;
+  while (pending.size && placedOne) {
+    placedOne = false;
+    for (const key of [...pending]) {
+      const routerIdx = merged.findIndex(s => stepRoutesTo(s, key));
+      if (routerIdx === -1) continue;
+      merged.splice(routerIdx + 1, 0, patchByKey.get(key));
+      pending.delete(key);
+      placedOne = true;
+    }
+  }
+  for (const key of pending) merged.push(patchByKey.get(key));
+
+  return { merged, added, replaced, removed, unknownRemovals, duplicatePatchKeys };
+}
+
+/**
+ * What the merge produced, for whoever is being judged on it.
+ *
+ * A patch is validated against the merged array, and until now nothing ever showed her that
+ * array. Session 1196: the refusal said step 17 read a key "not written by any prior step"
+ * while her patch wrote it in a step she had just submitted — true of the merged array,
+ * false of the patch, and the merged array was the one thing she could not see. Every
+ * verification available to her agreed with the refusal, because they were all reading the
+ * same hidden order.
+ *
+ * `step_order` is the field that matters: it is where a placement fault becomes visible at
+ * a glance. Returned on refusal and on success alike — a merge that quietly put a step
+ * somewhere unintended is worth seeing even when it validates.
+ */
+export function mergeOutcome(mergeReport, mergedSteps) {
+  if (!mergeReport) return {};
+  return {
+    patched: {
+      added:      mergeReport.added,
+      replaced:   mergeReport.replaced,
+      removed:    mergeReport.removed,
+      step_order: (mergedSteps ?? []).map(s => String(s.step)),
+    },
+  };
+}
+
+/**
+ * Does this step's routing name `targetKey`?
+ *
+ * Every field the engine treats as a routing target, including the per-option and
+ * per-button ones a human_gate carries — a gate is the commonest place a new step is
+ * hung off. `next` is not a match: it is positional, and a step reached only by `next`
+ * has no named router to sit behind.
+ */
+function stepRoutesTo(step, targetKey) {
+  const target = String(targetKey);
+  const names  = value => value != null && String(value).replace(/^step:/, '') === target;
+
+  for (const field of ['on_success', 'on_else', 'on_cancel', 'on_complete', 'on_empty', 'on_error']) {
+    if (names(step?.[field])) return true;
+  }
+  for (const opt of [...(step?.options ?? []), ...(step?.special_buttons ?? [])]) {
+    if (names(opt?.on_select)) return true;
+  }
+  return false;
+}
+
+/**
+ * Resolve what a repair is actually proposing, whichever form it arrived in.
+ *
+ * Both forms end in a complete array, because the simulator only ever sees a complete
+ * workflow — a patch changes what crosses the model/engine boundary, not what the validator
+ * receives. Shared by the pre-gate refusal, the gate text and the write so none of the three
+ * can form a different opinion about what is being written.
+ */
+async function resolveProposedSteps(params, { requireBaseVersion = true } = {}) {
+  const { workflowName, steps, patch, removeSteps = [], baseVersion } = params ?? {};
+  if (!workflowName) return { error: 'workflowName is required' };
+  if (!Array.isArray(steps) && !Array.isArray(patch)) {
+    return { error: 'Send either patch (the steps you changed) or steps (the whole array)' };
+  }
+
+  const wfResp = await getRows(
+    'PGC_Workflow',
+    [{ column: 'name', op: 'eq', value: workflowName }],
+    { column: 'version', direction: 'desc' },
+    1,
+  );
+  const wf = wfResp.rows?.[0];
+  if (!wf) return { error: `Workflow "${workflowName}" not found` };
+
+  const currentSteps = wf.steps ?? [];
+
+  // Whole-array form: still accepted, and now validated the same way. No version check —
+  // it never had one, and the instruction layer steers repairs to the patch form instead.
+  if (Array.isArray(steps)) {
+    return { wf, currentSteps, merged: steps, mode: 'steps' };
+  }
+
+  // A patch is merged against the version it was read from. She reads at T0 and submits at
+  // T1; without this, whatever landed in between is overwritten with no trace. Refusing is
+  // affordable here precisely because it is a patch — recovery is re-reading the few steps
+  // being changed, not the whole workflow.
+  // Simulation writes nothing, so it merges against whatever is stored now and skips the
+  // check. The version only has to hold at the point something is written.
+  if (requireBaseVersion && (baseVersion === undefined || baseVersion === null)) {
+    return { error: 'baseVersion is required when sending a patch — pass the version read_workflow returned.' };
+  }
+  if (requireBaseVersion && Number(baseVersion) !== Number(wf.version)) {
+    return {
+      error: `Workflow "${workflowName}" has changed since you read it — patch not applied.`,
+      baseVersion:    Number(baseVersion),
+      currentVersion: wf.version,
+      remedy:         'Re-read the steps you are changing with read_workflow, rebuild the patch against them, and resubmit with the current version.',
+    };
+  }
+
+  const result = mergeStepPatch(currentSteps, { patch, removeSteps });
+  if (result.duplicatePatchKeys.length) {
+    return { error: `Patch names the same step more than once: ${result.duplicatePatchKeys.join(', ')}` };
+  }
+  if (result.unknownRemovals.length) {
+    return { error: `removeSteps names steps that do not exist: ${result.unknownRemovals.join(', ')}` };
+  }
+
+  return { wf, currentSteps, merged: result.merged, mode: 'patch', mergeReport: result };
+}
+
 async function buildGateText(action, params, traceId) {
   try {
     switch (action) {
@@ -1339,11 +1571,17 @@ async function buildGateText(action, params, traceId) {
       }
 
       case 'propose_workflow_fix': {
-        const { workflowName, steps: proposedSteps = [] } = params;
-        let currentSteps = [];
+        const { workflowName } = params;
+        let currentSteps  = [];
+        let proposedSteps = [];
         try {
-          const resp = await getRows('PGC_Workflow', [{ column: 'name', op: 'eq', value: workflowName }], { column: 'version', direction: 'desc' }, 1);
-          currentSteps = resp.rows?.[0]?.steps ?? [];
+          // The merged array, not the submitted one. Under a patch only the steps she sent
+          // can differ, so the diff below stops being an inference and becomes exactly what
+          // changed — a whole-array resubmission could previously show spurious differences
+          // wherever an untouched step came back reformatted.
+          const resolved = await resolveProposedSteps(params);
+          currentSteps  = resolved.currentSteps ?? [];
+          proposedSteps = resolved.merged ?? [];
         } catch { /* best-effort */ }
 
         const currentMap  = Object.fromEntries(currentSteps.map(s => [String(s.step), s]));
@@ -1755,13 +1993,25 @@ async function executeWriteTool(action, params, traceId) {
       }
 
       case 'propose_workflow_fix': {
-        const { workflowName, steps } = params;
-        if (!workflowName || !steps) return { error: 'workflowName and steps are required' };
-        const wfResp = await getRows('PGC_Workflow', [{ column: 'name', op: 'eq', value: workflowName }], { column: 'version', direction: 'desc' }, 1);
-        const wf = wfResp.rows?.[0];
-        if (!wf) return { error: `Workflow "${workflowName}" not found` };
+        const { workflowName } = params;
+        const resolved = await resolveProposedSteps(params);
+        if (resolved.error) return resolved;
 
-        const currentSteps = wf.steps ?? [];
+        const { wf, currentSteps, merged: steps, mode, mergeReport } = resolved;
+
+        // The same refusal the gate applied, re-run at the write. preGateRefusal can be
+        // bypassed — a gate approved before another session moved the workflow resolves
+        // against a different array than the one it was shown.
+        const sim = await simulateForRegistration(steps, traceId);
+        if (!sim.passed) {
+          return {
+            error:      'The merged workflow fails validation — nothing was written.',
+            validation: sim.error_summary,
+            issues:     sim.issues,
+            ...mergeOutcome(mergeReport, steps),
+          };
+        }
+
         const currentMap   = Object.fromEntries(currentSteps.map(s => [String(s.step), s]));
         const proposedMap  = Object.fromEntries(steps.map(s => [String(s.step), s]));
         const allKeys      = [...new Set([...Object.keys(currentMap), ...Object.keys(proposedMap)])].sort();
@@ -1782,11 +2032,19 @@ async function executeWriteTool(action, params, traceId) {
         return {
           success:          resp.success,
           newVersion:       wf.version + 1,
+          // The most likely source of a stale baseVersion is her own previous write, so the
+          // next version she needs is stated rather than left to be inferred from this one.
+          nextBaseVersion:  wf.version + 1,
+          mode,
+          ...mergeOutcome(mergeReport, steps),
+          validation:       'passed',
           stepCountBefore:  currentSteps.length,
           stepCountAfter:   steps.length,
           stepCountMismatch: currentSteps.length !== steps.length,
           diff,
-          steps_written:    steps,
+          // Under a patch the merged array can be large and she already knows what she sent.
+          // Echoing it back spends the round's budget on something she is not missing.
+          ...(mode === 'patch' ? {} : { steps_written: steps }),
         };
       }
 
@@ -1975,7 +2233,12 @@ export function deriveScope(workingHistory) {
     if (tool === 'register_workflow'    && params.domain)                 scope.domain   = params.domain;
     if (tool === 'propose_workflow_fix' && params.workflowName)           scope.workflow = params.workflowName;
     if (tool === 'read_workflow'         && params.workflowName && !scope.workflow) scope.workflow = params.workflowName;
-    if (tool === 'search_domain_help'   && result.results?.[0]?.domain)  scope.domain   = result.results[0].domain;
+    // First writer wins for the exploration tools, last writer wins for the authoritative
+    // ones. A help search or a table listing is a guess at the subject; registering or fixing
+    // a named workflow states it. Without the guard here the LAST domain searched won, so a
+    // session that read up on two domains before designing against the first was scoped to
+    // the second — which is how a review_inventory design came to be filed under `recipes`.
+    if (tool === 'search_domain_help'   && result.results?.[0]?.domain && !scope.domain) scope.domain = result.results[0].domain;
     if (tool === 'list_tables'          && params.domain && !scope.domain) scope.domain  = params.domain;
     if (tool === 'propose_schema_fix'   && params.tableName)              scope.table    = params.tableName;
     if (tool === 'drop_table'           && params.tableName)              scope.table    = params.tableName;
@@ -1983,6 +2246,35 @@ export function deriveScope(workingHistory) {
     if (tool === 'drop_view'            && params.tableName)              scope.table    = params.tableName;
   }
   return scope;
+}
+
+// Merge a supplied memory scope over a derived one (pure — no I/O)
+//
+// The harness can only derive a scope from what the session touched, which names a workflow
+// that already exists. The case with no rule is the one that most needs a scope: a design
+// recorded for a workflow not yet built, whose subject is knowable only to its author. So the
+// derived scope is the floor and every key she states wins over it. A non-object is ignored
+// rather than spread — spreading a string would scatter its characters across the scope.
+export function mergeMemoryScope(derived, supplied) {
+  const isPlainObject = v => typeof v === 'object' && v !== null && !Array.isArray(v);
+  return isPlainObject(supplied) ? { ...derived, ...supplied } : derived;
+}
+
+// Carry a getRows read's own bounding provenance into a tool result (pure — no I/O)
+//
+// A bounded view must carry its own provenance. SERV reports how it bounded a read — the
+// limit it applied, whether rows were left behind, and how many matched in total — and every
+// read tool here reshaped the response to { count, rows } and dropped all three. `count` then
+// reads as a total, which is how a ten-row page of PGC_Memory was reported as the whole table
+// and a design memory sitting outside the page was reported as not existing. The limit is
+// carried too, because the default is chosen here and is otherwise invisible to the caller.
+export function withReadProvenance(resp) {
+  return {
+    count: resp.count,
+    ...(resp.limit_applied      ? { limit: resp.limit, limit_applied: resp.limit_applied } : {}),
+    ...(resp.truncated          ? { truncated: true } : {}),
+    ...(resp.total_matching !== undefined ? { total_matching: resp.total_matching } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -2079,6 +2371,10 @@ async function loadPrefsAndPrompt() {
 // Assemble Layer 1 (workflows) and Layer 2 (memory) context
 // ---------------------------------------------------------------------------
 
+// How many memories ride in front of every round. Named because the header states it: a
+// bound the reader can see is a bound the reader can decide to go past.
+const MEMORY_CONTEXT_LIMIT = 5;
+
 async function assembleContext() {
   // Both sorts carry a unique trailing term. priority ties across most of PGC_Memory, and
   // LIMIT 5 cuts the tied group at a point Postgres does not promise to keep stable — so
@@ -2086,9 +2382,16 @@ async function assembleContext() {
   // goes into `instructions`, ahead of the whole transcript, so a reshuffle between rounds
   // invalidates the round's entire cached prefix. PGC_Workflow.name is already unique; the
   // term is there so the guarantee rests on the sort rather than on that fact staying true.
+  //
+  // priority ASC is the documented scale (arch-memory.md 4.4) and the direction
+  // memory-client.mjs reads it in. Sorted DESC with an ascending id tiebreak, this block
+  // selected the OLDEST rows of the LEAST important band: every session opened on the same
+  // five June workflow-completion one-liners, and nothing written since could reach it.
+  // created_at DESC restores recency within a band; id DESC keeps the tiebreak unique, so
+  // the cached prefix is as stable as it was before.
   const [workflowsResp, memResp] = await Promise.all([
     getRows('PGC_Workflow', [], [{ column: 'name', direction: 'asc' }], 50),
-    getRows('PGC_Memory',   [], [{ column: 'priority', direction: 'desc' }, { column: 'id', direction: 'asc' }], 5),
+    getRows('PGC_Memory',   [], [{ column: 'priority', direction: 'asc' }, { column: 'created_at', direction: 'desc' }, { column: 'id', direction: 'desc' }], MEMORY_CONTEXT_LIMIT),
   ]);
 
   const workflowSummary = (workflowsResp.rows ?? [])
@@ -2099,7 +2402,9 @@ async function assembleContext() {
   const memSummary = (memResp.rows ?? [])
     .map(m => `[${m.memory_type}] ${m.content}`)
     .join('\n');
-  const layer2Context = memSummary ? `RECENT MEMORIES:\n${memSummary}` : '';
+  // Named for what the sort actually returns. "RECENT" was a claim the ordering did not keep,
+  // and read_memory is the tool for going past these five.
+  const layer2Context = memSummary ? `MEMORIES (highest priority first, ${MEMORY_CONTEXT_LIMIT} of them — read_memory for the rest):\n${memSummary}` : '';
 
   return { layer1Context, layer2Context };
 }
@@ -2118,6 +2423,20 @@ const MAX_TOOL_OUTPUT_CHARS = 15000;
 // the envelope: a recall window that could itself be capped would truncate the very tail it was
 // called to recover, and the model would have no way to tell the two truncations apart.
 const MAX_RECALL_CHARS = 12000;
+
+// How each re-runnable read tool is asked for less — only the arguments its schema accepts.
+// A tool absent here (a simulation, a prompt, a recalled page) has no narrower form.
+const NARROWER_READ = {
+  query_table:          'call query_table again with `columns` naming only the fields you need, or `filters` selecting only the rows you need',
+  query_entity:         'call query_entity again with narrower `filters` or a smaller `limit`',
+  read_memory:          'call read_memory again with narrower `filters` or a smaller `limit`',
+  read_workflow:        'call read_workflow again with `outline: true`, or `steps` naming only the steps you need',
+  run_sql:              'call run_sql again with a SELECT that returns only the columns and rows you need',
+  list_tables:          'call list_tables again with `domain` or `prefix`',
+  list_physical_tables: 'call list_physical_tables again with `prefix`',
+  list_capabilities:    'call list_capabilities again with `category` or `status`',
+  list_schedules:       'call list_schedules again with `workflowName`',
+};
 
 const AWAITING_APPROVAL_OUTPUT = JSON.stringify({ status: 'awaiting_approval' });
 
@@ -2141,15 +2460,27 @@ const RESPONSE_DELIVERED_OUTPUT = JSON.stringify({ status: 'delivered_to_user' }
  * forfeiting the round's cache credit. Both paths know the sequence number, so the function
  * stays pure and both renderings stay byte-identical.
  *
- * @param {string} text   The serialised tool result
- * @param {number} [seq]  Sequence number of the entry holding the full result
+ * A read that can be asked for less is pointed at the narrower read first. The source is live
+ * and the stored result is a snapshot, and paging a snapshot to find one record costs far more
+ * than asking for that record: session 1211 paged 24,000 characters of a 55,512-character
+ * step-type dump to reach one contract a `step_type` filter would have returned. Paging stays
+ * the fallback, and the only route for a result that cannot be asked for in part. The tool is
+ * known on both render paths — the in-round call's name and the stored entry's `tool` — so the
+ * two renderings stay byte-identical.
+ *
+ * @param {string} text    The serialised tool result
+ * @param {number} [seq]   Sequence number of the entry holding the full result
+ * @param {string} [tool]  The tool that produced it
  */
-function capOutput(text, seq) {
+export function capOutput(text, seq, tool) {
   if (text.length <= MAX_TOOL_OUTPUT_CHARS) return text;
+  const narrower = NARROWER_READ[tool] ? ` To see only what you need, ${NARROWER_READ[tool]}.` : '';
   const recall = seq === undefined || seq === null
     ? ''
-    : ` The full result is session entry sequence ${seq} — call read_session_entry({ sequence: ${seq}, offset: ${MAX_TOOL_OUTPUT_CHARS} }) to read the rest.`;
-  return `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)} ...[truncated: ${MAX_TOOL_OUTPUT_CHARS} of ${text.length} characters shown.${recall}]`;
+    : narrower
+      ? ` The full result is also stored as session entry sequence ${seq}; read_session_entry({ sequence: ${seq}, offset: ${MAX_TOOL_OUTPUT_CHARS} }) pages it when a narrower read cannot express what you need.`
+      : ` The full result is session entry sequence ${seq} — call read_session_entry({ sequence: ${seq}, offset: ${MAX_TOOL_OUTPUT_CHARS} }) to read the rest.`;
+  return `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)} ...[truncated: ${MAX_TOOL_OUTPUT_CHARS} of ${text.length} characters shown.${narrower}${recall}]`;
 }
 
 /**
@@ -2289,7 +2620,7 @@ export function toInputItems(workingHistory = []) {
     // The entry a gate resolves into carries the same action as the pending call, so it
     // becomes that call's output rather than a second call.
     if (pending && pending.name === parsed.tool) {
-      closePending(capOutput(JSON.stringify(parsed.result ?? null), entry?.sequence_number));
+      closePending(capOutput(JSON.stringify(parsed.result ?? null), entry?.sequence_number, parsed.tool));
       return;
     }
 
@@ -2307,7 +2638,7 @@ export function toInputItems(workingHistory = []) {
     items.push({
       type:    'function_call_output',
       call_id: replayedId ?? callId,
-      output:  capOutput(JSON.stringify(parsed.result ?? null), entry?.sequence_number),
+      output:  capOutput(JSON.stringify(parsed.result ?? null), entry?.sequence_number, parsed.tool),
     });
   });
 
@@ -2384,7 +2715,7 @@ async function executeReadTool(action, params, traceId, session) {
         // because a JSONB column comes back whole. getRows has taken the whitelist since
         // Sprint 10; it simply was never passed through here.
         const resp = await getRows(tableName, filters, orderBy, limit ?? 20, vectorSearch, columns);
-        return { count: resp.count, rows: resp.rows ?? [] };
+        return { ...withReadProvenance(resp), rows: resp.rows ?? [] };
       }
 
       case 'run_sql': {
@@ -2450,7 +2781,7 @@ async function executeReadTool(action, params, traceId, session) {
         if (category) filters.push({ column: 'category', op: 'eq', value: category });
         if (status)   filters.push({ column: 'status',   op: 'eq', value: status });
         const resp = await getRows('PGC_Capability', filters, { column: 'capability_key', direction: 'asc' }, 100);
-        return { count: resp.count, capabilities: resp.rows ?? [] };
+        return { ...withReadProvenance(resp), capabilities: resp.rows ?? [] };
       }
 
       case 'list_schedules': {
@@ -2472,8 +2803,17 @@ async function executeReadTool(action, params, traceId, session) {
 
       case 'read_memory': {
         const { filters = [], limit } = params;
-        const resp = await getRows('PGC_Memory', filters, { column: 'priority', direction: 'desc' }, limit ?? 10);
-        return { count: resp.count, rows: resp.rows ?? [] };
+        // PGC_Memory.priority is 1-10 with LOWER meaning more important (arch-memory.md 4.4),
+        // which is the direction memory-client.mjs has always read it in. This sorted DESC and
+        // so ranked the least important band first: the fire-and-forget run_complete rows sit
+        // at 8, and ten of them filled every page of a domain's memories.
+        const resp = await getRows(
+          'PGC_Memory',
+          filters,
+          [{ column: 'priority', direction: 'asc' }, { column: 'created_at', direction: 'desc' }, { column: 'id', direction: 'desc' }],
+          limit ?? 10
+        );
+        return { ...withReadProvenance(resp), rows: resp.rows ?? [] };
       }
 
       case 'read_workflow': {
@@ -2515,11 +2855,26 @@ async function executeReadTool(action, params, traceId, session) {
       }
 
       case 'simulate_workflow': {
-        const { steps, level } = params;
-        if (!steps) return { error: 'steps is required' };
+        const { steps, patch, level } = params;
+
+        // A patch is merged here too. Without this the tool that checks a fix would demand
+        // the whole array to check it, which defeats the patch it is meant to validate.
+        let toSimulate = steps;
+        let merge      = {};
+        if (!Array.isArray(steps) && Array.isArray(patch)) {
+          const resolved = await resolveProposedSteps(params, { requireBaseVersion: false });
+          if (resolved.error) return resolved;
+          toSimulate = resolved.merged;
+          // What was simulated is not what she sent — it is her patch merged into the stored
+          // array. Saying which array was judged, and in what order, is the difference
+          // between a result she can act on and one she can only disbelieve.
+          merge = mergeOutcome(resolved.mergeReport, resolved.merged);
+        }
+
+        if (!Array.isArray(toSimulate)) return { error: 'Send either steps, or workflowName with patch' };
         const { servPost } = await import('../shared/serv-client.mjs');
-        const resp = await servPost('/api/v1/proc/simulate-workflow', { steps, ...(level !== undefined ? { level } : {}) });
-        return resp;
+        const resp = await servPost('/api/v1/proc/simulate-workflow', { steps: toSimulate, ...(level !== undefined ? { level } : {}) });
+        return { ...resp, ...merge };
       }
 
       case 'search_domain_help': {

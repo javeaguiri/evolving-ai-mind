@@ -1,0 +1,1715 @@
+# Sprint 12 — The Repair Loop, and Release Readiness
+
+**Status: SCOPED 2026-08-30. Branch `sprint/12-repair-loop-and-release`.**
+
+> **Read before implementing:** `docs/sprints/sprint-11.md` §Retro and §Validation,
+> `docs/backlog.md` §High Priority, and `docs/receipt-matching-analysis.md`.
+
+---
+
+## Sprint Goal
+
+**Make the loop that changes the system cheap and safe to use, and make the system safe to hand
+over.**
+
+Sprint 11 fixed a repair loop that was blind at both ends: Novia could not see the whole artifact
+she was editing, and the gate could not show the user what she had changed. Both are fixed and
+proven live. What that exposed is the thing underneath — **`propose_workflow_fix` demands the
+complete step array to change one step.** Every defect in that class descends from it. The engine
+and instruction fixes made the full read survivable; a patch makes it unnecessary.
+
+The second half is the one that has waited longest. **Release-readiness has been deferred five
+sprints and was decided into this one** (Sprint 11 AC6). It goes early rather than last, because
+everything else this sprint does — building a workflow, calibrating thresholds against live rows,
+retesting a workflow end to end — is currently validated by deploying a branch to production and
+watching. That is the interim process, and it is what a test environment removes.
+
+**Branch:** `sprint/12-repair-loop-and-release`
+
+---
+
+## Why this shape
+
+Sprint 11's retro named a failure mode worth designing against here: **three separately-accurate
+backlog entries hid a single defect between them.** Each was written from the case that surfaced
+it, each proposed a local fix, and none named the shared rule. Working them in order would have
+shipped three patches and no principle.
+
+Track A is the same shape one level up. The patch is not a convenience — it removes the
+*requirement* that produced the whole 2026-08-27 class. Do it before building anything new, so
+Tracks C and D are built and repaired through the loop as it should be, not as it was.
+
+The standing instruction holds: **record new findings in `docs/backlog.md` rather than absorb them
+mid-sprint**, unless the user says "add to sprint".
+
+---
+
+## Tracks
+
+### Track A — `propose_workflow_fix` accepts a patch (opening item)
+
+**The case.** The tool takes the COMPLETE step array, so repairing one step means reading and
+resubmitting all of them. On a workflow past the transcript cap the array she submitted was
+part-read and part-remembered, and `process_receipt` step 13 silently lost four fields. Sprint 11
+made the full read survivable — outline, step selectors, a recall handle, a gate that shows every
+changed field. None of that removes the requirement.
+
+**Granularity is the step, not the field** (decided 2026-08-30). A patch is a set of **complete
+steps**, merged into the stored array by `step` identifier. Field-level patching would let a
+half-specified step through the gate and put the engine in the business of merging fragments;
+step-level keeps every submitted step a valid, simulatable unit, keeps L0/L1/L2 running against the
+merged array, and makes the gate diff exact rather than inferred — what she submits *is* what
+changed.
+
+**Simulation does not constrain this, and the reason matters.** The server already holds the full
+array: `propose_workflow_fix` reads the stored workflow (`minds-eye.mjs:1772`) purely to build the
+diff. Merging a patch into that read and validating the merged array is the same fetch plus a
+merge. **The simulator never sees a patch — it always sees a complete workflow.** A patch changes
+what crosses the model/engine boundary, not what the validator receives.
+
+**What the check found instead: `propose_workflow_fix` does not simulate at all.** Its body reads
+the workflow, builds the diff, and calls `updateRows`. No `runSimulation`, no L0/L1/L2 refusal —
+that is `register_workflow`'s behaviour, not this one. Novia simulated twice in session 1177
+voluntarily and nothing required it. Confirmed at the other end too: `preGateRefusal` opens with
+`if (action !== 'register_workflow') return null`, so there is no check before the gate either.
+**The repair path has no validation gate at either point, and closing that is part of Track A, not
+a precondition for it.**
+
+**Reuse, do not rebuild:** `simulateForRegistration(steps, traceId)` already exists and is what
+`register_workflow` is refused by. Track A widens the refusal to `propose_workflow_fix` and runs it
+against the merged array.
+
+**The consequence that does bite is on the other tool.** `simulate_workflow` takes `steps` only
+(`minds-eye.mjs:2521`), so an agent holding a patch cannot pre-validate without reconstructing the
+full array — which defeats the patch. **Track A is two tools:** the write tool and the simulate
+tool both take `{ workflowName, patch }` and merge server-side.
+
+**Done this way the repair path gets safer than it is today, not riskier:**
+
+| | Today (full array) | With a patch |
+|---|---|---|
+| Base of the submitted array | Partly read, partly remembered | The database, authoritative |
+| Surface she can corrupt | The whole workflow | Only the steps she names |
+| Validation before write | **None** | L0/L1/L2 on the merged array |
+| Concurrent change to the workflow | Silently clobbered | Caught by a base-version check |
+
+The last row is a property the full-array form cannot have: she reads at T0 and submits at T1, and
+today whatever landed in between is overwritten without trace. A patch merges against the version
+she read and can be refused if it moved.
+
+**To settle during design, not now:**
+- Whether a patch may add or remove steps, or only replace. **Leaning yes on add:** session 1177
+  added step `13g`, and L1 already rejects unreachable steps and dead routing targets, so a
+  typo'd step identifier that becomes an orphan is caught by the merged-array simulation. The
+  safety comes from validating the merge, not from restricting the patch. Adding a step still
+  means editing the routing of steps not in the patch, so those steps join the patch.
+- Whether `register_workflow` shares the merge and validation path.
+- Whether the full-array form stays accepted alongside the patch form, and for how long.
+- What the gate renders for a patch — the diff is against the merged array either way.
+- Whether the base-version check is advisory or refusing.
+
+**Acceptance:** AC1.
+
+### Track B — Release readiness — MOVED OUT 2026-09-22
+
+**No longer in this sprint.** Moved to the standing workstream at
+`docs/ops-release-readiness.md` (R2 test environment, R3 README bootstrap, R4 log hygiene, plus
+R1 multi-environment `template.yaml`, which blocks R2). **AC2 is withdrawn, not failed** — the
+work is tracked, not abandoned. Six sprints of deferral ended by moving the work out of the
+container that kept losing it rather than by scoping it again.
+
+The original scope is kept below for the record.
+
+**Carried from Sprint 11's AC6 decision.** Three parts, and they are not equally hard:
+
+1. **A test environment parallel to prod.** The interim process — *deploy the branch to prod,
+   validate, then merge* — was used again on 2026-08-30 and is what this replaces. Main must
+   always reflect what is actually running; once a test environment exists that flips to *deploy
+   to test → validate → merge → deploy to prod*.
+2. **README bootstrap.** A second person, or the same person on a new machine, should be able to
+   stand the system up from the repository.
+3. **Log hygiene.** Deferred alongside the other two since Sprint 7.
+
+**Acceptance:** AC2.
+
+### Track C — The inventory correction workflow — MOVED TO SPRINT 13, 2026-09-22
+
+**Not delivered here. Moved whole, not abandoned** — the full track, its four verbs, the three
+alias specimens inherited from Track D and the live evidence of user impact are now scope item 7
+of `docs/sprints/sprint-13.md`. **AC3 moves with it.**
+
+It moves for a reason rather than for room: three of its four verbs are record edits over the same
+two tables, which is precisely what Sprint 13's bulk-edit pattern is for. Built now, it would be
+rebuilt in a month.
+
+### Track D — CLOSED 2026-09-22, premise inverted and never user-facing
+
+**Closed without the work, by decision, not by deferral.** The track was *calibrate the two 0.4
+vector thresholds*. Session 18's probes showed steps 8 and 8c are `serv_query` **retrieval** — they
+bound what step 10's `match_inventory_items` prompt may see. **No value of either threshold decides
+a merge.** Changing them changes the candidate list, not the answer.
+
+**And the specimens are wrong rows, not a mis-set bound.** Read live 2026-09-22:
+
+| Alias | Raw receipt string | Resolves to |
+|---|---|---|
+| 41 | `PAN M. 100%INT FAM` | **36** Whole Wheat Sandwich Bread ✓ |
+| 89 | `PAN M.100%INT FAM` | **36** Whole Wheat Sandwich Bread ✓ |
+| **81** | `PAN MOLD INT ALTEZ` | **17** Rustic Sliced Bread ✗ |
+
+Two aliases for the same product resolve correctly; the third is simply a wrong row. No threshold
+produces that and none repairs it — **only editing alias 81 repairs alias 81.** The alias-fix work
+therefore moves to **Track C**, where the user drives it from Slack, and the two findings that are
+not user-facing move out of the sprint entirely (backlog, and a standing observation below).
+
+**The test this failed, and the rule it establishes.** *An evolving artifact is changed when the
+user is affected by it, through a workflow the user drives.* Track D proposed changing a retrieval
+bound nobody would ever see, derived from correctness findings produced by staring at data. The
+findings were accurate; the work was not warranted. **Apply this filter at scoping, not after.**
+
+**AC4 is withdrawn** — absorbed into AC3.
+
+### Track E — Retest `edit_budget` — MOVED TO SPRINT 13, 2026-09-22
+
+**No longer in this sprint.** Retesting v6 now would validate an edit flow that is about to be
+replaced: `edit_budget` is the natural second consumer of the bulk-edit pattern, after
+`manage_expenses`. **Novia converts it to the table-edit mechanism first, then it is retested
+once** — rather than being validated twice, the first time against a design with a known
+successor.
+
+**AC5 moves with it.** Carried from Sprint 9 and Sprint 11; this is the third carry, and the
+first one with a stated reason rather than a shortfall.
+
+### Track F — `manage_expenses`, built by Novia
+
+**Opened 2026-09-20 from Novia session 1218.** The user asked for a workflow to see and change
+expenses; Novia proposed `manage_expenses` — a month picker, a reloading main menu, and add /
+delete / edit branches each looping back through the menu. The design was evaluated against the
+live contracts and the live rows before any build.
+
+**Session 17's reuse question is answered, and the answer is no.** The plan was to test the generic
+CRUD path before commissioning a build. There is no sub-workflow step type among the 19 live ones,
+so a workflow cannot invoke `add_entity` / `update_entity` / `delete_entity`. A *see and change*
+workflow must own its writes; generic CRUD stays reachable only as a standalone Slack phrase.
+
+**Verified sound in the proposed design:**
+
+- All three back-edges satisfy the suspension rule — a `human_gate` lies between each loop target
+  and the step that jumps back to it.
+- The menu loop is not idempotency-blocked. `enqueueWorkflow` stamps every `execute_top` with a
+  fresh `stepExecutionId` (`src/shared/sqs-callback.mjs:59`) and the check prefers it over the step
+  key (`src/proc/run-workflow.mjs:241`), so repeat menu passes never reach the 3-hit stuck limit.
+  This was the most likely way the design could have been quietly fatal, and it holds.
+- Editing a title or description re-embeds — `src/serv/table.mjs:619-651` re-computes any vector
+  column whose `embed_source` field appears in the update, merging read-before-write.
+- Gate types, step types and table permissions all check out. July's 49 rows sit under Slack's
+  100-option `list_selection` cap, and the reveal panel chunks (Sprint 11 AC4).
+
+**Four corrections to send back before she builds:**
+
+| # | Defect | Evidence |
+|---|---|---|
+| 1 | The proposed payment-method radio (Cash / Card / Bank Transfer / Other) contradicts the stored vocabulary | Live values are `null` x76, `cash` x9, `debit` x20. `debit` matches no option, and an untouched form field submits the option's own `value` — so opening the edit form on such a row and saving rewrites it |
+| 2 | The add form omits `currency`, which is NOT NULL defaulting to `'USD'` | The table is already split **75 USD / 30 EUR** in a euro-spending household; every manual entry deepens it |
+| 3 | The step 6 menu carries no `cancel` option | The `human_gate` contract requires one in `options` or `special_buttons`. Add / Delete / Edit / Done does not satisfy it — L0/L1 should refuse the array |
+| 4 | Delete and Edit are offered on a month with no expenses | `option.condition` is the idiomatic guard, and it is in the contract she had already read |
+
+**One decision to make rather than default:** `PGD_Expenses.deleted_at` exists and has **never been
+written** — 0 non-null rows across 105. The design hard-deletes via `serv_delete`. That may well be
+right; it should be said out loud rather than chosen by silence.
+
+**Adjacent, pre-existing, not hers:** `category_id` is NOT NULL while its FK to
+`PGD_SpendingCategories` is `ON DELETE SET NULL`. Deleting a spending category fails on that
+contradiction.
+
+**What this track is really testing.** Novia read the contracts thoroughly — convention bridge,
+live step types, a comparable workflow's outline, then the nine full step-type contracts, paging a
+39,495-character capped result through `read_session_entry` twice. Sprint 11's machinery worked as
+designed. What she did not read was the **data** she was designing a form over; one `query_table`
+on `PGD_Expenses` would have produced all four corrections. So the track's second purpose is
+whether a *factual* correction — four facts, no defect report — is enough to move her revision.
+That keeps the correction inside the Generation fault domain, where Novia's scope sits.
+
+**Acceptance:** AC7.
+
+---
+
+## Acceptance Criteria
+
+| # | Criterion | Track | Threshold |
+|---|---|---|---|
+| **AC1** | A single-step repair is submitted, gated and applied without resubmitting the whole array; the merged array passes L0/L1/L2 **before** the write, and a merged array that fails is refused | A | Binary, verified live from `/novia`, including one deliberately failing patch |
+| ~~**AC2**~~ | ~~A change is validated on a test environment before reaching prod, and the README stands the system up from scratch~~ **WITHDRAWN 2026-09-22 — moved to `docs/ops-release-readiness.md`** | ~~B~~ | — |
+| ~~**AC3**~~ | ~~One correction workflow performs rename, merge, recategorise and alias-fix~~ **MOVED TO SPRINT 13 2026-09-22** — three of its four verbs are record edits, which is what Sprint 13's bulk-edit pattern is for | ~~C~~ | — |
+| ~~**AC4**~~ | ~~Both thresholds calibrated against live rows and applied~~ **WITHDRAWN 2026-09-22 — absorbed into AC3.** The premise inverted: the thresholds decide nothing, and the specimens are wrong alias rows | ~~D~~ | — |
+| ~~**AC5**~~ | ~~`edit_budget` runs end-to-end from Slack~~ **MOVED TO SPRINT 13 2026-09-22** — converted to the bulk-edit pattern first, then retested once | ~~E~~ | — |
+| **AC6** | **Give Novia the replay harness as a tool — decided, not defaulted** | — | A decision exists on the record |
+| **AC7** | `manage_expenses` is built by Novia, registered, and runs end to end from Slack — add, delete and edit — with the four corrections applied and the delete semantics decided | F | Binary, from Slack |
+
+**AC6 exists for the same reason Sprint 11's did.** She can propose a fix and has no way to test it
+against the failing case: `simulate_workflow` is L0/L1/L2 and executes nothing, and `run_workflow`
+needs fresh input through a gate. The replay harness does exactly this, costs nothing, keeps gates
+real, and is not in her tool list — the endpoints exist and `dev_scripts/replay.mjs` already drives
+them. Sprint 11's evidence is that **every verification available to her is a proxy, and both of
+hers confirmed** a hypothesis her own pre-fix probe had already falsified. Track A makes proposing
+a fix cheap; this is the other half. The AC does not require the work — it requires that the
+decision be made rather than deferred a third time.
+
+---
+
+## Standing observations — not tasks
+
+These resolve on events outside the sprint's control. **Record them when they happen; do not
+schedule them.**
+
+| # | Observation | Resolves when |
+|---|---|---|
+| **AC9 (Sprint 10)** | Per-receipt cost falls with use — third < first, same merchant | An ordinary shop produces a MASYMAS receipt whose items overlap the alias table. **Protocol pre-registered** in `sprint-10.md`: per-item step-10 input tokens against the **831** baseline, per-item cost against **$0.0073**, auto-matched count as support. Raw per-receipt cost is explicitly *not* the criterion. **The notify message is not the instrument** — see `receipt-matching-analysis.md` |
+| **AC13 (Sprint 10)** | Novia's home-intelligence proposal convinces the friend | The user shows it to him |
+| **Pooled candidate attribution in workflow 358 (from Track D, 2026-09-22)** | Steps 8b/8d flatten every per-item result set into one pool keyed by row id, keeping the **maximum similarity across all receipt items** — so the `similarity` step 10 reads is closeness to *some* item on the receipt, not to the item being matched, and every rule in the prompt is applied to a number that does not mean what the rule assumes. Run 782 quotes *"high similarity (0.557) to inventory item 17"* for a number that is alias-to-receipt-string. A real **Contract** defect, deliberately not worked: it has not visibly bitten. **Trigger — if wrong merges keep appearing after aliases 81, 60 and 59 are corrected through Track C, this is the cause.** Correct it then, in steps 8/8b/8c/8d as a patch |
+| **Workflow 358 v6/v7 fixes have still never executed** | The 8b/8d max-wins dedupe and the conditional alias write are both live in v8 and unproven — run 788 answered *Skip inventory* and wrote nothing. Resolves on the next grocery receipt that is applied |
+
+---
+
+## Out of Scope
+
+| Item | Why |
+|---|---|
+| **Output-token cost reduction** | ~48% of a receipt run and the largest remaining cost term, but still **unmeasured and undiagnosed**. Measure before optimising; a sprint that opens with an optimisation target and no measurement repeats Sprint 9's AC9 |
+| **The prefix forfeit on the prose-reply path and gate resume** | Real and worth 58% of one session, but it is Novia-loop cost, not correctness. Backlog, High Priority |
+| **Transcript eviction / dynamic recall** | Designed in Sprint 11 with its three rules and a stated trigger: a session that ends on context rather than on the 240s wall. Neither has happened — sessions die on time at ~80 entries. Do not build it before the trigger |
+| **`create_domain`'s unconsumed derived-field rules** | Unchanged. Sequence *do not denormalize* first |
+| **Deleting `create_workflow`, and `/chat` dead code** | Both still undecided, and both need a dependency sweep before anything is removed. Sequence the two together |
+| **The two `process_receipt` readout defects** | Domain artifacts, recorded in `receipt-matching-analysis.md`. Let them surface through use — they cannot damage data |
+
+---
+
+## Sprint Close Checklist
+
+- [ ] `node --test tests/unit/*.test.mjs` passes
+- [ ] L0/L1/L2 pass on every workflow built or modified this sprint
+- [ ] `CLAUDE.md` "Current State" updated
+- [ ] `docs/architecture.md` updated if any `.mjs` added/removed/renamed or any decision made
+- [ ] `docs/arch-data.md` updated if any schema changes
+- [ ] `docs/arch-minds-eye.md` updated — the patch contract is Novia's tool surface
+- [ ] `README.md` updated — Track B makes this a deliverable, not a checkbox
+- [ ] `docs/backlog.md` updated — items completed, new items added
+- [ ] `docs/sprints/CURRENT.md` renamed to `docs/sprints/sprint-12.md` with outcome notes and a retro
+- [ ] **AC6 — the replay-as-a-tool decision is written down**
+
+---
+
+## Session Notes
+
+### Session 1 — 2026-08-30 — Sprint 11 closed, Sprint 12 scoped
+
+Sprint 11 closed early: 2 of 6 ACs met, plus the repair-loop work that was never an AC. Merged to
+main at `65f1f82`; prod is already running it.
+
+Sprint 12 is scoped but **not started** — this session is prep only. Track A is the opener by
+decision, and no new workflow is built before it lands.
+
+**Nothing has been prepped in `PGC_*` yet.** The lifecycle's Prep phase — reviewing and updating
+the relevant `PGC_SystemContext`, `PGC_Prompt` and `PGC_StepType` rows *before* writing code — is
+the first thing next session should do, and for Track A it is not cosmetic: the patch form changes
+`propose_workflow_fix`'s contract, so `minds_eye_tool_schemas` and the repair procedure in
+`minds_eye_system_prompt` both describe behaviour that is about to change. `minds_eye_system_prompt`
+is at **v32** and `minds_eye_context_index` at **v3** as of Sprint 11's close; the repair block in
+v32 currently instructs reading the whole array in ranges, which a patch makes unnecessary.
+
+**Track A was refined during scoping, in response to the question of whether simulation invalidates
+patching.** It does not — the server already fetches the stored array to build the diff, so the
+simulator always receives a complete workflow. The check found the opposite problem: the repair
+path has **no validation gate at all**, at either the pre-gate or the write. That, plus
+`simulate_workflow` needing the patch form so a fix can be checked before it is submitted, is now
+written into Track A with `simulateForRegistration` named as the piece to reuse. AC1 was tightened
+to require a failing merged array be refused, proven with a deliberately failing patch.
+
+**Open question carried into Prep:** whether the base-version check refuses or merely warns. It is
+the one part of the patch design with no precedent in the codebase — the full-array form has always
+clobbered silently.
+
+### Session 2 — 2026-09-06 — credential rotation (no sprint work)
+
+**No Track advanced.** The session was administrative: rotating every system credential before the
+system holds real household data. Recorded here because Track B is release readiness, and handing a
+system over safely is the same concern.
+
+**Rotated and verified live — 2 of 5 secrets:**
+
+| Secret | Result |
+|---|---|
+| `internal-api-key` | SSM v2. Old key `403`, new key `200` at `/serv/schema/listPhysicalTables` |
+| `lambda_user` password | `pgc-database-url` v4, `pgd-database-url` v3. SERV reads confirmed on new connections |
+
+Remaining: `llm-api-key` (Perplexity), `slack-signing-secret`, `slack-bot-token` — in that order,
+bot token last because regeneration is a hard cutover with no overlap window.
+
+**Two engine-level findings, both now encoded in `template.yaml` and committed:**
+
+1. **SSM references must be version-pinned.** An unpinned `{{resolve:ssm:...}}` in an
+   otherwise-unchanged template can produce an empty changeset, so the rotation never deploys while
+   SSM holds the new value — a *silent partial rotation* in which the old credential keeps working
+   and everyone believes it was replaced. Pinning forces the changeset and records the live version
+   in `git diff`.
+
+2. **`AWS::ApiGateway::ApiKey` must not carry an explicit `Name`.** Changing `Value` forces
+   replacement, CloudFormation creates before deleting, and a fixed name collides with itself:
+   *"ApiKey with name evolving-mind-ai-internal-key already exists"*. This was observed as a real
+   stack rollback, not predicted. The rollback was clean, which is the second half of the finding —
+   it fails safe, but it fails.
+
+**A process rule came out of that rollback and is now in the runbook: deploy BEFORE changing a
+database password, never after.** If the deploy rolls back with the password already changed, the
+Lambdas revert to a URL the database no longer accepts and the outage persists until diagnosed.
+Deploying first puts the fragile step where its failure costs nothing.
+
+**Delivered:** `docs/ops-key-rotation.md` — the full procedure for all six SSM parameters plus the
+credentials that are not in SSM (`.env.test`, `.claude/settings.local.json`, the bastion SSH
+keypair, IAM access keys). Contains no secret values by construction.
+
+**Hygiene fixed along the way:** `.env.test` and `.claude/settings.local.json` were both `644`
+(world-readable) and are now `600`; the three `.claude/settings.local.json` permission patterns that
+embedded the API key literally were replaced with an env-free form that survives future rotations.
+Confirmed no secret has ever been committed to git.
+
+**Open and unrelated to any key — worth more than the rotations.** The RDS security group
+`sg-05c00c014cd77e239` port 5432 ingress has never been checked. RDS is `PubliclyAccessible: true`
+by final architectural decision, so the password is the only thing between the open internet and
+real data. Console-only — `BastionEC2Role` is denied `ec2:DescribeSecurityGroups`.
+
+**Sprint 12 is still at the same point as after Session 1: scoped, not started, Prep not done.**
+
+### Session 3 — 2026-09-06 — Perplexity rotation, and a README that could not bootstrap
+
+**No Track advanced.** Administrative, continuing Session 2. Environment verified healthy after a
+restart: both previously-rotated credentials survive, SERV returns `200`, PGC connects.
+
+**`llm-api-key` rotated — SSM v5, pinned at `template.yaml` 644 and 697, deployed.** One parameter,
+two env vars: `LLM_API_KEY` on ProcFunction, `EMBEDDING_API_KEY` on ServFunction. Four of five
+secrets are now rotated; the two Slack secrets were **assessed and skipped by decision**, neither
+having been exposed, and the runbook now records that rather than leaving them looking overlooked.
+**The old Perplexity key must still be deleted in the dashboard** — until it is, this is not a
+completed rotation.
+
+**The finding worth keeping is about verification, not about the key.** This rotation is the only
+zero-downtime one, because Perplexity permits multiple live keys — and that property is exactly what
+makes it the hardest to verify. Every other rotation invalidates the old value, so a working system
+proves the new value deployed. Here both keys are live at once: a green probe after the deploy
+proves only that *some* valid key is in the environment. A silent partial rotation — SSM holding v5
+while the Lambdas still run v4, the §2.1 failure — is indistinguishable from success by any
+functional test.
+
+What distinguishes them is comparing a **hash of the deployed Lambda environment against a hash of
+each SSM version**, old as well as new. Both functions hashed to v5 and differed from v4. This is
+now §5.3, and it is not Perplexity-specific: it is the direct form of what §2.5 tests indirectly
+through a 403, it works for every parameter in the inventory, and it is the **only** form available
+when the old credential is still valid.
+
+**Two runbook corrections, both found by executing it rather than reading it:**
+
+- `.env.test` holds **three** secrets, not two. Line 18 carries `LLM_API_KEY`, read by
+  `tests/integration/llm-prompt-schema.test.mjs`. §0's inventory listed two, and §5 listed no
+  on-disk copy at all — so following the runbook would have left the integration tests pointing at
+  a key that was about to be deleted.
+- §5 said to verify "with any workflow that makes an `llm_call`, and one that embeds", which reads
+  as requiring a Slack run. Neither half does: `POST /proc/ping-llm` validates ProcFunction plus the
+  provider with no Slack, SQS or DB call, and a `getRows` `vectorSearch` descriptor makes SERV embed
+  a query string read-only. Both are now baselined before the deploy and re-run after — the
+  embedding probe returned an **identical** similarity score either side, which a merely non-empty
+  response would not have established.
+
+**Then the sweep found something bigger, and it belongs to Track B.** README Step 3 could not stand
+a fresh install up. All five `put-parameter` lines said `--type SecureString` against parameters
+that are `String` by final decision — and the decision is load-bearing at that step, because
+`{{resolve:ssm:...}}` resolves `String` only and `{{resolve:ssm-secure:...}}` is unsupported for
+Lambda environment variables. `internal-api-key` was missing from the list entirely: five documented,
+six required, and it is the one that is generated rather than obtained.
+
+**The third defect we caused ourselves, eight days ago.** The version pins added on 2026-09-06 fixed
+a silent-rotation failure and created a bootstrap failure: the pinned numbers are *this*
+installation's rotation history, and a fresh install has every parameter at version 1, so the eight
+committed pins do not resolve. Fixed in Step 3 with instructions to reset them.
+
+**That is Track B's premise arriving unprompted.** "A second person, or the same person on a new
+machine, should be able to stand the system up from the repository" was not true, and none of the
+three defects would have surfaced by reading — the first two needed the rotation, the third needed
+a change made *after* the README was last checked. It is worth carrying into Track B that the
+README's remaining steps have the same standing: unverified until someone executes them.
+
+**Commits:** `3b1eda2` (rotation + runbook), `c5580e0` (README).
+
+**Rotation closed the same session.** The old Perplexity key was deleted in the dashboard, and both
+probes were re-run afterwards: `ping-llm` returns `sonar`, the `vectorSearch` probe returns the same
+`0.2433982428895054` for the third time. **With the old key dead this is the definitive proof** —
+the hash comparison in §5.3 establishes which key deployed while both are valid, and deleting the
+old one converts a green probe from weak evidence into conclusive evidence. Four of five secrets
+rotated; Slack's two skipped by decision.
+
+**One live confirmation of the runbook's stale-link hazard, observed rather than predicted.** After
+`.env.test` was updated, the already-running shell still held the **deleted** key in memory —
+hashed `a9d081fc39b3` against the file's `7ceb47e436f9`. `.bashrc` sources `.env.test` at login
+only, so an integration test run in this shell would now fail against a key that no longer exists,
+and it would present as a provider error rather than as a stale environment. §2.4 item 3 and §5.4
+both already say to restart the shell; this is what that instruction is for.
+
+**Sprint 12 remains where Sessions 1 and 2 left it: scoped, not started, Prep not done.** Track A is
+still the opener.
+
+### Session 4 — 2026-09-07 — the security group, and a deployer role that was never complete
+
+**No Track advanced, but the findings are Track B's** — release readiness is about handing the
+system over safely, and this session established what a second person would actually inherit.
+
+**The standing item from §1 of the runbook was executed for the first time.** *"Confirm the RDS
+security group does not allow `0.0.0.0/0` on 5432"* had been carried unchecked since Session 2. The
+answer is that it does, deliberately, and **cannot be closed**: `RDSPostgresIngress` declares it
+because Lambda-outside-VPC means the functions arrive from AWS public IPs with no source to scope
+to. Deployed rules match the template exactly — no drift.
+
+**The part that was not predicted: the group reads as scoped and is not.** Two of its three ingress
+entries are decorative. `LambdaSecurityGroup` is referenced in exactly one place in the entire
+template — the RDS ingress rule itself — and is attached to **no function**, because no `VpcConfig`
+exists anywhere. The bastion rule is subsumed by the open one. Anyone tightening this group by
+reading it would edit the two rules that do nothing and leave the one that governs.
+
+**The Excel requirement was clarified, and it dissolved a planned change.** The bastion was built
+for a home laptop to reach PostgreSQL from Excel; because 5432 is already open, **the bastion is not
+what makes that work** and an SSH tunnel would buy nothing. An IP allowlist on port 22 was drafted,
+then abandoned on two facts: the address is dynamic across two locations — logins came from three
+distinct IPs in two days, and the address supplied for the allowlist was not the one the session was
+connected from — and **SSM Session Manager cannot serve Blink on iOS**, which has no Session Manager
+plugin. A PC-only solution buys nothing while the port stays open for the phone.
+
+**That reframed port 22 rather than hardening it.** SSH is key-only (`passwordauthentication no`,
+`kbdinteractiveauthentication no`), zero failed auth attempts in 24h, six distinct source IPs in the
+retained week of which at least three are the user's. The realistic attack is key compromise, not
+brute force — so the keypair is the control, and rotating it is worth more than the allowlist would
+have been. **The user rotated it the same session**: `bastion-key-sept-2026` added and working from
+the PC, old key still present pending Blink.
+
+**Deployed (three attempts, two phases each):** connection logging (`log_connections`,
+`log_disconnections` — dynamic, active immediately), `DeletionProtection: true`,
+`BackupRetentionPeriod` 1 → 7, and `AmazonSSMManagedInstanceCore` on `BastionEC2Role` as break-glass
+shell access independent of port 22.
+
+**A correction that cancelled a planned outage.** The parameter group was written to set
+`rds.force_ssl: "1"` on the premise that the server accepted plaintext connections. It does not:
+`rds.force_ssl` is already `1` with `Source: system` — the PostgreSQL 16 engine default — and its
+`ApplyType` is **dynamic**, not static. TLS enforcement was never missing, and **no reboot was
+needed**. CloudFormation silently dropped the parameter as a no-op against the default, which is why
+`--source user` lists only the two logging parameters. The gap described did not exist.
+
+**The session's real finding is `BastionEC2Role`, and it belongs to Track B.** Three permissions
+were missing, each surfaced by a CloudFormation rollback rather than by inspection:
+`rds:DescribeDBParameterGroups` + the parameter-group lifecycle, `rds:DescribeEngineDefaultParameters`,
+and `ec2:DescribeSecurityGroups` — the last of which is required to resolve
+`!GetAtt RDSSecurityGroup.GroupId`, so **any** update to `EvoMindDB` failed without it. CloudFormation
+runs as this role when deploying from the bastion and **denies one action per attempt**, so the set
+had to be discovered serially. Each fix also needed **two** deploys, because a changeset carrying
+both an IAM grant and the resource needing it cannot rely on the grant being effective in the same
+operation.
+
+**This is Session 3's README finding one layer down.** The deployer role has never been complete;
+nothing revealed it because the stack had never been asked for a resource type it had not created
+before. A fresh install would hit the same wall, and — like the README's version pins — it is
+invisible to reading. All three rollbacks were clean, which is the second half of the finding: it
+fails safe, but it fails.
+
+**A credential store nobody had listed.** The `evomind-infrastructure` stack holds `DBPassword`
+(`NoEcho`, the `lambda_user` master password) and `YourKeyNameParameter`. Both now diverge from
+reality **by design** — §3 changes the password with `ALTER USER`, and the SSH key was rotated
+through `authorized_keys` — and both must be left alone: supplying the pre-rotation `DBPassword` on a
+later deploy would reset the master password out from under SSM, and `KeyName` on
+`AWS::EC2::Instance` is replacement-forcing, so changing it would destroy this host. Added to the
+runbook's §0 inventory, which listed neither.
+
+**Also established:** `pgc-database-url` and `pgd-database-url` both connect as `lambda_user`, which
+is *also* the RDS `MasterUsername` — the system has exactly **one** database credential and it is
+the master. That is the argument for a least-privilege `excel_user` role before any financial data
+exists, not after.
+
+**Verified after deploy:** `ping-llm` returns `sonar`; `getRows` and a `vectorSearch` descriptor both
+succeed. 1044/1044 unit tests pass — though no `.mjs` changed, so the meaningful regression surface
+is the Slack path, which is the user's to exercise.
+
+**Carried to Track B by decision, not left open.** The `excel_user` role; whether to re-assert
+`DBPassword` so the stack matches reality; a Slack end-to-end covering the two tiers the curl probes
+do not reach; and `StorageEncrypted`, which is absent and **cannot be changed in place** — snapshot,
+encrypted copy, restore, new endpoint. That last one is raised now rather than filed because the
+financial data does not exist yet, and this is the cheapest that operation will ever be.
+
+**`bastion-host-key` is retained deliberately.** It may become a collaborator's key. The decision on
+*how* a collaborator gets access — a second host, or a separate user account on this one — is
+deferred to Track B, with the tradeoff on the record: a shared key is shared **identity**, so `last`
+and the newly-enabled connection logging would attribute two people to one account. Neither private
+key has ever been on this host or in a transcript.
+
+**Sprint 12 is still scoped, not started, Prep not done.** Track A remains the opener.
+
+### Session 5 — 2026-09-07 — Track A built and deployed; AC1 awaits live proof
+
+**Sprint 12 has started.** Prep and Track A landed in one session, commit `032a4d2`, deployed with
+both `PGC_SystemContext` rows upserted (`minds_eye_system_prompt` v32 → **v33**,
+`minds_eye_tool_schemas` v6 → **v7**). Regression check first: `/help` from Slack confirmed the
+slackbot → SQS → proc → serv → callback path that Session 4's curl probes could not reach.
+
+**All five open design questions were settled before any code was written**, and four of the five
+went the way the sprint doc leaned. The fifth — the one with no precedent — was decided as
+**refusing, not advisory**: `baseVersion` is required with a patch and a mismatch refuses the write.
+The argument that would have made refusal brutal under the full-array form no longer applies, because
+recovery is re-reading the few steps being changed. Its designed-for interaction: **the likeliest
+source of a stale version is her own previous write**, so the result returns `nextBaseVersion` and
+v33 says to carry it forward, or the refusal would mostly fire on false positives.
+
+**Prep found the artifacts were the smaller half.** `minds_eye_context_index` v3 turned out to carry
+no reference to the repair path at all, so only two rows needed changing, not three. The v32 repair
+block instructed reading the whole array in ranges — advice a patch makes unnecessary — and that is
+what v33 replaces.
+
+**The sprint doc understated the defect, and the code says so plainly.** It recorded that
+`propose_workflow_fix` does not simulate. It also does not simulate *at the gate*: `preGateRefusal`
+opened with `if (action !== 'register_workflow') return null`. **The repair path validated at
+neither end**, so a repair could leave a workflow in a state `register_workflow` would have refused
+outright — on an array that is already live, which is the wrong way round. Both ends now run the
+shared `simulateForRegistration` against the merged array.
+
+**A second thing nobody had filed.** `stepCountMismatch` has been computed and returned by the tool
+since it was written, and **nothing reads it**. Someone anticipated precisely the failure that later
+occurred — a short array silently replacing a long one — and shipped a flag rather than a refusal.
+It survives as reporting now that validation does the guarding.
+
+**Design decisions worth keeping.** Granularity is the step, never the field. A replaced step keeps
+its array position, so index 0 cannot drift — `run-workflow.mjs` seeds the root frame from it.
+Absence means unchanged, so deletion is explicit in `removeSteps`; the full-array form could delete
+by omission and that capability would otherwise have disappeared silently. `mergeStepPatch` is pure
+and exported, and `resolveProposedSteps` is shared by the pre-gate refusal, the gate text and the
+write so the three cannot disagree about what is being written. The simulator still only ever
+receives a complete workflow.
+
+**Tests 1044 → 1054**, ten of them on the merge. The ASCII-only assertion on the tool schemas row
+caught em dashes in the new tool descriptions — the seed-encoding convention working as designed,
+on the first change to touch it.
+
+**AC1 is not met yet, and this is the honest status.** The contract is built, deployed and unit
+tested; the criterion requires it verified live from `/novia` including one deliberately failing
+patch. Three cases to run from Slack: a single-step repair applied through the gate, a patch whose
+merged array fails L1 (expect refusal before the gate with the issues returned and the loop still
+running), and a second patch reusing a stale `baseVersion` (expect refusal with the current
+version). `process_receipt` is the natural subject — it is the workflow the whole defect class came
+from. Session 1189's inventory planning will supply the real repair.
+
+**Track A does not close until that runs.** Tracks C and D unblock at the same moment.
+
+### Session 6 — 2026-09-07 — the README's centre of gravity (no sprint work)
+
+**A one-off administrative task, committed directly to `main` at the user's instruction** and then
+merged into the sprint branch (`d93a065`). No sprint AC advanced, nothing deployed, docs only.
+
+**The README still opened on the left/right brain split as the system's organising idea** — the
+second thing a reader met, framed as *"the system is designed around two complementary modes of
+reasoning that must work together."* That stopped being true at Sprint 10's GO, when the agent was
+measured against `create_workflow` and replaced it as the way workflows are built. The document had
+not caught up: `create_workflow` was still listed as `✅ Working — R/L brain pipeline`, and `/novia`
+still read as Sprint 5 "Phase 1" with a tool list four sprints stale.
+
+**Two sections now stand where one did.** `## The Minds-Eye Agent — The Central Tenet` leads, and
+the L/R material survives beneath it — cut to roughly a third, opening with an explicit scope line
+declaring it subordinate, and rewritten around `create_domain`'s prompts rather than
+`create_workflow`'s. The "right brain will one day evolve prompts autonomously" framing is gone: the
+scaffolding fields still exist and are still named, but the reasoning over them is now stated as the
+agent's work, done on request with a human in the gate, and **the design does not assume it will
+become an autonomous process.**
+
+**Personalisation is documented as a property, not a quirk.** The two-name table from
+`arch-minds-eye.md` §1.0 is now in the README: `minds-eye` is the static system name and requires a
+code change; the display name is one row in `PGC_SystemContext.minds_eye_preferences` and requires
+one `updateRows`. **"Novia" is stated as the author's choice rather than a system fact** — a reader
+standing this up for their own household is told plainly that the name is theirs to set. This is the
+Static System vs Evolving Artifacts boundary applied to identity, and it reads as an argument for the
+boundary rather than a footnote about it.
+
+**The claim the section rests on is measured, not asserted:** $1.376 against the $1.42 pipeline
+baseline to build, and $0.672 to repair unaided from a symptom — the second being the thing a
+generation pipeline cannot do at all, because it has no way to look at what it built.
+
+**Nothing about the sprint changed.** AC1 still awaits its three live cases from `/novia`, and
+Tracks C and D still unblock on it.
+
+### Session 7 — 2026-09-08 — the gate contract was lying, and nothing could tell
+
+**AC1's live cases were dropped from the ordering** at the user's direction: the priority is
+the workflow that makes the system useful to its owner, and AC1 will be verified when the
+repair loop is next exercised rather than being staged ahead of everything else.
+
+**The session started as a capability check and became a contract audit.** Session 1189 had
+Novia designing the inventory correction workflow, and she told the user — under a heading
+reading *"The Honest Tradeoff"* — that the platform's form *"can only collect selections, not
+edits to individual values"*, then designed a checkbox-to-delete plus one-text-box-to-add
+workaround for alias editing. **Truncation was ruled out as the cause first:** entry 11 is the
+52,477-character `PGC_StepType` dump, `capOutput` gave her 0–15,000 and she paged 15,000–28,000
+and 27,000–40,000; the `fields` contract sits at offset 25,673 and *"OPENS WITH"* at 25,940.
+She had it in front of her. This was not a bounding defect.
+
+**Five findings, four fixed, one of them not previously suspected.**
+
+1. **Instruction.** `resolveFormFields` has accepted `fields` as a `{{template}}` reference
+   since the form gate shipped, and `form-gate.test.mjs` covers it in three places. The
+   contract never said so, while `reveals` and `options`/`iterator` both document their
+   runtime forms. One templated array gives one pre-filled text field per alias — the
+   capability she concluded was missing.
+2. **Execution.** The contract promised *"an untouched field submits its default (the option's
+   `value` for select/radio)"*. `buildInputElement` emitted nothing for `select`,
+   `multi_select`, `radio`, `checkbox` or `datetime` — zero hits for `initial_option`,
+   `initial_options` or `initial_date_time` anywhere in `src/` or `tests/`. **Sprint 11's
+   instruction-twin pattern with the halves reversed:** the artifact promised what the engine
+   would not do.
+3. **Execution.** Form option sets were unbounded. `list_selection` has guarded Slack's
+   100-option cap since it shipped (`callback.mjs`); the form path guarded nothing and L1
+   checked field count but never option count. `PGD_Inventory` is at **132 rows**, so an item
+   picker over it would have been rejected by Slack outright and the run would have waited on
+   a dialog nobody was shown.
+4. **Capability, not defect.** Multi-row selection already exists — a `form` gate with a
+   `multi_select` or `checkbox` field over `options_key`. `list_selection` is single-pick by
+   design and she offered nothing else.
+5. **Found while measuring #3, and nobody had filed it.** `getRows` defaults to `limit: 100`
+   and reports `count` as rows returned, which reads as a total. **23 `serv_query` steps across
+   the registered workflows declare no `input.limit`.** None exceeds the default today once its
+   own filters apply — the closest are `help` over `PGC_IntentMap` (91) and
+   `budget_vs_expense_report` over `PGD_Expenses` (92) — but both cross 100 with ordinary use.
+
+**A first read of #5 was wrong and is corrected here rather than quietly.** Counting table
+totals rather than filtered results produced a claim that `flashcard_quiz_session` could never
+draw 288 of 388 cards. Step 4 filters by `deck_id` and the largest deck holds **48**. Nothing
+is broken by the new failure; the commit message was amended before the branch was reviewed.
+
+**The decision that shaped the fix.** Runtime degradation and design-time refusal are not
+alternatives. The engine caps and *announces* — the widget survives, the block hint names the
+true total — because the values are listed nowhere else in a form gate, so a text-box fallback
+would leave nothing selectable at all. **L1 is what actually prevents it:** an inline list over
+the cap is refused, and so is an `options_key` fed by a query that can return more rows than the
+control accepts, found through `writtenByStep`. Where the producing step is a `js_transform`
+whose length is genuinely unknowable, it warns rather than refuses.
+
+**AC6's argument now has a specimen.** The deeper problem is not that she was wrong; it is that
+a non-technical owner has no external check, and a confidently-stated false limit becomes
+folklore cited as fact in the next session. `gate-contract-conformance.test.mjs` is the half
+that needs no one present: it parses the field types and the option caps **out of the contract
+text** and asserts the renderer honours every claim, so drift fails in `node --test` rather than
+in a design conversation. The other half — letting her *check* instead of assume, since
+`simulate_workflow` executes nothing and she has never seen a rendered gate — is what AC6 is
+about, and this session is the evidence for deciding it.
+
+**Shipped, deployed and verified live.** `sam deploy`, `upsert-step-type.mjs` reporting
+`human_gate updated` and 18 unchanged. SERV's three cases confirmed against production rows:
+default-limit read of `PGD_Inventory` returns `truncated: true, total_matching: 132`; a
+caller-chosen `limit: 5` reports `limit_applied: caller`; an 8-row complete read reports
+neither. **1044 → 1079 unit tests.**
+
+**Next:** the inventory correction workflow, built with Novia in a fresh session, with the
+templated-`fields` capability and the option caps now in the contract she reads.
+
+**Session 7 addendum — the validator was reviewed after it was written, and two defects found.**
+The user's challenge was *"how does L1 know how many items to expect? That code sounds brittle."*
+It does not know and does not try — it asks a syntactic question of the step that wrote the key,
+never estimating a row count. But the review found two real faults. `writtenByStep` records only
+the FIRST writer of a key, so a key written by a bounded query and re-written by an unbounded one
+inside a loop would have passed while the gate still broke; every writer is now collected and the
+weakest verdict taken. And a limit given as a `{{token}}` failed the literal-number test and was
+**refused** — a false positive on a legitimate design, and the one mistake a validator must not
+make (see [[feedback_validator_before_workflow]]). Verdicts are now three-valued: **bounded**
+(literal limit at or under the cap), **unbounded** (no limit declared, or a literal above it —
+refused), **unknowable** (runtime-resolved limit, or a `js_transform` producer — warned). Refusal
+is reserved for what the step text makes certain.
+
+**Two limits are documented in the code rather than papered over:** the check follows one hop, so
+`query → js_transform → gate` warns rather than refuses; and it ignores filters, so a naturally
+small filtered query must still state a limit. Both are deliberate — the alternative is inferring
+what a sandboxed expression returns, or reasoning about filter selectivity. Shipped as `0d240a1`
+and deployed; 1079 → **1082 unit tests**.
+
+### Session 8 — 2026-09-10 — the memory Novia wrote, and could not find
+
+**Session 1189 saved an approved `review_inventory` design. Session 1195 looked for it twice,
+correctly, and told the user it did not exist.** The row was intact throughout — `PGC_Memory`
+id 356, 4,509 characters. **Five gaps sat between the write and the read, and any one of them
+alone was enough**, which is why the first was not the whole answer.
+
+1. **`deriveScope` let the last `search_domain_help` win.** Session 1189 read up on inventory
+   (seq 2), then on recipes (seq 4), then designed against inventory. The memory was filed
+   under `recipes`. The `list_tables` and `read_workflow` rules beside it were already guarded
+   with `!scope.domain`; the help rule was not. The rule now stated plainly: **an exploration
+   tool fills a gap, an authoritative write states the fact.**
+2. **The harness replaced her scope rather than merging it, and cannot derive a subject that
+   does not exist yet.** Every rule keys off a workflow already registered, read or fixed — so
+   her second probe, `scope contains { workflow: "review_inventory" }`, could never have
+   matched. `mergeMemoryScope` makes the derived scope the floor and lets every key she states
+   win over it. **The one case the harness cannot derive is the one that most needs a scope.**
+3. **Both of her memory reads sorted `priority DESC`.** The scale is 1-10 with **lower meaning
+   more important** — `arch-memory.md` §4.4, and the direction `memory-client.mjs` has always
+   read it in. The reads ranked the least important band first, and the fire-and-forget
+   `run_complete` rows sit at 8 precisely so they rank last. Ten of them filled every page of
+   the inventory domain. **Nothing needed demoting: the sort was backwards.** The remedy
+   proposed before the doc was read — raising her memories above the noise — would have been
+   the wrong fix in the right direction, and would have put `minds-eye.mjs` further out of step
+   with the canonical retrieval path instead of back in line with it.
+4. **The opening context block had the same inversion, plus an ascending `id` tiebreak** — so
+   it selected the *oldest* rows of the *least* important band. Every session since June opened
+   on the same five `Completed workflow 'add_entity' for domain 'flashcards'` one-liners, under
+   a header reading `RECENT MEMORIES`, and nothing written afterwards could ever reach it.
+5. **The read tools dropped their own bounding provenance.** `read_memory`, `query_table` and
+   `list_capabilities` reshaped `getRows` to `{ count, rows }`, discarding the `limit`,
+   `truncated` and `total_matching` fields Session 7 added and verified live. `count` then reads
+   as a total: she saw ten rows and reported ten. **Session 7 gave SERV the provenance and the
+   agent who most needed it never saw it** — `query_table` is 28 of the 50 tool results that
+   have ever exceeded the transcript cap.
+
+**The instruction twin, fixed with the engine.** `minds_eye_system_prompt` v33 said *"Scope is
+auto-derived by the harness. Do not include scope in params"*, and framed `write_memory` as
+diagnostic reasoning after a change — *"Skip write_memory only if you made no changes"*. **An
+approved design for a later session is neither a change nor a diagnosis**, so the instruction
+did not cover the thing the user actually asked her to do. v34 states the priority scale, tells
+her to name a subject the harness cannot see, and names an approved design as a reason to write.
+Tool schemas v8 expose `scope`, `tags` and `priority` — all three of which the tool body has
+accepted since it was written, and none of which the schema mentioned.
+
+**Deployed, both context rows upserted, 1082 → 1110 unit tests.** Memory 356 corrected in place
+to `{ domain: inventory, workflow: review_inventory }`, priority 3, tags `[workflow_design]`;
+`content` and `memory_type` untouched. **Both of session 1195's probes now return it** — the
+domain probe at rank 4 of 35 with `truncated` and `total_matching` stated, the workflow probe
+directly, and the `run_complete` rows displaced off the first page entirely.
+
+**One thing deliberately not done.** The opening block was not given a recency band. It is
+assembled once per round and forms the head of the round's cached prefix, so a band that
+reshuffles whenever she writes a memory would forfeit the prefix on the next round of the same
+session — the Sprint 10 finding. The corrected scale already fixes what recency was meant to
+fix: the June one-liners are gone because they are priority 8, not because they are old.
+`created_at DESC` survives as the within-band tiebreak, where it costs nothing.
+
+**`arch-memory.md` reviewed for regression, as asked, and it is what caught #3.** The doc was
+silent on the whole minds-eye path — §5 covered the step type and the fire-and-forget writer,
+§6 covered `memory-client.mjs`, §14 had no row for any of it — **which is how an inverted sort
+lived in a second reader of the same table without contradicting anything written down.** Now:
+§4.4 states the scale binds every reader; §5.6 documents the agent write and the derive rule;
+§6.4 documents both agent read paths and the provenance requirement; §14 carries three rows.
+
+**Next:** the inventory correction workflow, built with Novia in a fresh session — she can now
+be told to recall the design, and the recall works.
+
+### Session 9 — 2026-09-10 — Track C built, and the patch loop's first added step
+
+**`review_inventory` is registered and repaired: workflow 359, v1 at 14:41, v2 at 15:11.** Built
+by Novia in session 1196 from the design she recalled out of `PGC_Memory` — the memory session 8
+made findable. The build path was hers throughout: convention bridge, `PGC_StepType`, a gated
+`addColumn` for `consumption_rate_per_day`, `register_workflow` refused once on validation and
+passing on the second attempt at 37 steps.
+
+**AC1 is met, on the workflow the whole defect class came from.** Both halves, live from
+`/novia`, and neither was staged:
+
+| AC1 clause | Evidence |
+|---|---|
+| A merged array that fails is refused | Seqs 26 and 28 — refused before the gate, issues returned, loop still running |
+| A single-step repair applied without resubmitting the whole array | Seq 33 — `patched: { added: ["16b"], replaced: ["16","17"] }`, 37 → 38 steps, v1 → v2 |
+| `baseVersion` carried | `baseVersion: 1` on every attempt; `nextBaseVersion: 2` returned |
+
+**But it took a harness fix to get there, and the defect is the sprint's sharpest finding yet.**
+Her patch replaced steps 16 and 17 and **added 16b between them** — the first patch ever to add a
+step. `mergeStepPatch` appended it: index 37, past 17 and past the `end` step. L1's data-flow trace
+walks the array in what its own comment calls *"canonical (top-to-bottom) execution order"*, so
+`shopping_result` was judged unwritten at the point step 17 reads it, and the merge was refused
+with `unresolved_template_variable` **for a key her patch plainly writes**.
+
+**Session 5 reasoned about position for replaced steps and not for added ones.** *"A replaced step
+keeps its array position, so index 0 cannot drift"* is in the record; the add case was weighed
+purely on routing — L1 rejects unreachable steps and dead targets, which is true and was never the
+issue. **Array position is a second contract L1 depends on, and nothing named it.** The unit test
+that should have caught it asserted `merged.at(-1).step === '3g'` on this exact shape — a gate
+routing to a new `js_transform`. It asserted the behaviour rather than the requirement.
+
+**What makes this worse than a wrong answer: she could not have found it.** `read_workflow` returns
+the stored array, which had no 16b because the write was refused. `simulate_workflow` returned the
+same refusal. Neither reported anything about the merge. **The array being judged was the one thing
+she could not see, and every check available to her agreed with the refusal because they were all
+reading the same hidden order.** She looped four times and the corrections still open to her — inline
+the transform, abandon the added step — would each have produced a worse workflow that validated.
+**A false validator result does not merely block; it applies pressure toward a worse design.**
+
+**Three fixes, deployed.** `mergeStepPatch` places an added step immediately after the step that
+routes to it (all six step-level routing fields plus per-option and per-button `on_select`, pass
+repeated so a chain resolves; anything unrouted still appended, for L1's unreachable check to
+answer). `mergeOutcome` reports `added` / `replaced` / `removed` / **`step_order`** on both
+refusals, the success path and the `simulate_workflow` patch path — **the Sprint 11 bounded-view
+rule applied to a view nobody had classed as one.** `buildErrorSummary` marks `[warning]`; the
+issues have carried `severity` since the check shipped and only the rendering dropped it, so the
+step-3 option-set warning read exactly like the error beside it and took part of four repair rounds
+while never being what refused the write.
+
+Verified against the real functions before and after, with the stored steps and her exact seq-28
+patch: appended → `passed: false`; placed after 16 → `passed: true`, zero issues. The live result
+at seq 33 returned the order with `16b` at index 35, and the stored v2 matches it exactly.
+**1110 → 1119 unit tests.** No seed changes — both tool descriptions were already accurate, and
+`propose_workflow_fix` already told her that adding a step means bringing its routers into the
+patch, which is what makes placement work.
+
+**Two findings recorded and not fixed.** `turnSucceeded` treats a `simulate_workflow` result as a
+success because it reports `passed: false` rather than `error` or `success: false`, so four failed
+simulations were narrated to the user as progress. And the `__pending__` entry is never cleared
+after an approved action gate, so a second click on an already-approved gate re-executes the write
+— unreachable while `chat.update` succeeds, which it did, but that call is logged non-fatal.
+
+**Also this session:** the Novia memory layer fixed end to end (session 8 note above), and
+`SlackResultsQueue`'s missing ordering and duplicate guarantees filed to the backlog at low
+priority with the FIFO dedup trap written in.
+
+**Next:** the user tests `review_inventory` v2 end to end from Slack. Track D (the two vector
+thresholds) and Track E (`edit_budget` retest) are both unblocked and unstarted.
+
+### Session 10 — 2026-09-11 — three fault domains behind one missing checkbox list
+
+**AC3's first live test, and it found a defect in each of three domains.** The user ran
+`review_inventory` and reported two error messages together. They came from **two different runs**,
+which is the first thing that had to be established rather than assumed:
+
+| When (UTC) | Run | What |
+|---|---|---|
+| 09-10 16:39:39 | **807** `review_inventory` v2 | Failed at step 1 — the silent-cut refusal, 100 of 132 rows |
+| 09-10 16:39:41 | **808** `fix_workflow` v12 | Auto-triggered with the `gate_option_set_unbounded` issue as input — **the second message** — and failed itself |
+| 09-11 11:12 | session 1196 seq 36–38 | Novia read steps 1 and 16, proposed `limit: 10000` on both. Approved → **v3** |
+| 09-11 11:27 | **809** `review_inventory` v3 | Step 1 read all 132 rows. Gate posted with no picker |
+
+The run id in her prompt — *"runId 308"* — matches no `PGC_WorkflowRun` and no workflow. It cost
+nothing only because she went straight to `read_workflow` and never looked it up.
+
+**1. The limits: Generation, and hers to find.** She caught **step 16** as well as step 1 — a second
+unbounded read of `PGD_Inventory` that would have failed identically on *Exit to Shopping List*.
+With an explicit limit `limit_applied` becomes `caller`, so the check correctly falls silent: the
+bound is then the workflow's declared choice, which is the whole distinction the check draws.
+
+**2. The missing list: Generation, still open.** Step 2 declares `output_key: "page_data,page_meta"`
+and its expression returns `{ page_options, page_meta }`. `resolveOutputWrites` skips a declared key
+the object omits — deliberate, so a step may produce a subset — so **`page_data` is never written**.
+Run 809's `local_state` carries `all_items` (132), `page_meta` and no `page_data`. Step 3's
+`options_key` resolved to `[]`, `buildInputElement` returns `null` on an empty option set, and the
+field was dropped. **The gate posted a correct header over nothing, and every layer behaved as
+designed.** L1 cannot see it: the data-flow trace models the declared `output_key`, not what the
+expression returns.
+
+**3. The option shape: Execution, fixed and deployed (`bfc301b`).** Behind the missing key sat a
+second defect that a rename alone would have swapped one wrong output for another. The `options_key`
+branch defaulted to `id`/`name`; the inline `options` branch four lines above had always read
+`value`/`label`. **Same field, two incompatible row shapes decided only by where the options came
+from** — and a `js_transform` building a picker emits the standard one, so both lookups missed and
+every option would have rendered the string `"undefined"`. `optionRowKey` now settles each row on
+its own shape: a declared key, then the standard shape, then the table shape. Swept first — there
+are exactly **two** `options_key` uses in any registered workflow, and `edit_budget` had to *declare*
+`option_value_key`/`option_label_key` to reach the standard shape, which is the argument for the fix
+rather than an obstacle to it. 1119 → **1123** unit tests.
+
+**4. `fix_workflow` has never once completed. Contract, unfixed.** Run 808 died on
+`ajv /corrected_steps/0 — must NOT have additional properties: input, output_key, on_success,
+on_else`. `PGC_Prompt` id 55 (`fix_workflow_steps` v4) declares `corrected_steps.items` with exactly
+two permitted properties — `step` and `type` — and `additionalProperties: false`, while the prompt
+text in the same row instructs *"Produce a fully corrected step array (complete array — not a
+diff)."* **The instruction and the schema contradict each other absolutely, and the model was
+rejected for obeying the instruction.** All four `fix_workflow` runs ever recorded — 468, 640, 808
+and one earlier — failed at step 4 on this identical error, spanning 2026-06-16 to 2026-09-10. Rows
+**26** (v1, `additionalProperties: true`) and **32** (v2) are duplicate `fix_workflow_steps` prompts
+alongside 55; row 26 would have worked. Whether `fix_workflow` is worth repairing at all now that
+Novia does repairs is a live question — that it has never worked belongs on the record either way.
+
+**Next:** Novia patches step 2 in a fresh session — return `page_data`, and `pageSize` 100 → 50 for
+margin under the `multi_select` cap. Run 809 is left at `awaiting_human_gate` for the user to
+decide. Track D and Track E remain unblocked and unstarted.
+
+### Session 11 — 2026-09-12 — the harness confirmed the wrong fix, and Novia read the run
+
+**`review_inventory` works — v5, and the repair that got there was Novia's, unaided, from a run id.**
+The session began on the missing checkbox list and ended with the question underneath it answered:
+*is her blindness to `local_state` a reachability problem or a discipline problem?*
+
+| Version | Who | What |
+|---|---|---|
+| v3 → **v4** | session 1198 seq 1–9 | `pageSize` 100 → 50 (correct), and `options_key` `"page_data"` → `"page_data.page_options"` — **wrong, and it shipped** |
+| v4 → **v5** | session 1198 seq 10–25 | step 2 `output_key` → single `page_state`; step 3 reads `page_state.page_options`; step 4 returns the `nav_result` it declares |
+
+**1. The defect, confirmed from run 810's own state.** Step 2 declared `output_key: "page_data,page_meta"`
+and returned `{ page_options, page_meta }`. `resolveOutputWrites` matches a comma list **by name**, so
+`page_data` was never written and `page_options` — declared by nothing — was discarded. Run 810's
+`local_state` carried `all_items`, `page_meta`, `page_form`, and neither of the other two. The gate's one
+field resolved to `[]`, `buildInputElement` returned `null`, and the field was dropped: a correct header,
+four working buttons, no picker. Every layer behaved as designed.
+
+**2. Why v4 was wrong, and this is the finding.** Session 1198 patched the **reader** to
+`"page_data.page_options"` — a path whose root does not exist. She reached that from the workflow
+definition alone, and checked it against `simulate_workflow`, which returned `passed: true` and
+`"2": { writes: ["page_data","page_meta"] }`. **`state_flow` derived a `js_transform`'s writes from its
+declared `output_key` — intent, not effect — so the trace asserted the very key that is never written.
+The harness did not miss her error; it confirmed it.**
+
+**3. Validation, fixed (`7dab502`).** L2b already executes the expression under the real `output_key`
+rule, so the executed writes now replace the declared ones in `state_flow`, `declared_writes` is kept
+alongside when they differ, and the divergence is reported as `output_key_not_returned` — advisory
+alone, because a subset return is legitimate (`create_workflow` 21a), and **hard once another step reads
+the dropped key**. A field's `options_key` is now recorded as a read, which is what makes that
+distinction available; the gate size checks already parsed it and the trace never recorded the
+dependency. Swept all 17 registered workflows: `review_inventory` only, no false positives — and it
+named **step 4**, which nobody had filed: `nav_result` declared, `nav_flag` returned, `5a` reads
+`nav_result`. Paging was broken identically. 1123 unit tests, unchanged and passing.
+
+**4. Instruction, fixed (`f6613b9`) — and the first diagnosis of it was wrong.** The comma form was
+*not* undocumented, as this session first reported; a case-sensitive grep missed `js_transform`'s own
+`input_contract`. It said *"destructure an object return value into multiple top-level local_state keys"*,
+which reads equally well as *the returned object lands under the first key* — an ambiguity that
+**supports** the model she held. Both contracts now state the deciding rule: matched by name, a declared
+name the object omits is skipped, a returned property nothing declares is discarded, both silently.
+
+**5. The probe — and it answers the question.** Given *runId 811* and nothing else, her **first action**
+was `run_sql` against `PGC_WorkflowRun`. She guessed a `workflow_name` column, was refused, recovered via
+`list_tables`, joined to `PGC_Workflow` for the name, and then read **`PGC_WorkflowRunStep`** for the
+per-step `input_snapshot`/`output_snapshot`. Bounded and targeted throughout — she never pulled the run
+row whole, which at **37,870 characters** against a 15,000 cap would have returned the item list and
+withheld the finding. She then read step 4 and 5a/5b **unprompted** and fixed the second instance.
+
+**So it was never discipline, and only half reachability.** Given a run id she reads it, and reads it
+well. What she cannot do is *obtain* one: the user's report carries a symptom, not a run number, and
+session 1196 invented *"runId 308"*. **`read_workflow_run`'s value is the run-identity half — resolving
+the latest `failed`/`awaiting_human_gate` run for a named workflow — not the bounded view she already
+builds herself with SQL.** Backlog entry recorded and amended accordingly; `PGC_WorkflowRunStep` is the
+better source than `stack[top].local_state` and is already bounded per step.
+
+**Verified independently:** v5 simulates clean under the new engine — `passed: true`, no
+`output_key_not_returned`, and `state_flow` for step 2 now reads `writes: ["page_state"]` with no
+divergence to report.
+
+**Not deployed.** Both changes are committed and pushed only — `sam deploy` for `simulation-engine.mjs`
+and `node dev_scripts/upsert-step-type.mjs` for the contract. Novia's v5 was built against the **old**
+harness, which makes the probe result cleaner, not weaker.
+
+**Next:** deploy both, then Track D (two thresholds, still 0.4) and Track E (`edit_budget` retest).
+Run 809 and 810 remain at `awaiting_human_gate`. AC3's remaining verbs — rename, merge, recategorise,
+alias-fix on `PGD_Inventory` 25 and `PAN MOLD INT ALTEZ` — are still unexercised.
+
+### Session 12 — 2026-09-12 — the shopping list, and AC1's second unrehearsed case
+
+**Deployed Session 11's two changes, then the next defect found them unnecessary.** `sam deploy`
+(`7dab502`, `simulation-engine.mjs`) and `upsert-step-type.mjs` (`f6613b9`, `js_transform` updated,
+18 unchanged) both landed before anything live was read as evidence.
+
+**1. The defect.** `review_inventory`'s shopping list rendered a correct GFM header and then one
+paragraph of comma-joined JSON. Run 812 step 17's `output_snapshot` carries the literal message.
+Step 17's `message_template` hand-drew a table header and interpolated
+`{{shopping_data.shopping_list}}` — an array of five row objects — into the body.
+`template-resolver.mjs:97` joins an array with `", "` and JSON-stringifies each object element, so
+the table ended after the separator and the rows arrived as prose beneath it. **Both components did
+exactly what they specify:** step 16b returned the rows it declared (`shopping_count` 5 was right on
+screen), and the resolver rendered them as documented. Fault domain **Instruction → Generation**.
+
+**2. What the contract did and did not say.** `message_template` said only *"supports {{template}}
+substitution"* — silent on non-scalars. Two fields below, `reveal` documents an array of record
+objects auto-rendering as a real table and warns *"do not hand-format pipe-delimited text to fake a
+table"*. The behaviour is real; it lives on a different field. Generalising it is the error, and the
+contract invited it. Fixed (`da85764`): every token resolves to a single string, what an array and an
+object each become, that both losses are silent, and that repeated content is built as text in the
+step that prepares it.
+
+**3. A correction made mid-diagnosis, and it changed the fix.** This session first reported that a
+notify's main text goes through `textToBlocks` → `mrkdwn`, which cannot render a table, and proposed
+extending the renderer. The user's correction — *Slack supports a markdown block type* — was right:
+`run-workflow.mjs:520` has always set `format: 'markdown'` on every notify enqueue, so the text goes
+through `markdownToBlocks` → top-level `markdown` blocks, which do render standard tables
+(`slack-block-kit.md:749`; the "cannot render a table" restriction at :1051 belongs to the reveal
+*container*). **No renderer change was needed, and none was made.** It also explains the symptom
+precisely: the header was a real rendered table, and it ended where the pipes stopped.
+
+**4. Novia's repair — AC1's second live case, unrehearsed.** Session 1199, 12 entries, 94 seconds,
+two of 38 steps touched. She called `simulate_workflow` **with `patch`** before proposing — the
+affordance Track A added because a patch-holder otherwise cannot pre-validate — then
+`propose_workflow_fix` in `mode: "patch"` against `baseVersion: 5`:
+`replaced: ["16b","17"], added: [], removed: []`, 38 → 38 steps, `validation: "passed"`, diff exact
+on two fields. **Two calls she made better than the brief:** an empty-state row so an empty list
+still renders as a table, and dropping `shopping_list` from the return entirely rather than keeping
+it as suggested — nothing reads it, and `state_flow` proves it.
+
+**Verified three ways.** Stored v6 simulated independently (`passed: true`, L2, only the pre-existing
+step-3 warning); the real 16b expression executed against all 132 live `PGD_Inventory` rows; and then
+**run 813, live from Slack — five proper rows.**
+
+**5. The observation worth carrying.** She diagnosed from the **workflow definition, not the run**.
+She pulled run 812's row and never its step output — step 17's `output_snapshot`, the literal broken
+message, was one query away. It came out right only because the symptom report was unusually precise.
+**Same shape as session 1198's wrong v4 fix**, where the definition alone misled her. Session 1198's
+probe showed that *given* a run id she reads runs well; this shows she does not reach for run
+evidence unprompted when a plausible diagnosis is available from the definition. That strengthens the
+`read_workflow_run` backlog entry rather than weakening it. Secondary: `workflow_name` on
+`PGC_WorkflowRun` was guessed and refused in **both** sessions.
+
+**Backlogged, not built:** L2 checks that a `message_template` token *resolves*, never to what type.
+An array or object token is JSON soup in a user-facing message, every time, and statically knowable —
+`state_flow` has carried the resolved type since `7dab502`. Same family as `output_key_not_returned`.
+Recorded with run 812 as the specimen and an explicit instruction not to build it from one case.
+
+**Note:** the contract fix did not guide this repair — she never queried `PGC_StepType`. Its first
+real test is the next notify anyone writes.
+
+**Next:** Track D (two thresholds, still 0.4) and Track E (`edit_budget` retest). Runs 809 and 810
+remain at `awaiting_human_gate`. AC3's remaining verbs are still unexercised.
+
+### Session 13 — 2026-09-13 — storage audit (no sprint work)
+
+**No Track advanced.** Administrative: where the storage actually sits, on both sides.
+
+**The bastion's root volume was at 97% — 272 MB free of 8 GB**, enough to break a `sam build`,
+`npm install` or git operation mid-deploy. The bulk was not the project: the npm download cache
+(1.9 GB) and the systemd journal (837 MB). Both cleared (`npm cache clean --force`,
+`journalctl --vacuum-size=100M`) → **64%, 2.9 GB free**. The repo is 162 MB. Nothing prevents the
+cache and journal refilling; worth checking before any Track B deploy work.
+
+**RDS is nowhere near a limit.** `sysrdsevomind`, 20 GB gp2, **18.2 GB free**, storage autoscaling
+off. `evo_mind` is **85 MB** — PGC 57 MB, PGD 18 MB. `PGC_SessionEntry` and `PGC_WorkflowRun` are
+24 MB each, 56% of the database between them, almost entirely TOAST — a terminal run keeps its
+whole `stack` (~60 kB per run) and nothing prunes either table. PGD tables are small in rows and
+heavy in embedding storage.
+
+**Backlogged (`200a67b`):** a Novia `storage_report` read tool and a gated `purge_rows` write tool,
+eligibility rules in system code and shared with the three existing scheduled table-maintenance
+entries. Three design questions are recorded against it — purging transcripts destroys replay
+recordings, `PGC_WorkflowRunStep` snapshots are her diagnostic evidence, and a PostgreSQL `DELETE`
+makes space reusable rather than returning it.
+
+**Next:** unchanged — Track D and Track E.
+
+### Session 14 — 2026-09-13 — Claude Code health check (no sprint work)
+
+**No Track advanced.** This was tooling housekeeping, run with `/doctor`.
+
+**`CLAUDE.md` 34,115 → ~27,000 chars (`34140f9`).** The Sprint 7–10 narratives in *Current State*
+now point to `sprint-07.md` through `sprint-10.md` rather than repeating them. That saves ~1.7k
+tokens (est.) of context every session.
+
+**The logging method was wrong in `CLAUDE.md`, and the cause is now confirmed.** *Monitoring* told
+sessions to pipe four `aws logs tail --follow` streams through `sed` into `/tmp/lambda-logs.txt` and
+watch the file with Monitor. That contradicted the standing feedback that this method lags. **The
+cause is block buffering, not `nohup` or `tail -f`.** `sed` writing to a file, and the `aws` CLI
+writing to a pipe, hold low-volume lines until ~4 KB accumulates. Tested: a piped `sed` had written
+0 bytes after 1s, and `sed -u` had written 16. `grep --line-buffered` on the reading end could never
+compensate. *Monitoring* now prescribes on-demand `aws logs tail --since 10m`, one per Lambda in
+parallel.
+
+**Environment:** auto mode is now the default permission mode (user settings), and the three unused
+claude.ai Google connectors were removed. Claude Code 2.1.270 is current.
+
+**Next:** unchanged — Track D (two thresholds, both still 0.4) and Track E (`edit_budget` retest).
+
+### Session 15 — 2026-09-16 — two regressions of ours, and the instructions that hid them
+
+**No Track advanced; this was a regression review, requested after session 1210.** The user had
+Novia repair `budget_vs_expense_report` for the silent-cut failure (run 827), after session 1201
+had repaired `process_receipt` for what looked like the same failure (run 815). v6 then failed on
+every input (runs 828–832), including the two runs entered year-first.
+
+**What we broke, all confirmed against live data and older simulator trees:**
+
+| # | Fault domain | Source | Effect |
+|---|---|---|---|
+| 1 | Execution | `c9d0f12` (session 7) | `getRows` attributed the bound from `req.body.limit` only, so a `vectorSearch.limit` read as SERV's default. Every top-k search that found k rows failed — run 815, with a message claiming "SERV's default of 5", "more match" (never counted) and step "undefined" |
+| 2 | Execution | `c9d0f12` | `truncated` was set on the boundary and never compared to the total, so a read matching exactly its limit failed. `/help`'s step 1c read stood at **99** |
+| 3 | Validation | `0de88be` (July), made blocking by `032a4d2` (Track A) | L2 held `serv_insert.row` to a single object; the contract and executor accept a batch. v5 fails under every simulator back to August. Session 1210 rewrote 9/9a as `serv_upsert` only to get an unrelated step-5 fix past it. `create_workflow` step 36 failed the same way |
+
+Run 827 was a **true** cut: step 5 read all 102 expenses with no month filter. The check did its
+job there — but Session 7 named that step at 92 rows and left it.
+
+**Fixed and deployed (`c8ec0c0`).** `resolveReadLimit` in `query-utils.mjs` — pure, shared, and the
+only attribution rule: `caller` for either limit (tighter wins), `default`, or `ceiling` above
+1000. Both read paths count on the boundary with the same WHERE and values, and `truncated` means
+the count found more. The simulator accepts a row object or an array of them. Probed live: top-5
+vector → `caller`; 99 of 99 → not truncated; 102 expenses → cut at 100; 5000 requested → `ceiling`.
+Reconstructed v5 and `create_workflow` now pass L2.
+
+**The instruction layer, and the user was right to ask.** The first review covered engine and
+Generation and skipped Novia's own instructions. Five gaps, all fixed:
+
+1. The repair protocol never told her to read a run. 1210 had *runId 827* and never read it —
+   step 2's output (`report_year: 9, report_month: 2026`) was one query away.
+2. Nothing covered a validator refusal that contradicts the contract. She read `serv_insert`'s
+   contract twice, was refused anyway, and redesigned around it.
+3. Nothing said every step of the merged array is validated, not only hers.
+4. The `serv_query` contract never learned session 7's behaviour — the Sprint 11 corollary
+   (a bound in code needs its instruction twin) missed a second time.
+5. The wrong error text became memory rows **373** and **375**.
+
+`minds_eye_system_prompt` **v35**: read the run when the cause is not already evident (**no fixed
+order**, at the user's direction); every step is validated; a refusal that contradicts
+`PGC_StepType` or a run is reported, never designed around. `sop_fix_authority` **v2**: Validation
+defects escalate. `serv_query` contract: the default, the ceiling, failure on an unchosen cut, and
+`vectorSearch.limit` as the step's own bound — asserted against `resolveReadLimit` by a conformance
+test. Memory 373 and 375 corrected in place. 1123 → **1143** unit tests.
+
+**Decided: Novia triages the validator; she does not troubleshoot it.** The user asked whether she
+should start debugging her own harness. No — she cannot read or change `.mjs`, and her correction
+scope is Generation. What she can do is test a refusal against the contract and the run, and stop
+with the evidence. Three defects in the validation path reached her in one week (sessions 9, 11, 1210). Note
+that a false **pass** (session 11) can only be caught by reading the run, which is why item 1 matters.
+
+**Not fixed, backlogged:** the iterator failure
+message names `item.tableName` for every iterator (Low); `dev_scripts/seed_PGC_StepType.mjs`
+would revert all 19 contracts if run (Low).
+
+**Addendum — the last two simulator failures were simulator bugs too.** Neither workflow was broken:
+`diagnose_prompt_schema` completed as run 481, and `update_entity`'s caller always supplies `input.updates`.
+Three defects, all in how the smoke test reads a workflow compared with how the engine runs it:
+
+1. **A runtime `SyntaxError` was reported as unparseable text.** The expression was compiled and
+   run in one call, and the error was classified by name. `JSON.parse` over a mock placeholder
+   throws `SyntaxError` at run time, so steps 2–7 were refused as syntax errors. It now compiles
+   first, and only a compile failure is a syntax error. Latent since May (`457b9dd`).
+2. **Missing run input was shape-checked as its own literal.** `"{{input.updates}}"` resolved to
+   itself and failed the object check. Input the simulation was not given is now inconclusive,
+   like a failed upstream computation. A missed path into a prior step's computed value still
+   refuses — there is a test for exactly that.
+3. **`items` was bound by flat lookup; the engine uses `resolvePath`.** Every dot-path `input_key`
+   (`create_domain` 11, 14, 22a; `diagnose_prompt_schema` 1) was undefined in simulation.
+
+Five tests, three of which fail without the fix. 1143 → **1148**. **Every registered workflow now
+passes L2**, so none is unrepairable through Novia.
+
+**Addendum — session 1211, and a transcript read that looked like a contract read.** Novia's
+v6 → v7 patch (pending the user's approval) fixes the date bounds properly and replaces the text
+box with a form of two dropdowns. Its progress lines read *"`read_session_entry` — Read the
+human_gate step type contract"*, which the user flagged as a contradiction. **It was accurate.**
+
+How it happened:
+- Her targeted query filtered `PGC_StepType` on `type` (the column is `step_type`) and failed.
+  Failed turns are not reported, so the user never saw it.
+- She fell back to the full-registry query her instructions prescribe: 55,512 characters
+  against the 15,000 cap. human_gate (17.4K) starts near 29,500, entirely past the cut.
+- She paged session entry 7 — the stored query result — twice, and stopped at the contract.
+
+Session 1189 did the same with a 52K copy. The design worked; the instruction did not. The
+user's objection — *sessions are transcripts, not contracts* — pointed at the better fix: a read
+that can be re-run narrower should be, because the source is live and the stored result is a
+snapshot.
+
+Changes:
+- `capOutput` offers a re-runnable read its narrower form first, naming only arguments its
+  schema accepts, and keeps the recall page as the fallback. The tool name is known on both
+  render paths, so in-round and rebuilt output stay byte-identical (tested).
+- The progress line names what a recall page holds: *saved `query_table` result (entry 7),
+  characters 27,000–39,000 of 55,512*.
+- `minds_eye_system_prompt` **v36** and `workflow_convention_bridge` **v4**: the column is
+  `step_type`; the catalog is read with `columns` (~10K) and contracts are filtered by
+  `step_type`. Both queries were probed live.
+- Memory **386** corrected. The `-32` bound never worked; `type` was not silently ignored
+  (`insertRow` rejects unknown columns); and 9/9a became `serv_upsert` only because of the
+  simulator defect, and fail on an empty list.
+
+1148 → **1159** unit tests.
+
+**Her patch has three gaps**, to send as a follow-up after approving:
+- the year options are hard-coded to 2025 and 2026, though the request was *2025 to current
+  year*;
+- neither dropdown has a default;
+- 9/9a are still `serv_upsert`.
+
+**Next:**
+1. **Resolve session 1211's pending gate** on `budget_vs_expense_report` (v6 → v7). Approving fixes
+   the step 5 date bounds and brings in the year/month dropdowns.
+2. **Follow up with Novia on the three gaps:**
+   - a year list built at run time (`js_transform` + `options_key`) instead of 2025 and 2026;
+   - default selections for both dropdowns;
+   - steps 9/9a back to `serv_insert` (memory 386 now explains why).
+
+   This is the first session on v36 — watch whether she reads `PGC_StepType` by `step_type`
+   rather than whole, and whether a capped read is re-run narrower.
+3. **Run the report from Slack for a month with recurring expenses** to prove v7 end to end.
+4. **Then Track D** (two thresholds, both still 0.4) **and Track E** (`edit_budget` retest).
+
+Runs 809, 810 and 826 remain at `awaiting_human_gate`.
+
+### Session 16 — 2026-09-16 — a gate option that knows when it applies
+
+**The request:** `review_inventory` (359 v6) step 3 always shows Previous Page and Next Page,
+even on the first and last page. Step 4 clamps the offset, so the wrong click just re-renders the
+same page. Harmless, but it looks broken.
+
+**Fault domain: Execution.** A list_selection row could already carry
+`item_action.condition`; a gate option could not. Two existing routes were rejected:
+- **`options: "{{…}}"` built at runtime** — the simulator cannot see its `on_select` edges, so step
+  16 (reached only through the "Exit to Shopping List" button) is flagged `unreachable_step` and
+  Novia's patch would be refused.
+- **An `iterator` option over a list of zero or one items** — it works, but uses a list as a
+  boolean. The contract also describes `iterator` as choice-gate only, and the lookup is flat, not
+  by dot path.
+
+**✅ DONE `9f792c2` (deployed, `human_gate` step type upserted).** Any option except the cancel
+option may carry `condition`, evaluated against `local_state` (merged with the row for an iterator
+option). `resolveGateOptions` filters, so a hidden option is neither drawn nor accepted.
+`evalItemCondition` now delegates to a general `evalCondition`. L1 refuses a condition that does
+not compile (`gate_option_condition_invalid`) and a condition on the cancel option
+(`gate_option_condition_on_cancel`). 1159 → **1167** unit tests.
+
+**Session 1216 — Novia's v7, applied, and broken in two places.** Asked to hide the pager
+buttons and to keep a selection list across pages, she built both: `merged_selection`, a remove
+field, and the selection shown in the header. The design is sound. Two defects, both confirmed by
+replaying v7 through the real `resolveGateOptions` and `resolveOutputWrites`:
+- **Previous and Next were hidden on every page (Execution, and my Instruction gap).** She wrote
+  `local_state.page_state…`, the form every `js_transform` uses, and the engine put only bare
+  keys in scope. **✅ DONE `1cf7ce6` (deployed, upserted)** — both spellings are in scope, and the
+  contract names both.
+- **The selection is never saved (Generation).** Step 4 returns `merged_selection` and
+  `selected_ids_int`, but its `output_key` is still `nav_result,page_offset`, so both are dropped.
+  Selections vanish on each page change, and Edit/Merge always loops back to step 3 because 5b
+  and 5d read a key nothing writes. Only Exit to Shopping List works. **Open — Novia patches step
+  4's `output_key`.**
+
+**Why her simulation passed (Validation, open).** The data-flow trace sees `input_key` only, not
+`local_state.X` inside an expression. The smoke test ran step 4's default branch, which returns
+only the declared keys, and L2 ran no paths. Two checks proposed, for both directions:
+- **writer:** parse the expression and refuse a returned object literal whose keys fall outside a
+  comma `output_key`, in every branch;
+- **reader:** refuse an expression that reads a `local_state.X` no step writes.
+
+Both must be run against every registered workflow before either may block.
+
+Her memory entry from session 1216 (the `write_memory` call) says v7 works. Correct it once v8 is
+proven.
+
+**✅ DONE — v8 (session 1216, continued, from run 839).** She went to the run first (`run_sql` on
+`PGC_WorkflowRunStep`), then fixed step 4 by writing a single `nav_state` object instead of widening
+the comma list. She moved all five of its readers with it (2, 5a, 5b, 5d; 12/12b still read
+`selection_meta`, which 5d writes). Driven through the real sandbox, `resolveOutputWrites` and
+`resolveGateOptions` over 120 items:
+- add on page 1, then add one and remove one on page 2: the header and remove list follow;
+- Previous and Next are right on pages 1, 2 and 3;
+- Edit/Merge takes `[1, 60, 61]` through 5b and 5d as a multi-select;
+- the selection is empty afterwards and the page is kept.
+
+Her memory entry for v8 is accurate; the v7 entry still claims v7 worked.
+
+**Not addressed:** cancelling the edit or merge form still loses the selection (Edit/Merge clears it
+before the form is saved). **Run 839** was started on v7 and is still waiting at a gate. Runs load
+steps by name at every step, so resuming it runs v8 against v7's state and starts from an empty
+selection. It should be left alone and a fresh run started.
+
+**Backlog (`be945d6`):** a tool for Novia to evaluate one step against a state she chooses.
+
+**✅ Confirmed live by the user, 2026-09-16:** `review_inventory` v8 works from Slack.
+
+**Session 16 close — recommendations for next time:**
+1. **The two Validation checks** (Claude). Neither may block until it has been swept across every
+   registered workflow and any false positives are fixed (validator-first rule).
+   - **Writer:** parse the `js_transform` (acorn) and refuse a returned object-literal key that is
+     missing from a comma `output_key`, in every branch. An object built key by key is reported as
+     not checkable, not as a failure.
+   - **Reader:** refuse an expression that reads a `local_state.X` no step writes.
+2. **Correct the v7 entry Novia wrote in session 1216** (it says v7 worked). Decide first who
+   writes it: Novia, or Claude.
+3. **Session 1211's pending gate** on `budget_vs_expense_report` v6 → v7, then its three gaps
+   (a run-time year list, dropdown defaults, 9/9a back to `serv_insert`), then a Slack run for a
+   month with recurring expenses. See session 15.
+4. **Track D** (two vector thresholds, both still 0.4) and **Track E** (`edit_budget` retest).
+5. **Small, for Novia:** in `review_inventory`, cancelling the edit or merge form loses the
+   selection. Keep it until the edit or merge is saved.
+6. **Backlog, feeding AC6:** a tool for Novia to evaluate one step against a state she chooses
+   (`be945d6`). Weigh it when AC6 is decided.
+
+Runs 809, 810, 826 and 839 remain at `awaiting_human_gate` (839 is a v7 run; leave it).
+3. The session 15 list still stands: session 1211's gate, then Track D and Track E.
+
+### Session 17 — 2026-09-20 — the reads nobody recorded
+
+**The reader check from session 16's list, built and swept.** The writer check was
+**dropped by decision** mid-session: swept across all 17 registered workflows it compared
+17 branches over 16 comma-`output_key` steps and found **nothing**, which is weak evidence
+for its cost. The reader side had a live specimen before it was written.
+
+**What the gap was.** The data-flow trace built its `reads` from `{{tokens}}`, `input_key`
+and `items_key`. An expression reading `local_state.X` was invisible **in both directions**:
+nothing could ask whether any step wrote `X`, and `readersOf` could not see the reader when
+grading a dropped write. That is why `review_inventory` v7 passed. Replayed as a faithful
+reconstruction against the real functions: `resolveOutputWrites` returns `[]` for the
+offending branch and `runSimulation` still reports `passed: true`, with
+`output_key_not_returned` held at **warning** severity precisely because `readersOf` could
+not see an expression reader. The first reconstruction was *caught* — because it was written
+with a `{{merged_selection}}` reader. v7's readers were expression readers. **That
+distinction is the whole defect.**
+
+**✅ DONE `0022631` — `expression_reads_unwritten_key`, L1, error-grade.** Asks whether
+**any** step writes the key, never whether a prior one does: workflows loop backwards, and
+judging by position would refuse a correct design. Reuses `writtenByStep` rather than
+building a registry beside it — the prototype's parallel registry is exactly what made it
+flag `main_action`, `edit_action` and `form_action`, all written by `action_key`, which the
+simulator has tracked since it shipped. **Three false positives, one cause.** The denominator
+also carries `input` and an iterator `item_step`'s `output_key`, which `resumeGate` merges
+onto the parent frame (`create_domain` 8/9 collect `user_preferences` that way). Parsed with
+acorn, not matched with a regex — a regex cannot tell `local_state.foo` from the same text
+in a string literal. Silent when the expression takes hold of `local_state` itself. Covers
+`js_transform` and `condition` expressions plus a gate option's or `item_action`'s
+`condition`; a hidden option is the quietest failure of the three.
+
+**Swept before it was allowed to block: one hit across 17 workflows, zero false positives.**
+
+**✅ DONE `533e0f9` — the one hit was real, in a core system workflow.** `add_entity` step 2a
+returned `domain: local_state.domain || ''`. Run input is seeded at `local_state.input`
+(`run-workflow.mjs:162`) and never spread, so it was **always undefined** and the `|| ''`
+swallowed it. Step 2c passes `{{ref_data_ctx.domain}}` into `enrich_ref_records`, whose
+opening line is *"A user is adding a new {{entity_name}} to the {{domain}} domain."* Every
+run reaching the reference-enrichment path has asked the LLM to invent reference records for
+a **blank** domain — degraded output, never a failure, which is why nothing surfaced it.
+Confirmed on live data: run 759's input carried `domain: "flashcards"` while its step 2a
+`output_snapshot` ends `"entity_name":"Flashcard","domain":""`. Fault domain **Generation**;
+fixed as an artifact, seed → `upsert-workflow.mjs`, **v23 → v24**.
+
+**A drift hazard was reported and then disproved — recorded because the first read was
+wrong.** `add_entity`'s seed sat at v5 against a live v23, so its steps were synced before
+the fix; upserting the stale seed would have reverted 18 versions. From that I warned that an
+unfiltered `upsert-workflow.mjs` would revert other workflows too. **It would not.** Checked
+against all eleven seeded rows: the fingerprint is `steps + description + model_used` and
+`version` is not part of it, so ten of eleven are content-identical to live and upsert to a
+no-op. `add_entity` was the **only** drifted row. What the seed *versions* do not track is
+cosmetic today and a Track B question: a fresh install inserts `create_domain` at v21 carrying
+v59's content.
+
+**Three existing fixtures had to change, and the reason is structural.** Each deliberately
+reads a never-written key to set up a downstream L2 assertion, and **an L1 failure
+short-circuits the smoke test**, so the test could not reach its subject. Each now reads
+through `input` or is given a writer: the expression still throws against mock state, and
+every test keeps testing what it tested. The `round_state` fixture was an unfaithful
+reduction of `flashcard_quiz_session`, which passes the sweep because the real workflow does
+write the key.
+
+**1168 → 1177 unit tests.** `docs/arch-simulation-engine.md` updated.
+
+**✅ DONE — deployed.** `sam build && sam deploy --no-confirm-changeset`; code only, no seed
+changes in `0022631`. Confirmed live against the deployed `/proc/simulate-workflow`, both
+directions: an expression reading an unwritten key returns `passed: false` with
+`expression_reads_unwritten_key`, and the same read through `input` returns `passed: true`.
+
+**✅ DONE — Novia's v7 memory corrected, by Claude.** Two rows, not one: **393** (the
+mechanical v6→v7 diff, ending *"Outcome: success"*) and **394** (the narrative claiming all
+three fixes worked). 393 keeps its diff — accurate as a record of what changed — with a
+correction appended that separates the two meanings of success: **the write was accepted, the
+workflow was never tested.** 394 leads with the correction and keeps the original beneath it,
+naming which of the three claims failed and why the third was an engine gap (`1cf7ce6`),
+not her error. Corrected in place, as memories 356, 373, 375 and 386 were. Retrieval order
+checked afterwards: at `priority ASC` she now meets **396** (v8, p2) first and the corrected
+**394** (p3) next, so the true account outranks the corrected one.
+
+**Next:**
+1. **Track D** (two vector thresholds, both still 0.4) and **Track E** (`edit_budget` retest).
+2. **Small, for Novia:** in `review_inventory`, cancelling the edit or merge form loses the
+   selection.
+3. Runs 809, 810, 826 and 839 remain at `awaiting_human_gate` (839 is a v7 run; leave it).
+4. **Track B is still largely unstarted** — it was scoped to go early, and has not.
+
+### AC6 — CLOSED 2026-09-20. Replay declined; step preview adopted.
+
+**The decision, on the record.** Novia is **not** given the replay harness. She **is** to be given
+a **step preview** tool — evaluate one step against a chosen state, headless for her and *rendered*
+for the user. Backlog: *Step preview*.
+
+**Why replay was declined, and it is not the reason the AC assumed.** The AC was written on the
+premise that replay "costs nothing, keeps gates real". The first half is true only of the LLM: the
+seam is `executeLlmCall` and **only** that, so everything else in a replayed run is real.
+`arch-replay.md` §6 states it outright — **"A replayed run performs real SERV writes."** Replaying
+`process_receipt` re-inserts inventory. Handing that to an agent that edits a household's live data
+is the wrong shape, and gating it only moves the judgement to a button whose side effects are not
+visible from the button. Second, independent of safety: `on_miss` **breaks and suspends** on a
+fingerprint miss, and any fix that changes an `llm_call`'s resolved input moves the fingerprint —
+so precisely the repairs most worth testing are the ones that stall at `awaiting_llm_break`, with
+no tool of hers to resolve them and a 240s wall. They would join 809, 810, 826 and 839.
+**Replay is a developer tool and stays one** (user, 2026-09-20). This is consistent with session
+15's decision that she triages the validator rather than troubleshooting it.
+
+**Why the step preview is the right answer.** Every defect she actually hit this sprint was **one
+step against one state** — v7's dropped `output_key`, 16b's placement, step 4's `nav_state`. None
+needed a full run. It writes nothing, calls no LLM, cannot suspend, and returns inside her turn
+budget.
+
+**The user's extension, which is the better half of the idea.** The same mechanism **renders** —
+posting the real Block Kit through `buildDialog` → `dialogToBlocks`, so a gate can be **seen before
+it is built or changed**, by the person who will use it. That inverts today's loop, where a gate is
+built, registered, run, and only then seen. It also covers the one case a headless evaluator would
+have missed: session 7, where a confidently-stated false platform limit became folklore because she
+had no way to *check* instead of assert.
+
+**The pieces exist:** `buildDialog` is exported (`step-executor.mjs:427`), `dialogToBlocks` is
+already the single renderer for every gate type, and `interactive.mjs:113` already branches on a
+button carrying no `workflowRunId`. **The preview must not be a live gate** — inert buttons that
+*say* they are inert, not inert buttons that fail quietly.
+
+**AC6 is met: the decision exists on the record rather than being deferred a third time.**
+
+### Session 17 close — 2026-09-20
+
+**Shipped and deployed:** the L1 reader check (`0022631`), `add_entity` v24 (`533e0f9`), Novia's
+v7 memory corrected (rows 393 and 394). `sam deploy` done and probed live both ways. 1177 tests.
+
+**Decided this session, both on the record:**
+- **Aurora Serverless v2 with a 0-ACU floor was written up here as settled; it is not.**
+  **Reopened as an option 2026-09-22 (user) and moved to `docs/ops-release-readiness.md` R5.**
+  The measurement below stands and does not need redoing — what is open is whether to adopt it.
+  Self-hosting PostgreSQL on the bastion
+  and the `/wake` command are **dropped**. Settled by measurement, not argument: 30 days of
+  `PGC_WorkflowRun` / `PGC_WorkflowRunStep` / `PGC_SessionEntry` timestamps show **322 active
+  minutes across 95 bursts** — ~13 awake hours a month under a 5-minute pause, against a break-even
+  near 97 ACU-hours. Four prerequisites are separate backlog rows: SERV connection retry, a
+  resume-tolerant timeout (both in `getClient`, one function behind 52 call sites), a heartbeat
+  against the >24h deep sleep that exceeds SERV's 29s Lambda budget, and **encryption at rest**,
+  which is free at the cutover and impossible afterwards — its third deferral, and the migration is
+  its deadline.
+- **AC6 closed** — see the section above. Replay declined as a developer tool; `preview_step`
+  adopted and specified as a **new tool**.
+
+**`architecture.md` §16 corrected.** It presented a ~294-hour partial month as a monthly total,
+costed the bastion as a t3.nano against `template.yaml`'s t3.micro, and billed SSM Standard
+`String` parameters. Steady state is **~$28.90/month** against the **$8–13** target in §1 — so
+§16.6 is a live concern, not a someday list.
+
+**Track B deferred by the user** — a test environment waits for collaborators. AC2 is therefore out
+of reach this sprint.
+
+**Next, in order:**
+1. **Track D** — both thresholds confirmed still `0.4` in workflow 358 steps 8 and 8c. All three
+   wrong aliases are still live and still wrong: **81** `PAN MOLD INT ALTEZ` → 17 *Rustic Sliced
+   Bread*, **60** `PANU BOL MIN SELEX` → 17, **59** `ARANDANOS DESH ALT` → 6 *Blueberries 300g*
+   (fresh). Alias 81 is provably wrong by the system's own standard — 41 and 89, also *integral*,
+   resolve correctly to 36 *Whole Wheat Sandwich Bread*. The table is at **208 aliases** and grows
+   every shop. Probes are free and unattended; Novia applies the patch.
+2. **AC3's remaining verbs.** Deliberately after Track D — the threshold is what *creates* wrong
+   aliases, so correcting them first means doing it again after the next shop. **Note the sprint doc
+   was out of date:** `PGD_Inventory` 25 is already *"Cheap Wine (tinto de verano)"* and item 69 is
+   gone, so rename and merge appear done. **Confirm whether they went through `review_inventory`
+   from Slack** — AC3 requires no raw SQL, and if they did, two of four verbs are evidenced and only
+   need writing down.
+3. **Track E** — `edit_budget` retest from Slack.
+4. **Aurora** — superseded 2026-09-22: the adoption decision is open and now lives in
+   `docs/ops-release-readiness.md` R5, with its four prerequisites.
+
+Runs 809, 810, 826 and 839 remain at `awaiting_human_gate` (839 is a v7 run; leave it).
+
+### Planned next session — `edit_expenses`, built by Novia (user, 2026-09-20)
+
+Add, change and delete expenses. **Check whether the generic CRUD path already does this before
+commissioning a build** — reuse-before-adding, and it could save the whole workflow:
+
+- **`Expense` is already entity-registered**: `PGC_EntitySchema`, domain `budgets_expenses`, root
+  table `PGD_Expenses`. That is the precondition `add_entity` / `update_entity` / `delete_entity`
+  need, and it is already met.
+- **No `PGC_IntentMap` row points at any generic CRUD workflow.** Every one of the 38 rows routes
+  to a named domain workflow (`process_receipt` 10, `edit_budget` 8, `review_inventory` 8,
+  `budget_vs_expense_report` 5, `import_budget_spreadsheet` 5, `flashcard_quiz_session` 2). So the
+  generic workflows are reached only through Pass 2 — domain resolved semantically from
+  `PGC_DomainHelp`, then matched on `PGC_Workflow.intent_keywords` (`add_entity` carries
+  `["add","create","new","insert"]`).
+- **So the test is one Slack command, not a build:** try *"add an expense …"* and see whether it
+  lands on `add_entity` against `PGD_Expenses`. If it does, the same holds for change and delete,
+  and the work becomes routing and phrasing rather than a new workflow.
+- **The risk in that path is `update_entity`.** It is **v1, five steps**, the least-exercised
+  workflow in the system, and its caller always supplies `input.updates` (session 15's addendum).
+  If the generic path is the answer, that is the step to prove first — and it is adjacent to
+  Track E, which is also an untested edit path.
+- If a bespoke workflow is still wanted, it is the **third** Novia-built workflow and the first
+  since the L1 reader check shipped, so it is also a live test of `expression_reads_unwritten_key`
+  against freshly generated `js_transform` steps.
+
+> **Correction worth carrying:** `PGC_IntentMap` has **no `domain` column** — it routes by
+> `workflow_id`. Two queries filtering on `domain` returned `success: false` with a column error,
+> which reads as "no rows" if only `.count` is checked. Check `success` before concluding absence.
+
+### Session 18 — 2026-09-20 — the threshold that decides nothing, and a design read against the data
+
+**Track D probed, not changed.** The user asked for the probes, then held off on acting on the
+result. Nothing was edited, no threshold moved, no prompt touched. What the probes found is
+recorded here because it inverts the track's premise and re-deriving it costs a round of LLM calls.
+
+**Steps 8 and 8c are retrieval, not decision.** Both are `serv_query` vector searches that build
+candidate lists. The merge is decided entirely by step 10's `llm_call` under
+`match_inventory_items` v3, whose rules are alias similarity `= 1.0` -> `auto_matched`,
+`0.60-<1.0` -> `llm_resolved`, `<0.60` -> ignore, then name similarity by unquantified judgment.
+**No value of either 0.4 threshold decides a merge**; they only bound what the model may see.
+
+**The specimen the track was written from cannot be fixed by a threshold.** Reconstructed from
+diagnostic session 1167 (run 782), `PAN MOLD INT ALTEZ` -> *Sliced Bread Integral Alteza*:
+inventory **36**, the correct target, never cleared 0.4 on the name path and was **absent from the
+candidate list**; the one pointer to it, alias 41 at **0.4681**, was retrieved and then discarded
+by the prompt's 0.60 floor; item 17 was present at 0.5602 and was the only bread visible. Raising
+the threshold hides more, lowering it admits noise, and the correct answer was only ever reachable
+through the alias the decision rule threw away.
+
+**Four findings behind it:**
+
+1. **The candidate lists lose per-item attribution.** Steps 8b/8d flatten every per-item result set
+   into one pool keyed by row id, keeping the **maximum similarity across all receipt items**. The
+   `similarity` the model reads is closeness to *some* item on the receipt, not to the item being
+   matched. Every rule in the prompt is applied to a number that does not mean what the rule assumes.
+2. **The model reads the pooled number as a per-pair score, and invents one when it has none.**
+   Run 782: *"The alias 'PAN MOLDE RUSTICO' has high similarity (0.557) to inventory item 17"* —
+   0.557 is alias-to-receipt-string, not alias-to-inventory-item. Run 837: *"alias similarity 0.65"*
+   justifying `CREM 100 CAC ALTEZ` -> 55, when nothing near 0.65 in that pool relates to almond
+   cream. The `match_reason` numbers are not evidence.
+3. **Rule 1's exact branch is unreachable, and has been since some point between 19 Aug and 16 Sep.**
+   Exact re-embeds now score **0.9966-0.9987, never 1.0** — verified on rows written 17 Aug and
+   16 Sep, read path deterministic to 16 significant digits across three calls, `embed_source` a
+   single bare column. Run 780 (19 Aug) shows `PEPINO HOLANDES` at exactly **1**. The embedding
+   endpoint's output changed under us and nothing noticed. The model has kept routing exact hits to
+   `auto_matched` **by judgment, ignoring the rule** — working by luck, not by contract. Separately
+   the 0.60 floor sits *above* the same-item raw-string distribution: genuine same-item pairs
+   measure 0.4987 (`CORAZONES COGOLLO` / `COGOLLOS ALTEZA`, both -> 57) and 0.5673
+   (`ARANDANO 225 GR` / `ARANDANO 3006`, both -> 6).
+4. **AC4 can no longer be met by calibration.** Run 837 matched `PAN MOLD INT ALTEZ` -> 17 as
+   `auto_matched` **HIGH** off the wrong alias 81 at 0.9978. The error is self-reinforcing and
+   reaches the gate labelled confident. Also on the record: run 780 held **more than three** wrong
+   merges — `TOMATE CHERRY PERA` -> 50 *Black Tomato Tray* and `LIMONES MALLA 1KG` -> 27
+   *Canned Lemon* — and alias 62 auto-matched again in run 837.
+
+**Fault domains, proposed not agreed:** pooled candidates = **Contract** (wrong data shape handed
+to the LLM), fixed in workflow 358's steps 8/8b/8c/8d as a patch; the dead `= 1.0` rule and the
+0.60 floor = **Instruction**, traced to the creation-time prompt root rather than patched; the
+three wrong alias rows = data, and therefore Track C, not Track D.
+
+**Open for the user:** whether Track D becomes *fix the attribution* rather than *calibrate two
+thresholds* (and AC4's wording with it); whether the `match_inventory_items` prompt gets the trace
+or goes to Novia directly; and whether the embedding endpoint's silent change becomes its own
+backlog item — stored and query vectors now come from different model states across the whole
+table, and `create_domain` has no re-embed path.
+
+**Track F opened** — see the track for the full evaluation of Novia session 1218's
+`manage_expenses` design. Committed `0e9b08e`. Not yet written: the message to paste into `/novia`
+carrying the four corrections.
+
+**Next session:** Track F's correction round with Novia, and the three Track D decisions above.
+
+### Session 19 — 2026-09-22 — three decisions, and a record that said "decided" when it wasn't
+
+**Research: Slack has no editable grid, and no way to build one.** Block Kit is the entire UI
+vocabulary available to an app — no custom HTML, JS or iframe surface. The only escape is a button
+opening an external page. Two near-misses: the **data table block** (shipped 20 May 2026) is a real
+grid, up to 201 rows × 20 columns, but cells accept only `raw_text` / `raw_number` / `rich_text`,
+**cannot hold inputs, selects, buttons or checkboxes**, and is supported in messages and Home tabs
+only — **not modals**. **Canvases** hold editable markdown tables, but content round-trips as raw
+markdown with no schema and no submit event bound to a record set.
+
+**The finding that mattered: "edit many, save once" already exists and has never been used.**
+`resolveFormFields` (`step-executor.mjs:386-392`) accepts `step.fields` as a `{{template}}`
+resolving out of `local_state`, and `collectFormValues` (`form-fields.mjs:58-76`) returns every
+rendered field's value on one click. The ceiling is **50 blocks, not 100** — form gates are
+messages via `chat.postMessage`; only `text_input` uses `views.open`. `SLACK_BLOCK_LIMIT = 50` and
+its input-aware guard are already at `callback.mjs:287, 579-600`.
+
+**Decision 1 — no `table_edit` gate type. → Sprint 13 (`docs/sprints/sprint-13.md`, scoped).**
+A bulk edit renders identically to a `form` gate, and `gate_type` governs rendering only. The
+`form` gate's own contract already refuses this: *"Replaces what would otherwise be a new gate_type
+per widget… a widget is a field type, not a gate type."* The real need — Novia knowing the pattern
+exists — is discoverability, and lives in the `human_gate` `PGC_StepType` contract and a
+`PGC_SystemContext` row. A header row or the data table block above the inputs would be a new
+**widget row** or field `input_type`, per `callback.mjs:1235` and `1598` — still never a gate type.
+
+**Decision 2 — release readiness leaves the sprint container. → `docs/ops-release-readiness.md`.**
+Deferred in Sprints 7-11, scoped into 12 as Track B, and still the least-advanced track. The shared
+container is the pattern. Now a standing workstream: branch prefix `ops/<slug>`, reviewed at every
+sprint boundary, with one line added to the sprint close checklist so an item can be held
+deliberately but never silently.
+
+**Decision 3 — `template.yaml` cannot stand up a second environment. → R1.** Four literal
+`FunctionName`s (628/672/723/764), four literal `QueueName`s (375-403), `UsagePlanName` (813) and
+`RoleName: LambdaExecutionRole` are account- or region-global, so a second stack **fails**. Worse:
+all **12** SSM references are hardcoded to `/evolving-mind-ai/...` with pinned versions, so a dev
+stack would come up **green, pointed at prod's database, posting as prod's Slack bot**. The fix
+pattern is already in the file — `${AWS::StackName}` on the scheduler, the roles and every Output.
+Sharing one instance wants a **separate database** (`PGD_DATABASE_URL` only, no code change), not
+separate schemas.
+
+**Correction to this document.** Session 17 recorded Aurora Serverless v2 as **decided**; the user
+states it was not. Reopened as an option and moved to `ops-release-readiness.md` R5 — the
+measurement stands, the adoption does not. `architecture.md` §16.6 and `backlog.md` were corrected
+the same way. **R1 changes its arithmetic**: a permanent second environment is a second 0-ACU
+floor, and the cutover should follow R1 so the endpoint work is done once.
+
+**Also this session:** `manage_expenses` evaluated — of Track F's four corrections, the two that
+destroy data during a troubleshooting session are the `payment_method` vocabulary mismatch (an
+unrepresented stored value renders no `initial_option` and returns **null** on save, blanking 18-20
+`debit` rows — the mechanism recorded in Track F was wrong) and the hard delete. The missing
+`cancel` self-corrects: `missing_cancel_option` is a live L1 check (`simulation-engine.mjs:650`).
+Currency is **not** closed by converting the data — the column defaults to `'USD'` NOT NULL, so
+every new add repeats it.
+
+---
+
+## Outcome — closed 2026-09-22
+
+**19 sessions, 2026-08-30 → 2026-09-22. Branch `sprint/12-repair-loop-and-release`.**
+**1044 → 1177 unit tests.** Everything shipped is deployed, upserted and pushed.
+
+| AC | Outcome |
+|---|---|
+| **AC1** | **MET, twice live.** The second (session 1199) unrehearsed: patch-mode `simulate_workflow` before proposing, `propose_workflow_fix` `mode: "patch"` against `baseVersion: 5`, two of 38 steps replaced, diff exact |
+| **AC2** | **WITHDRAWN** → `docs/ops-release-readiness.md` R2–R4. Not a shortfall — the container was |
+| **AC3** | **MOVED** → Sprint 13 item 7, with its four verbs and three live alias specimens |
+| **AC4** | **WITHDRAWN.** Premise inverted under measurement; absorbed into AC3 |
+| **AC5** | **MOVED** → Sprint 13 item 6, behind the bulk-edit conversion |
+| **AC6** | **MET.** Replay declined with reasons; `preview_step` adopted and specified |
+| **AC7** | **CARRIED.** `manage_expenses` designed and evaluated, not built |
+
+**Two met, two withdrawn, two moved, one carried — and that undersells the sprint.** As in Sprint
+11, most of what shipped was never an AC: the `human_gate` gate-contract repair (session 7), gate
+options that carry a `condition` (session 16), the L1 `expression_reads_unwritten_key` check and
+`add_entity` v24 (session 17), three simulator read-divergences that left **every registered
+workflow passing L2** (session 15), `capOutput` improvements and system prompt v35/v36,
+`review_inventory` 359 to v8 with a working pager, and Novia's own memory corrected twice.
+
+---
+
+## Retro
+
+**What went right.**
+
+*The patch loop works, and it was proven by someone not trying to prove it.* AC1's second case was
+a cold session repairing a real workflow, reaching for patch mode unprompted. Track A removed the
+requirement that produced the whole 2026-08-27 defect class rather than patching its instances.
+
+*Measuring before building inverted the plan twice more.* Sprint 11's retro named this and it
+recurred, harder. Track D's probes killed Track D. Reading the live `PGC_StepType` row killed
+Sprint 13's scope item 2 — the `human_gate` contract **already** told Novia to reach for a
+templated `fields` array, framed it per record, and stated the ceiling with the fields-by-rows
+multiplication. **Both times, reading the artifact was cheaper than the work it made
+unnecessary.** The corollary worth carrying: *read the contract before scoping a change to it.*
+
+*Two acceptance criteria were withdrawn because the work was wrong, not because time ran out.*
+That is new, and it is the sprint's best outcome. AC4's premise inverted under its own probes.
+AC2 had lost to code work in five consecutive sprints, so the fix was to move it out of the
+container rather than scope it a sixth time.
+
+**What went wrong, and what it says.**
+
+*The record said "decided" when nothing had been decided.* Aurora Serverless v2 was written into
+`architecture.md` §16.6, `backlog.md`, `CURRENT.md` and memory as settled, from one session's
+analysis, by the analyst rather than the decider. It took the user saying *"I haven't decided"* to
+surface it, three sessions later. **A proposal and a decision must not be indistinguishable in the
+record.** The analysis was sound and survived intact; only the verb was wrong.
+
+*An accurate finding is not a warrant for work.* Track D's four findings were correct and were
+produced by staring at data. The user's filter — *"to have Novia fix something it needs to be
+something the user is getting affected by"* — was sharper than the track, and his read of the
+cause was right where the track's was not: the specimens are **wrong alias rows**, proven by 41
+and 89 resolving correctly to inventory 36 while 81 points at 17. **The filter now sits in the
+scoping phase, not the review phase.** Its corollary also held: the real user impact *was* findable
+— item 17 at 2 bags against item 36 at 1, feeding `review_inventory`'s shopping list — and finding
+it is what redirected the work to Track C instead of ending it.
+
+*Track F's defect report had the right defect and the wrong mechanism.* It recorded that an
+untouched form field submits the option's own value; reading `callback.mjs:1274` shows an
+unrepresented value yields no `initial_option` at all, so the field returns **null** and the column
+is **blanked**. Same severity, different fix, and it was two days from being sent to Novia as fact.
+**A mechanism asserted from behaviour is a hypothesis until the render path is read.**
+
+*Seven ACs was too many, for the second sprint running.* Sprint 11 scoped five and delivered two
+plus an unplanned one; Sprint 12 scoped seven and delivered two plus a great deal that was never
+scoped. The pattern is now two sprints long and is not a scoping accident. **Sprint 13 opens with
+four ACs and three moved items, and should not grow.**
+
+**Carried to Sprint 13:** the bulk-edit pattern and its paging remedy, `edit_budget` behind it,
+the inventory correction workflow with its three alias specimens, and `manage_expenses` with the
+two corrections that must precede the build. **Release readiness is no longer carried** — it is a
+standing workstream. **Standing observations:** AC9 (per-receipt cost), AC13 (the friend), workflow
+358's never-executed v6/v7 fixes, and pooled candidate attribution with its stated trigger.
