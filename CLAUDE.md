@@ -94,9 +94,25 @@ Read `docs/sprints/CURRENT.md` (if it exists) alongside `docs/architecture.md` a
 | **Scope** | Review `docs/backlog.md`. Select items. Write `docs/sprints/CURRENT.md` with goal, branch name, acceptance criteria, out-of-scope list. |
 | **Prep** | Review and update relevant PGC_SystemContext rows, PGC_Prompt entries, and PGC_StepType contracts *before* writing code. Fix system self-knowledge first. |
 | **Branch** | `git checkout -b sprint/NN-short-slug` |
-| **Implement** | Commit to branch using conventional format. Unit tests must pass before each push. |
+| **Implement** | Commit to branch using conventional format. Unit tests must pass before each push. **Update the acceptance-criteria table whenever a criterion's state changes** — see below. |
 | **Review** | Push branch. User reviews via `git diff` and commit messages. No merge without explicit approval. |
 | **Close** | Merge to main → deploy → update all docs (see checklist below). |
+
+### The acceptance-criteria table is the sprint's status board
+
+`CURRENT.md`'s AC table is how the sprint's position is read at a glance, so it is maintained
+**during** the sprint, not written at close. Every criterion carries:
+
+| Column | Contents |
+|---|---|
+| **Status** | ⬜ not started · 🟡 in progress · ✅ met · ~~struck~~ withdrawn or moved, with the reason inline |
+| **Criterion** | What must be true, and how it is evidenced |
+| **Scope** | A link to the scope item or track that delivers it — every AC names its work, every scope item is reachable from an AC |
+| **Threshold** | What counts as met |
+
+**Update it in the same turn the state changes**, alongside the ✅ DONE marks on scope items —
+never deferred to session close. A withdrawn or moved criterion is struck through and keeps its
+reason, so the record shows what was decided rather than what quietly vanished.
 
 ### Sprint close checklist (enforce before merge)
 - [ ] `node --test tests/unit/*.test.mjs` passes
@@ -122,6 +138,7 @@ Claude enforces sprint discipline. If any of the following are skipped, Claude c
 - Unit tests before pushing
 - Doc updates before merge
 - Retro before scoping a new sprint
+- The AC table's status column left stale while work lands
 
 This applies even if the user does not mention it. The checklist is a hard gate, not a suggestion.
 
