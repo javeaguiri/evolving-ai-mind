@@ -82,12 +82,13 @@ proprietary syntax the harness has to learn.
 |---|---|
 | **1** | The bulk-edit pattern as a reference workflow: load rows → `js_transform` builds `fields` → `form` gate → `js_transform` diffs → iterator writes only changed rows |
 | **2** | ~~The `human_gate` contract gains the dynamic-`fields` example~~ **ALREADY DONE — verified live 2026-09-22.** The contract already states that `fields` takes a `{{template}}`, frames it as *one field PER RECORD the workflow just read*, says *reach for it whenever the number of things to edit is known only at runtime*, and gives the ceiling **with the multiplication rule**: *"~40 rows at one field each but only ~13 at three"* |
-| **3** | **The real gap: what to do past the ceiling.** The contract's only remedy today is *filter that query down, or bound it with an explicit limit, and let the user narrow the list first* — it never mentions **paging**, and `nav_state` appears nowhere in any seed. `review_inventory` 359 v8 proved a workflow-local pager (buttons that hide at the ends, selection surviving page turns), so the pattern works and is simply undocumented |
+| **3** | **The real gap: what to do past the ceiling.** ✅ **CONTRACT LANDED 2026-09-26** — `gate_type` now opens with a seven-question decision tree (first yes wins, question 7 answering *then it is not a gate — use notify*), and `fields` carries the four routes past the ceiling (narrow, page, pick one, refuse) plus the paging mechanism drawn from `review_inventory` 359 v8. The row description stops describing the types a second time and states only what all gates share. ⬜ **The L1 half is outstanding** — see scope item 9 |
 | **4** | Apply it to `manage_budget` |
 | **5** | Decide whether the >40-cell case pages, narrows, or refuses — and make the refusal say which |
 | **6** | **`edit_budget` (357 v6), moved from Sprint 12 Track E.** Novia converts its edit flow to the bulk-edit pattern, **then** it is retested end to end from Slack — once, against the design that will survive. Carried from Sprint 9 and Sprint 11 |
 | **7** | **The inventory correction workflow, moved whole from Sprint 12 Track C — see the section below.** Three of its four verbs are record edits over the same two tables, so it is the bulk-edit pattern's third consumer and its hardest test |
 | **8** | **`manage_expenses`, carried from Sprint 12 Track F.** Designed and evaluated, not built. **Two corrections must be sent before the build** — the `payment_method` vocabulary mismatch and the hard delete both destroy data during the troubleshooting session itself |
+| **9** | **`gate_too_many_fields` cannot see the case it exists for.** It guards `Array.isArray(s.fields)`, so a `"{{template}}"` fields reference is skipped — and that is the only shape whose length is a row count. `gate_option_set_unbounded` already solved the identical problem one field apart (walk back to every writer of the key, refuse an unbounded `serv_*`, warn where the length is unknowable); reuse it against `MAX_GATE_FIELDS`. Its current remedy text also prescribes one-record-at-a-time editing, which is the design this sprint replaces. **Held until Novia's feedback** — her behaviour against the new contract says whether the text alone suffices |
 
 ## Out of scope
 
@@ -102,7 +103,7 @@ proprietary syntax the harness has to learn.
 
 ## Acceptance Criteria
 
-**Status as of 2026-09-22.** ⬜ not started · 🟡 in progress · ✅ met · ~~struck~~ withdrawn or moved.
+**Status as of 2026-09-26.** ⬜ not started · 🟡 in progress · ✅ met · ~~struck~~ withdrawn or moved.
 **This table is updated when a criterion's state changes, not at close** — it is how the sprint's
 position is read at a glance.
 
@@ -110,8 +111,8 @@ position is read at a glance.
 |---|---|---|---|---|
 | **AC1** | ⬜ | A single gate edits several records and one click saves them all; only changed rows are written | [1](#scope) | Binary, from Slack |
 | **AC2** | ⬜ | `manage_budget` uses it | [4](#scope) | Binary, from Slack |
-| **AC3** | ⬜ | Novia selects the pattern unprompted when a design calls for it | [2](#scope), [3](#scope) | Binary, from a cold `/novia` session |
-| **AC4** | ⬜ | A gate that would exceed the ceiling fails in a way that names the cause and the remedy | [3](#scope), [5](#scope) | Binary |
+| **AC3** | 🟡 | Novia selects the pattern unprompted when a design calls for it | [2](#scope), [3](#scope) | Binary, from a cold `/novia` session |
+| **AC4** | 🟡 | A gate that would exceed the ceiling fails in a way that names the cause and the remedy | [3](#scope), [5](#scope), [9](#scope) | Binary |
 | **AC5** | ⬜ | `edit_budget` uses the pattern and runs end to end from Slack | [6](#scope) | Binary, from Slack |
 | **AC6** | ⬜ | One correction workflow performs rename, merge, recategorise and alias-fix; aliases **81**, **60** and **59** are corrected through it | [7](#scope), [Track C](#track-c-moved-from-sprint-12--the-inventory-correction-workflow) | Binary, from Slack, no raw SQL |
 | **AC7** | ⬜ | `manage_expenses` is built by Novia and runs end to end — add, delete and edit — with the two data-destroying corrections applied and the delete semantics decided | [8](#scope) | Binary, from Slack |
@@ -224,3 +225,59 @@ visible there.
 something complete. Then the two `manage_expenses` corrections. **Before AC6, confirm whether
 `PGD_Inventory` 25's rename and 69's merge went through `review_inventory` from Slack** — both are
 already done in the data, and AC6 requires no raw SQL.
+
+### Session 2 — 2026-09-26 — the gate-type decision tree, and paging
+
+**Seed + upsert only. No code, nothing deployed** — `PGC_StepType.human_gate` upserted, live row
+verified byte-equal to the seed. 1177 tests pass.
+
+**The session's real finding was structural, and it came from a challenge to the plan.** The paging
+text was first drafted as an appendix to the `fields` description. Asked where a gate-type *decision
+tree* actually lives, the answer turned out to be: **nowhere clean.** The `human_gate` row described
+its seven types **twice** — once in the row `description`, once in `gate_type` — neither pass shaped
+as a decision, with the constraints in a third place.
+
+**`PGC_StepType` is the tree, by design.** `workflow_convention_bridge` carries no gate-type
+guidance deliberately and delegates twice: *"Which gate types write, and what value they write, is
+declared on the human_gate row in PGC_StepType"*, and in its index, *"PGC_StepType — step fields,
+gate types, routing options — query_table"*. Novia reads this row. So the row had to become the
+tree rather than gain an appendix.
+
+**Landed:** `gate_type` opens with seven ordered questions on what the gate must DO, first yes wins,
+each naming what it writes — and question 7 answers *then it is not a gate at all: use a notify
+step, which does not suspend*. The row `description` stops re-describing the types and states only
+what all gates share, including that **local_state survives the suspension**, which is what makes a
+re-entered gate possible. `fields` gains the four routes past the ceiling — narrow, page, pick one,
+refuse, *"silence is not a fifth route"* — and the paging mechanism as engine facts: a **derived**
+page size (ceiling ÷ fields per row), a unique-column tie-break, first/last-page flags as truthy
+strings because `condition` routes on truthiness, `condition` on Previous/Next, one fold step
+reading `action_key`, and a back edge to the slice step. All read out of `review_inventory` 359 v8,
+which proved it live.
+
+**The one clause 359 does not cover** is the editable page: 359's pager carries a *selection*, a bulk
+edit carries *typed values*. A page turn that neither saves nor re-applies them lets the form's own
+untouched-field-submits-its-default rule **revert the user's pending edits** from the stored row.
+
+**`create_workflow` is out of scope as dead path — confirmed, not assumed.** `design_workflow_dialogs`
+v19 has three live defects (its "Common Gate Patterns" table omits `form`, `list_selection` and
+`followup_prompt`; the table, `{{human_gate_dialog_rules}}` and the closing line are each duplicated
+verbatim; and an orphaned JS fragment is spliced onto a mid-prompt terminator). All real, all
+unfixed: workflow 2 last ran **2026-07-25** and `fix_workflow` 316 last ran 2026-09-10 and failed.
+Novia took both over, so no user is affected and there is no warrant.
+
+**One suspicion raised and disproved in-session.** `PGC_SystemContext.step_type_contracts` holds a
+second copy of the whole `human_gate` contract, **10 fields stale** — no `fields`, no `on_cancel`, no
+`item_action`. It is **shadowed, not live**: `llm-harness.mjs:274` re-fetches fresh from
+`PGC_StepType` and `assembleInstructions` spreads `resolvedInput` last. Verified against the real
+assembled prompt in session **1118**, which carries `fields`, `on_cancel` and `action_key`. Dead
+weight; a backlog row at most.
+
+**Next session starts here:** Novia's feedback against the new contract — does she reach for the
+pattern unprompted (AC3), and does she page when a set will not fit? **Scope item 9 is deliberately
+held** until that answer, because her behaviour says whether the contract text alone suffices or the
+L1 check has to say it too.
+
+**Incidental, for AC6:** `review_inventory` 359 v8 already carries merge (steps 14–15f, including
+alias re-pointing) and edit/delete (8–11f). Two of Track C's four verbs may already be built, which
+reframes item 7 from *write it* to *test and extend it*. Run history not yet checked — a lead, not
+the confirmation this sprint asks for.
