@@ -314,8 +314,9 @@ portfolio's holdings are editable, with add and delete allowed; a session table 
 
 **Default: `read_only`.** A field is editable only when declared so. Columns the system maintains —
 the primary key, timestamps, embedding columns, foreign keys a workflow resolves — are never
-editable directly. `design_table` proposes a policy when a domain is created; the user or Novia
-changes it afterwards like any other registry fact. Application-wide domains carry the policy in
+editable directly. Novia creates domains, and the policy is part of the domain she designs: she
+proposes it with the tables, the gate confirming the domain shows it, and the user or Novia changes
+it afterwards like any other registry fact. Application-wide domains carry the policy in
 their seeded definition; tenant-specific domains carry their own.
 
 **Enforcement is server-side.** `GET /domains/{domain}/schema` returns the policy so the app offers
