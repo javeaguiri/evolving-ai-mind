@@ -299,7 +299,7 @@ Read `docs/sprints/sprint-12.md` (outcome, validation, retro) before adding anyt
 | `docs/arch-memory.md` | Memory layer design — PGC_Memory schema, write paths, retrieval, scope, provenance |
 | `docs/arch-session.md` | Session and chat design — PGC_Session/PGC_SessionEntry, `/chat`, `/explain`, diagnostics |
 | `docs/arch-minds-eye.md` | Minds-eye agent — tool catalog, use cases, agentic loop, implementation sequence (Sprint 5) |
-| `docs/arch-home-brain.md` | Home Brain — proposed web/app experience layer (console layout, panels, gate rendering, `provider: 'web'` flows, phasing) and the multi-tenant flexible-records direction. Proposed, not scheduled |
+| `docs/arch-home-brain.md` | Home Brain — proposed client-rendered single-page app over REST services (console layout, panels, gate rendering, `provider: 'web'` flows, REST resources, phasing) and the multi-tenant flexible-records direction. Proposed, not scheduled |
 
 ### Process and reference
 
