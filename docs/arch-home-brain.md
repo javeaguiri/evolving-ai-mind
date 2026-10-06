@@ -78,22 +78,27 @@ Small and enumerable. Each becomes a provider-neutral name:
 
 ### 4.1 Principles
 
-- **Client-side rendering over REST services.** The app is a single-page application built on a
-  JavaScript framework. The browser renders everything. The backend exposes REST resources that
-  return JSON: data and the metadata needed to present it, never markup. The server renders
-  nothing for the app: no Block Kit, no HTML, no pre-built tables.
-- **A second provider, not a replacement.** Slack keeps working, and stays the one provider whose
-  rendering happens server-side (`callback.mjs`), because Slack requires it. A run started in either
-  can be seen in the app.
-- **Domain knowledge stays in `/proc`, as data rather than markup.** The app never knows what
-  "inventory", "A/C" or "budget" means. Labels, display formats, enum meanings, currency and which
-  fields to reveal are decided in workflow steps and `PGC_Schema`, and reach the client as typed
-  JSON — a value with its label, unit and display form — which the client lays out. Navigation
-  comes from the domain registry, panels from view descriptors, gates from `dialog`.
-- **Reads are REST resources; changes are workflows.** Records, schemas, runs, gates and Novia
-  sessions are read directly through REST. Every change — add, edit, bulk edit, delete, device
-  control — runs a workflow, so validation, human gates and the run record apply to the app exactly
-  as they do to Slack.
+- **A hybrid: the app owns navigation, the backend owns workflow content.** The app is a
+  single-page application built on a JavaScript framework, with two modes of working:
+
+  | Mode | What it covers | Who decides the content |
+  |---|---|---|
+  | **Navigate** | Lists the app fetches and keeps current — Novia sessions, workflows, runs, pending gates, domains — and drill-down into a domain's records | The app, from JSON returned by REST services |
+  | **Execute** | Running a workflow or a Novia conversation | The backend, exactly as for Slack: it pushes markdown text, forms and human gates, and the app displays them |
+
+- **Workflow execution is unchanged.** Workflows, gates and Novia behave as they do for Slack. The
+  backend sends the app what it sends Slack's renderer — markdown and the provider-neutral
+  `dialog` — never Block Kit and never HTML. The app's job in this mode is the one `callback.mjs`
+  does for Slack: turn markdown and `dialog` into the screen.
+- **The partition rule holds as written.** `/proc` formats workflow content — `formatted_markdown`,
+  report text, gate messages — so neither experience layer interprets raw workflow data. The only
+  raw data the app lays out itself is in Navigate mode: lists and records, presented from the
+  registry's own metadata.
+- **The app holds no domain vocabulary.** It never knows what "inventory", "A/C" or "budget" means.
+  Navigation comes from the domain registry, record layout from `PGC_Schema`, workflow content
+  from the backend.
+- **A second provider, not a replacement.** Slack keeps working. A run started in either can be
+  seen in the app.
 - **One page, many panels.** A console: navigation on the left, a panel grid in the centre, Novia
   on the right. On a phone the three become tabs.
 
@@ -147,26 +152,27 @@ Domain names and tiles above are illustrative. Both are data.
 
 ### 4.3 Regions and panels
 
-Resources are in §4.7.
+Resources are in §4.7. **Mode** is from §4.1: *Navigate* is laid out by the app from REST JSON,
+*Execute* is workflow content pushed by the backend.
 
-| Region / panel | What it shows | Fed by |
-|---|---|---|
-| **Command bar** | One input, the equivalent of `/mind` | `POST /commands` |
-| **Breadcrumbs** | Where the user is: Home › domain › workflow › gate | The client's own router |
-| **Navigator** (left) | Home, each domain, Activity, Settings | `GET /domains` — the domain registry (`PGC_DomainHelp`) and each domain's live workflows from `PGC_Workflow`, the same read `/help` and `search_domain_help` make |
-| **Needs you** | Every gate waiting on a person, newest first, answerable in place | `GET /gates` — runs at `awaiting_human_gate`, each rebuilt with `buildDialog`. **Includes scheduled runs**, whose `callback` is null — today such a gate suspends with nobody to answer it |
-| **Home status** | Device and system state as tiles; a tile may carry actions | `GET /views/{name}` — a status workflow's output: tile descriptors `{ label, value, unit?, state?, actions? }` built by `js_transform` (§4.8) |
-| **Recent activity** | Runs by status and time; opening one shows its steps | `GET /runs`, `GET /runs/{runId}` |
-| **Domain page** | The domain's records as a sortable, filterable table, its workflows as actions; a running workflow's gates render inside the page | `GET /domains/{domain}/schema` and `GET /domains/{domain}/records`; the client builds the table from the registered columns |
-| **Novia** (right) | A Novia conversation; her gated actions (`propose_workflow_fix`, `register_workflow`) render as gates in the thread | `/novia/sessions/{id}/messages`; history from `PGC_SessionEntry` |
-| **Ask Novia about this** | From any panel, opens Novia with the current view as context — the run id, the domain, the gate | The panel's own identifiers, passed into the opening message |
+| Region / panel | Mode | What it shows | Fed by |
+|---|---|---|---|
+| **Command bar** | Execute | One input, the equivalent of `/mind`; replies arrive as pushed content | `POST /commands` |
+| **Breadcrumbs** | Navigate | Where the user is: Home › domain › record, or Home › run › gate | The client's own router |
+| **Navigator** (left) | Navigate | Home, each domain, Activity, Settings | `GET /domains` — the domain registry (`PGC_DomainHelp`) and each domain's live workflows from `PGC_Workflow`, the same read `/help` and `search_domain_help` make |
+| **Needs you** | Navigate → Execute | The list of gates waiting on a person, newest first; opening one shows the gate as pushed content, answerable in place | `GET /gates` — runs at `awaiting_human_gate`, each rebuilt with `buildDialog`. **Includes scheduled runs**, whose `callback` is null — today such a gate suspends with nobody to answer it |
+| **Home status** | Execute | Device and system state; pinned output of a status workflow (§4.8) | The latest inbox message of the named status workflow |
+| **Recent activity** | Navigate | Runs by status and time; drill into a run's steps | `GET /runs`, `GET /runs/{runId}` |
+| **Domain page** | Navigate | Drill-down into a domain: its records as a sortable, filterable table, a record and its child records, and the domain's workflows as actions | `GET /domains/{domain}/schema`, `GET /domains/{domain}/records`, `GET /domains/{domain}/records/{id}` |
+| **Workflow output** | Execute | A started workflow's markdown, forms and gates, in a panel beside the page that started it | Pushed inbox messages for the run |
+| **Novia** (right) | Navigate → Execute | The session list, kept current; opening one shows the conversation, with her gated actions (`propose_workflow_fix`, `register_workflow`) as gates | `GET /novia/sessions`; history from `PGC_SessionEntry`; new turns pushed |
+| **Ask Novia about this** | Execute | From any panel, opens Novia with the current view as context — the run id, the domain, the record, the gate | The panel's own identifiers, passed into the opening message |
 
 ### 4.4 Gate rendering
 
-Each `gate_type` gets one client component. The `dialog` JSON is identical to what Slack's
-renderer receives; the client renders it instead of the server. Markdown inside a `dialog` or a
-notification — `formatted_markdown` from existing workflows — is rendered by a client markdown
-component.
+Each `gate_type` gets one client component. The `dialog` the backend pushes is the one Slack's
+renderer receives, with its content already decided and formatted by `/proc`; the app only
+displays it. Markdown in a `dialog` or a notification is shown by a markdown component.
 
 | `gate_type` | Web rendering |
 |---|---|
@@ -191,11 +197,12 @@ ceiling. The pager pattern stays for sets too large for any screen.
 ### 4.5 Components
 
 ```
- Browser — single-page app (JS framework), renders everything
-   │  REST over HTTPS, JSON, bearer token
-   ▼
+ Browser — single-page app (JS framework)
+   │  Navigate: REST over HTTPS, JSON            ▲ Execute: pushed markdown,
+   │  Execute: start, answer, send               │ forms and gates
+   ▼                                             │
  ┌──────────────────────────────────┐
- │ WebApiFunction  EXP              │  /api/v1/ui/web/*  — JSON in, JSON out
+ │ WebApiFunction  EXP              │  /api/v1/ui/web/*  +  WebSocket
  └───────┬──────────────────┬───────┘
          │ SQS              │ HTTP + internal key
          │ (writes: the     │ (reads)
@@ -204,7 +211,7 @@ ceiling. The pager pattern stays for sets too large for any screen.
          ▼                  ▼
  ┌─────────────────────────────────────────────────────────┐
  │ ProcFunction  PROC — unchanged business logic           │
- │ results for provider 'web' → inbox row, no rendering    │
+ │ results for provider 'web' → inbox row → pushed         │
  └───────────────────────────┬─────────────────────────────┘
                              ▼
                  ServFunction  SERV  →  PostgreSQL
@@ -214,10 +221,10 @@ ceiling. The pager pattern stays for sets too large for any screen.
 |---|---|
 | **Single-page app** | A JavaScript framework app — React is the recommendation — bundled with esbuild, the bundler the Lambdas already use. Static files on S3 behind CloudFront. Client-side routing gives the breadcrumbs and deep links |
 | **Identity** | A Cognito user pool, one user per household member. API Gateway validates the bearer token; the browser never holds the internal API key |
-| **`WebApiFunction`** (EXP) | The REST service layer for the app. Reads call PROC with the internal key, as `SlackbotFunction` does; changes enqueue the same SQS messages Slack enqueues. Returns JSON only |
-| **PROC read endpoints** | The reads the REST resources need — domains, schema, records, gates, runs, sessions, views. PROC calls SERV; the experience tier never calls SERV directly |
-| **Results for the web** | `enqueueCallback` routes by `callback.provider`: Slack's results go to the Slack results queue for server-side rendering; the web's are written to the inbox (§4.6) and nothing is rendered |
-| **Change notification** | Phase 1 polls `GET /inbox` while the tab is visible; an API Gateway WebSocket that sends only "the inbox changed" replaces polling when latency matters. The client always re-reads through REST |
+| **`WebApiFunction`** (EXP) | The app's REST service layer. Navigate reads call PROC with the internal key, as `SlackbotFunction` does; Execute actions enqueue the same SQS messages Slack enqueues |
+| **PROC read endpoints** | The reads the REST resources need — domains, schema, records, gates, runs, sessions. PROC calls SERV; the experience tier never calls SERV directly |
+| **Results for the web** | `enqueueCallback` routes by `callback.provider`: Slack's results go to the Slack results queue for Block Kit rendering; the web's are written to the inbox (§4.6) and pushed |
+| **Push** | An API Gateway WebSocket carries each new inbox message — markdown, form or gate — to the open app, and list changes (a new session, a run finishing) so Navigate lists stay current. `GET /inbox` since a cursor catches up after a disconnect and is Phase 0's only mechanism |
 
 All final decisions hold: ESM, esbuild, shared `LambdaExecutionRole`, Lambdas outside the VPC, SSM
 `String` parameters.
@@ -246,23 +253,30 @@ never from stored renderings — the gate the user sees is always the gate the r
 ### 4.7 API surface
 
 REST resources, JSON in and out, spec-first in `openapi.yaml` before implementation. All under
-`/api/v1/ui/web/`, bearer-token authorized. A write returns `202 Accepted` with the run or session
-it started; its outcome arrives through the inbox.
+`/api/v1/ui/web/`, bearer-token authorized.
+
+**Navigate** — the app lays out what these return:
 
 | Method and resource | Purpose | Behind it |
 |---|---|---|
 | `GET /domains` | Domains and their workflows | Domain registry, `PGC_Workflow` |
-| `GET /domains/{domain}/schema` | Columns, types, labels, enums — what the client needs to lay out records | `PGC_Schema` |
-| `GET /domains/{domain}/records` | Records with filter, sort and page parameters in the SERV filter vocabulary | SERV `getRows` / entity reads |
-| `GET /gates` | Pending gates, each a `dialog` | Runs at `awaiting_human_gate`, `buildDialog` |
-| `POST /gates/{runId}/responses` | Answer a gate | `resume_gate` |
-| `GET /runs`, `GET /runs/{runId}` | Activity | `PGC_WorkflowRun`, `PGC_WorkflowRunStep` |
-| `POST /runs` | Start a named workflow with input | Run entry, as `POST /proc/run-workflow` |
+| `GET /domains/{domain}/schema` | Columns, types, labels, enums — what the app needs to lay out records | `PGC_Schema` |
+| `GET /domains/{domain}/records` | Records with filter, sort and page parameters in the SERV filter vocabulary | SERV `getRows` |
+| `GET /domains/{domain}/records/{id}` | One record with its child records | SERV entity reads via `PGC_EntitySchema` |
+| `GET /gates` | Gates waiting on a person | Runs at `awaiting_human_gate` |
+| `GET /runs`, `GET /runs/{runId}` | Activity and a run's steps | `PGC_WorkflowRun`, `PGC_WorkflowRunStep` |
+| `GET /novia/sessions`, `GET /novia/sessions/{id}/messages` | Sessions, and a conversation's history | `PGC_Session`, `PGC_SessionEntry` |
+| `GET /inbox` | Pushed messages since a cursor, for catch-up | `PGC_UiMessage` |
+
+**Execute** — each returns `202 Accepted` with the run or session it touched; what follows is
+pushed:
+
+| Method and resource | Purpose | Behind it |
+|---|---|---|
 | `POST /commands` | Free-text intent | `CLASSIFY_INTENT` |
-| `GET /novia/sessions`, `POST /novia/sessions` | List and open Novia sessions | `PGC_Session` |
-| `GET /novia/sessions/{id}/messages`, `POST /novia/sessions/{id}/messages` | A conversation's history; send a message | `PGC_SessionEntry`; `MINDS_EYE` / `MINDS_EYE_RESUME` |
-| `GET /views/{name}` | A panel's view descriptors, such as Home status tiles | The latest output of the view's workflow |
-| `GET /inbox` | Messages since a cursor | `PGC_UiMessage` |
+| `POST /runs` | Start a named workflow with input | Run entry, as `POST /proc/run-workflow` |
+| `POST /gates/{runId}/responses` | Answer a gate | `resume_gate` |
+| `POST /novia/sessions`, `POST /novia/sessions/{id}/messages` | Open a session; send a message | `MINDS_EYE` / `MINDS_EYE_RESUME` |
 
 ### 4.8 Home status and the device bridge
 
@@ -272,9 +286,8 @@ a `PGC_StepType` contract, never a hard-coded integration. The first target is a
 hub such as Home Assistant, which already bridges climate, lighting, solar inverters and Matter
 devices; the step type stays generic so any API qualifies.
 
-- **Reading:** a status workflow calls the hub, a `js_transform` maps its response to tile
-  descriptors, and the Home status panel renders them. What a tile means is decided in the
-  workflow.
+- **Reading:** a status workflow calls the hub and formats its response, and the Home status
+  panel pins that workflow's latest output. What each reading means is decided in the workflow.
 - **Control:** a tile action starts a workflow; consequential actions pass a `confirm` gate.
 - **Credentials:** hub tokens live in SSM like every other secret.
 
@@ -282,10 +295,10 @@ devices; the step type stays generic so any API qualifies.
 
 | Phase | Delivers | Proves |
 |---|---|---|
-| **0 — Spike** | The framework app shell, `GET /gates` and `POST /gates/{runId}/responses`, `provider: 'web'` end to end for one workflow; a `form` gate rendered client-side as an editable grid | The seam in §3.1 holds for a client-rendered provider; the grid answers the bulk-edit ceiling |
-| **1 — Console** | Identity, the §4.7 resources, command bar, Needs you, navigator, domain pages, Novia panel, inbox with polling; the Slack leaks in §3.2 removed | Daily use without Slack |
+| **0 — Spike** | The framework app shell; `GET /gates`, `POST /gates/{runId}/responses` and `GET /inbox`; `provider: 'web'` end to end for one workflow; a `form` gate shown as an editable grid | The seam in §3.1 holds for a second provider; the grid answers the bulk-edit ceiling |
+| **1 — Console** | Identity, the §4.7 resources, the WebSocket push, command bar, Needs you, navigator, domain drill-down, Novia panel; the Slack leaks in §3.2 removed | Daily use without Slack |
 | **2 — Home status** | The external-API step type, a status workflow, tiles with actions | Device control from the brain |
-| **3 — Household** | Several household members; per-member Novia threads; push | A family uses one brain |
+| **3 — Household** | Several household members; per-member Novia threads | A family uses one brain |
 | **Later** | Document, image and voice input; spoken output; always-on voice through an assistant device | The deck's "future work: the product experience" |
 
 ---
@@ -334,14 +347,13 @@ are application-wide, evolved rows belong to a tenant.
 4. **Grid hint shape** — the exact field properties for row key and column label on the
    `human_gate` contract.
 5. **Inbox retention** — how long `PGC_UiMessage` keeps delivered messages.
-6. **The partition rule for a client-rendered provider** — `CLAUDE.md` asks `/proc` to format
-   content (`formatted_markdown`, report text) so the experience layer never interprets raw data.
-   §4.1 keeps the domain knowledge in `/proc` but delivers it as typed JSON rather than markup. Does
-   the rule become "format as data" for new workflows, with markdown kept for Slack and for
-   existing workflows?
-7. **Display metadata in the registry** — the domain page lays out records from `PGC_Schema`. Which
-   display facts (label, format, currency, reveal threshold) the registry must carry for that,
-   beyond types and enums.
+6. **Display metadata in the registry** — domain drill-down lays out raw records from
+   `PGC_Schema`. Which display facts (label, format, currency, reveal threshold) the registry must
+   carry for that, beyond types and enums.
+7. **Changes from drill-down** — does editing a record from a domain page start a workflow (an
+   edit workflow seeded with the record), or is it a direct REST write (`PATCH`/`DELETE` on the
+   record)? A direct write keeps SERV's constraints and embeddings but skips gates, the run record
+   and any side effects a domain's workflows perform.
 8. **Framework** — React is the recommendation; the choice is open until Phase 0.
 9. **Proposal deck v1 corrections before it is presented** — slide 21 says external API connections
    are already built (they are not, §4.8); slides 2 and 18 quote the README's monthly cost rather
