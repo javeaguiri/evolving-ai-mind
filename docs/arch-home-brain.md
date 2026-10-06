@@ -83,7 +83,7 @@ Small and enumerable. Each becomes a provider-neutral name:
 
   | Mode | What it covers | Who decides the content |
   |---|---|---|
-  | **Navigate** | Lists the app fetches and keeps current — Novia sessions, workflows, runs, pending gates, domains — and drill-down into a domain's records | The app, from JSON returned by REST services |
+  | **Navigate** | Lists the app fetches and keeps current — Novia sessions, workflows, runs, pending gates, domains — and drill-down into a domain's records, with direct edits where the registry allows them (§4.8) | The app, from JSON returned by REST services |
   | **Execute** | Running a workflow or a Novia conversation | The backend, exactly as for Slack: it pushes markdown text, forms and human gates, and the app displays them |
 
 - **Workflow execution is unchanged.** Workflows, gates and Novia behave as they do for Slack. The
@@ -161,9 +161,9 @@ Resources are in §4.7. **Mode** is from §4.1: *Navigate* is laid out by the ap
 | **Breadcrumbs** | Navigate | Where the user is: Home › domain › record, or Home › run › gate | The client's own router |
 | **Navigator** (left) | Navigate | Home, each domain, Activity, Settings | `GET /domains` — the domain registry (`PGC_DomainHelp`) and each domain's live workflows from `PGC_Workflow`, the same read `/help` and `search_domain_help` make |
 | **Needs you** | Navigate → Execute | The list of gates waiting on a person, newest first; opening one shows the gate as pushed content, answerable in place | `GET /gates` — runs at `awaiting_human_gate`, each rebuilt with `buildDialog`. **Includes scheduled runs**, whose `callback` is null — today such a gate suspends with nobody to answer it |
-| **Home status** | Execute | Device and system state; pinned output of a status workflow (§4.8) | The latest inbox message of the named status workflow |
+| **Home status** | Execute | Device and system state; pinned output of a status workflow (§4.9) | The latest inbox message of the named status workflow |
 | **Recent activity** | Navigate | Runs by status and time; drill into a run's steps | `GET /runs`, `GET /runs/{runId}` |
-| **Domain page** | Navigate | Drill-down into a domain: its records as a sortable, filterable table, a record and its child records, and the domain's workflows as actions | `GET /domains/{domain}/schema`, `GET /domains/{domain}/records`, `GET /domains/{domain}/records/{id}` |
+| **Domain page** | Navigate | Drill-down into a domain: its records as a sortable, filterable table, a record and its child records, and the domain's workflows as actions. Fields the edit policy allows are editable in place; add and delete appear where the table allows them (§4.8) | `GET /domains/{domain}/schema`, `GET /domains/{domain}/records`, `GET /domains/{domain}/records/{id}` |
 | **Workflow output** | Execute | A started workflow's markdown, forms and gates, in a panel beside the page that started it | Pushed inbox messages for the run |
 | **Novia** (right) | Navigate → Execute | The session list, kept current; opening one shows the conversation, with her gated actions (`propose_workflow_fix`, `register_workflow`) as gates | `GET /novia/sessions`; history from `PGC_SessionEntry`; new turns pushed |
 | **Ask Novia about this** | Execute | From any panel, opens Novia with the current view as context — the run id, the domain, the record, the gate | The panel's own identifiers, passed into the opening message |
@@ -278,7 +278,75 @@ pushed:
 | `POST /gates/{runId}/responses` | Answer a gate | `resume_gate` |
 | `POST /novia/sessions`, `POST /novia/sessions/{id}/messages` | Open a session; send a message | `MINDS_EYE` / `MINDS_EYE_RESUME` |
 
-### 4.8 Home status and the device bridge
+**Edit** — direct record edits under the edit policy (§4.8); synchronous, returning the record as
+written:
+
+| Method and resource | Purpose | Behind it |
+|---|---|---|
+| `PATCH /domains/{domain}/records/{id}` | Change editable fields; `If-Match` carries the version read | Policy check, then SERV `updateRows` |
+| `POST /domains/{domain}/records` | Add a record, where the table allows it | Policy check, then SERV `insertRow` |
+| `DELETE /domains/{domain}/records/{id}` | Delete a record, where the table allows it; `If-Match` as for `PATCH` | Policy check, then SERV `deleteRows` |
+
+### 4.8 Direct edits and the edit policy
+
+A record changes by one of two paths:
+
+| Path | Who uses it | Governed by |
+|---|---|---|
+| **Workflow** | Every workflow step that writes, whether started from Slack, the app, a schedule or Novia | The workflow's own design — its gates, validation and run record |
+| **Direct** | The app's Edit resources (§4.7), from a domain page | The **edit policy** in the registry |
+
+**The edit policy governs the direct path only.** Workflows are never restricted by it. A field
+that is read-only to direct edits is one that only workflows change — a flashcard's review
+schedule, written by the quiz — not one that nothing changes. A field can be open to both paths:
+inventory quantity is edited directly from the app and also decremented by a meal-planning
+workflow.
+
+**Shape.** The policy is declared in `PGC_Schema`, which makes it an evolving artifact:
+
+| Level | Declares | Where |
+|---|---|---|
+| **Field** | `editable` or `read_only` for direct edits | Each column definition in `PGC_Schema.columns` |
+| **Table** | Whether direct add and direct delete are allowed | The table's `PGC_Schema` row |
+
+Illustrations: flashcard front and back are editable while session results are read-only; a
+portfolio's holdings are editable, with add and delete allowed; a session table allows neither.
+
+**Default: `read_only`.** A field is editable only when declared so. Columns the system maintains —
+the primary key, timestamps, embedding columns, foreign keys a workflow resolves — are never
+editable directly. `design_table` proposes a policy when a domain is created; the user or Novia
+changes it afterwards like any other registry fact. Application-wide domains carry the policy in
+their seeded definition; tenant-specific domains carry their own.
+
+**Enforcement is server-side.** `GET /domains/{domain}/schema` returns the policy so the app offers
+edit controls only where it allows them, but the app is never the guard. The PROC endpoint behind
+the Edit resources checks every field in the request against the policy and refuses the request
+whole if any field is not editable. That endpoint is the only route for a direct edit — the
+experience tier never calls SERV — so the check has one home, and workflows, which call SERV
+directly, never meet it.
+
+**What a direct edit inherits from SERV.** The database constraints, and embedding upkeep:
+`updateRows` re-computes an embedding when one of its `embed_source` columns changes, so editing a
+field that feeds an embedding keeps similarity search correct.
+
+**Concurrent changes.** Every record read carries a version — an `ETag` from the row's
+`updated_at`, which a per-table trigger maintains on domain tables. A table without `updated_at`
+accepts no direct edits. A direct edit sends it back in `If-Match`; if a workflow or another edit changed the record
+since, the edit is refused with `409 Conflict` and the app re-reads. A direct edit therefore never
+silently overwrites a workflow's write, or the reverse.
+
+**Audit.** Each direct edit writes one row — who, when, domain, record, and each field's old and new
+value — to `PGC_RecordEdit`. A workflow's changes are already traceable through its run record;
+this gives the direct path the same, so "why does this record read 4?" is answerable by the user or
+by Novia.
+
+**Changing a read-only field.** A domain page lists the domain's workflows as actions; that list is
+how a user reaches the workflow that changes a field they cannot edit directly.
+
+**Who may edit.** The policy applies to every household member alike until Phase 3, where the field
+and table declarations gain an optional list of roles.
+
+### 4.9 Home status and the device bridge
 
 No step type reaches an external API today. Device state and control need **one new step type**
 that calls an external HTTP API — a new system behaviour, so a new case in `step-executor.mjs` and
@@ -291,14 +359,14 @@ devices; the step type stays generic so any API qualifies.
 - **Control:** a tile action starts a workflow; consequential actions pass a `confirm` gate.
 - **Credentials:** hub tokens live in SSM like every other secret.
 
-### 4.9 Phasing
+### 4.10 Phasing
 
 | Phase | Delivers | Proves |
 |---|---|---|
 | **0 — Spike** | The framework app shell; `GET /gates`, `POST /gates/{runId}/responses` and `GET /inbox`; `provider: 'web'` end to end for one workflow; a `form` gate shown as an editable grid | The seam in §3.1 holds for a second provider; the grid answers the bulk-edit ceiling |
-| **1 — Console** | Identity, the §4.7 resources, the WebSocket push, command bar, Needs you, navigator, domain drill-down, Novia panel; the Slack leaks in §3.2 removed | Daily use without Slack |
+| **1 — Console** | Identity, the §4.7 resources, the edit policy and `PGC_RecordEdit` (§4.8), the WebSocket push, command bar, Needs you, navigator, domain drill-down, Novia panel; the Slack leaks in §3.2 removed | Daily use without Slack |
 | **2 — Home status** | The external-API step type, a status workflow, tiles with actions | Device control from the brain |
-| **3 — Household** | Several household members; per-member Novia threads | A family uses one brain |
+| **3 — Household** | Several household members; per-member Novia threads; per-role edit policy (§4.8) | A family uses one brain |
 | **Later** | Document, image and voice input; spoken output; always-on voice through an assistant device | The deck's "future work: the product experience" |
 
 ---
@@ -350,12 +418,8 @@ are application-wide, evolved rows belong to a tenant.
 6. **Display metadata in the registry** — domain drill-down lays out raw records from
    `PGC_Schema`. Which display facts (label, format, currency, reveal threshold) the registry must
    carry for that, beyond types and enums.
-7. **Changes from drill-down** — does editing a record from a domain page start a workflow (an
-   edit workflow seeded with the record), or is it a direct REST write (`PATCH`/`DELETE` on the
-   record)? A direct write keeps SERV's constraints and embeddings but skips gates, the run record
-   and any side effects a domain's workflows perform.
-8. **Framework** — React is the recommendation; the choice is open until Phase 0.
-9. **Proposal deck v1 corrections before it is presented** — slide 21 says external API connections
-   are already built (they are not, §4.8); slides 2 and 18 quote the README's monthly cost rather
+7. **Framework** — React is the recommendation; the choice is open until Phase 0.
+8. **Proposal deck v1 corrections before it is presented** — slide 21 says external API connections
+   are already built (they are not, §4.9); slides 2 and 18 quote the README's monthly cost rather
    than the measured steady state in `architecture.md` §16; slide 14 states schema-per-home
    isolation in the present tense; slide 17 places all `PGC_` tables in the shared layer (§5.3).
