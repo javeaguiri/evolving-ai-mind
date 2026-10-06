@@ -281,3 +281,35 @@ L1 check has to say it too.
 alias re-pointing) and edit/delete (8–11f). Two of Track C's four verbs may already be built, which
 reframes item 7 from *write it* to *test and extend it*. Run history not yet checked — a lead, not
 the confirmation this sprint asks for.
+
+### Session 3 — 2026-10-06 — off-sprint: the Home Brain proposal and the cleanup inventory
+
+**No sprint work. No code, nothing deployed, nothing upserted. No AC changed state.** The session
+went to two pieces of work outside this sprint, each on its own branch so this one stays clean:
+
+- **`design/home-brain`** — `docs/arch-home-brain.md`, from Javear's proposal deck
+  (`docs/evolving-ai-home-brain-proposal-v1.pptx`, not yet presented). The system stays single-user;
+  a web console is designed as a second experience provider beside Slack: navigation and domain
+  drill-down over REST, workflow execution pushed by the backend exactly as for Slack, direct record
+  edits under a field-level edit policy in `PGC_Schema`, and Novia creating domains. Multi-tenancy is
+  a direction (flexible JSON records in SERV), not a plan. **One link back to this sprint:** the
+  bulk-edit pattern's procedure-layer half carries over unchanged — a web renderer shows the same
+  `fields` array as an editable grid — so nothing in scope here is wasted by that direction.
+- **`cleanup/dead-creation-path`** — `docs/cleanup-creation-path-inventory.md`, a read-only inventory
+  of the workflow- and domain-creation paths Novia supersedes. Nothing deleted. **Decision D1 blocks
+  Pass A:** the `TROUBLESHOOT_WORKFLOW` → `FIX_WORKFLOW` chain fires automatically on every workflow
+  failure, so `fix_workflow` cannot simply be removed.
+
+A commit of the design doc landed here by mistake and was reverted (`8325091`); the net diff of this
+branch is unchanged.
+
+**Next session starts here — the bulk-record edit, with a Novia-session decision first.** Session
+**1218** is the only open Novia session: the `manage_expenses` design (scope item 8 / AC7), 8 turns,
+~100K characters, last touched 2026-09-20 and parked until she has bulk-edit instructions. **A fresh
+session is advisable:** 1218 predates the `human_gate` contract rewrite of 2026-09-26, so the
+contract text in her context is the old one, and the transcript is large enough to crowd the new
+work. **Recommended:** ask Novia in 1218 to write her `manage_expenses` design and its open
+corrections to memory, then open a new session that starts from that memory plus the two
+data-destroying corrections (`payment_method` vocabulary, hard delete). The raw transcript is the
+fallback if her summary loses something. **Sequencing still holds:** the bulk-edit pattern (AC1,
+`edit_budget` / inventory edit) comes before `manage_expenses`, which consumes it.
