@@ -428,7 +428,14 @@ after an edit, return to the list the record was picked from.
 **Open design question, for `docs/arch-home-brain.md` (on branch `design/home-brain`, not here):**
 whether a workflow declares *edit this set* and each experience provider chooses grid or pick-one.
 
-**Next:** Javear reviews the contract wording → `sam deploy` + upsert `PGC_StepType` → test
-`/m list` and a recipe-style two-table level from Slack → brief Novia in 1236 to rebuild 360's
-edit branch as list → form (Year/Amount as `number`, Currency as a select of stored values, no ID
-field, no `(no category)`).
+**Next session starts here:**
+1. **Javear's Slack test of items 12/13** — `/m list` on a single-table domain (one table, one ID
+   box, one Select); a two-table drill-down level such as a recipe's ingredients and steps (one box
+   per table — try an ID present in both); a wrong ID and an empty box (each re-renders with its
+   own message).
+2. **Brief Novia in session 1236** to rebuild 360's edit branch as list → form: Year and Amount as
+   `number` fields, Currency as a select of the stored values, no ID field, no `(no category)` on
+   the NOT NULL column, and return to the list after a save. Then the number field gets its first
+   live test. Watch whether she re-reads the `human_gate` row unprompted (AC3).
+3. **Item 10** — spec `preview_step` (headless + gate size) in `openapi.yaml` / `arch-minds-eye.md`
+   before any code. **Item 11** (Slack's size threshold) is lower priority now that grids stay small.
