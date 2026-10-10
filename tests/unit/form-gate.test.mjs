@@ -18,8 +18,9 @@ import { describe, it } from 'node:test';
 import assert           from 'node:assert/strict';
 
 import { buildDialog, resolveFormFields }   from '../../src/proc/step-executor.mjs';
-import { collectFormValues, extractFieldValue, FORM_BLOCK_PREFIX }
+import { collectFormValues, extractFieldValue, FORM_BLOCK_PREFIX, EMPTY_OPTION_VALUE }
   from '../../src/ui/slackbot/form-fields.mjs';
+import { buildInputElement } from '../../src/ui/slackbot/callback.mjs';
 
 const formStep = (fields, extra = {}) => ({
   step: '1', type: 'human_gate', gate_type: 'form',
@@ -157,6 +158,24 @@ describe('buildDialog — form gate', () => {
     assert.equal(inputs(dialog)[0].initial, '250.00');
   });
 
+  it('resolves templates in an inline field\'s default and placeholder (run 870)', () => {
+    // An inline field list has no other way to open on a value the workflow read.
+    // Run 870's period picker rendered "{{default_year}}" literally in the box.
+    const dialog = buildDialog(
+      formStep([
+        { name: 'year',  type: 'text',   default: '{{defaults.year}}', placeholder: 'e.g. {{defaults.year}}' },
+        { name: 'label', type: 'text',   default: 'Budget {{defaults.year}}' },
+        { name: 'tags',  type: 'multi_select', default: '{{chosen}}', options: ['a', 'b', 'c'] },
+      ]),
+      { defaults: { year: '2026' }, chosen: ['a', 'c'] },
+    );
+    const [year, label, tags] = inputs(dialog);
+    assert.equal(year.initial, '2026');
+    assert.equal(year.placeholder, 'e.g. 2026');
+    assert.equal(label.initial, 'Budget 2026');
+    assert.deepEqual(tags.initial, ['a', 'c'], 'a whole-token default keeps its array type');
+  });
+
   it('accepts `fields` as a {{template}} reference to a js_transform-built array', () => {
     // A form with one field per data row: the field list cannot be known at design time,
     // so a preceding js_transform builds it. Same shape `options`/`reveals` already accept.
@@ -232,6 +251,23 @@ describe('form-fields — reading Slack answers back', () => {
       extractFieldValue({ selected_options: [{ value: 'a' }, { value: 'b' }] }),
       ['a', 'b'],
       'multi_select and checkbox answer with an array',
+    );
+  });
+
+  it('round-trips an empty-value "none" option through Slack as null (run 870)', () => {
+    // Slack rejects an option whose value is '' — and with it the whole message.
+    const field = {
+      input_type: 'select', initial: '',
+      options: [{ value: '', label: '(none)' }, { value: 'cash', label: 'Cash' }],
+    };
+    const { element } = buildInputElement(field);
+    assert.ok(element.options.every(o => o.value !== ''), 'no empty option value reaches Slack');
+    assert.equal(element.initial_option.value, EMPTY_OPTION_VALUE, "a '' default opens on the none option");
+    assert.equal(extractFieldValue({ selected_option: element.initial_option }), null);
+    assert.equal(extractFieldValue({ selected_option: element.options[1] }), 'cash');
+    assert.deepEqual(
+      extractFieldValue({ selected_options: [{ value: EMPTY_OPTION_VALUE }, { value: 'cash' }] }),
+      ['cash'],
     );
   });
 

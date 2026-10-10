@@ -21,7 +21,7 @@
 
 import { randomUUID }        from 'node:crypto';
 import { WebClient }         from '@slack/web-api';
-import { FORM_BLOCK_PREFIX } from './form-fields.mjs';
+import { FORM_BLOCK_PREFIX, EMPTY_OPTION_VALUE } from './form-fields.mjs';
 
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
@@ -1241,6 +1241,14 @@ export const WIDGET_OPTION_LIMIT = {
 // Returns { element, hint }. `hint` is the block's provenance line and is set only
 // when this function bounded something the workflow asked for — a caller that drops
 // it turns an announced bound back into a silent one.
+// toSlackOptionValue — Slack rejects an option whose value is the empty string, so the
+// standard "none" option (value '') goes out as EMPTY_OPTION_VALUE and comes back as null.
+// Applied to the defaults too, so a field defaulting to '' opens on that option.
+function toSlackOptionValue(value) {
+  const s = String(value);
+  return s === '' ? EMPTY_OPTION_VALUE : s;
+}
+
 export function buildInputElement(field) {
   const action_id   = 'form_value';
   const placeholder = field.placeholder
@@ -1248,7 +1256,7 @@ export function buildInputElement(field) {
     : {};
   const allOptions = (field.options ?? []).map(o => ({
     text:  { type: 'plain_text', text: truncateOption(String(o.label)) },
-    value: String(o.value),
+    value: toSlackOptionValue(o.value),
   }));
 
   // Bound the set to what the element accepts, and say so. Truncating in silence is
@@ -1271,7 +1279,7 @@ export function buildInputElement(field) {
   // against the bounded list, never the full one.
   const initialValues = field.initial === undefined || field.initial === null
     ? []
-    : (Array.isArray(field.initial) ? field.initial : [field.initial]).map(String);
+    : (Array.isArray(field.initial) ? field.initial : [field.initial]).map(toSlackOptionValue);
   const chosen = options.filter(o => initialValues.includes(o.value));
 
   switch (field.input_type) {
