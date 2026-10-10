@@ -888,8 +888,11 @@ export function makeTableBudget() {
 // every table in the message and mutated as rows are consumed.
 function buildRevealTables(headerLabels, dataRows, budget, blockAllowance) {
   const cols = headerLabels.slice(0, TABLE_MAX_COLUMNS);
+  // An empty cell is an ordinary data state (a column the row leaves blank), but Slack
+  // rejects a rich_text text element with no text, and with it the whole message (run 871).
+  // It renders as an em dash, the conventional mark for an empty table cell.
   const cell = (v, bold) => {
-    const text = String(v ?? '').replace(/\r?\n/g, ' ');
+    const text = String(v ?? '').replace(/\r?\n/g, ' ') || '—';
     return {
       type:     'rich_text',
       elements: [{
