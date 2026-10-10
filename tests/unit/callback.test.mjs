@@ -1801,7 +1801,7 @@ describe('isPermanentRenderFailure — retry vs report', () => {
   });
 
   it('treats other payload defects as permanent', () => {
-    for (const code of ['invalid_blocks_format', 'invalid_arguments', 'msg_too_long']) {
+    for (const code of ['invalid_blocks_format', 'invalid_arguments', 'msg_too_long', 'msg_blocks_too_long']) {
       assert.equal(isPermanentRenderFailure(slackError(code)), true, code);
     }
   });
