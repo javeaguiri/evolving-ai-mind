@@ -391,14 +391,15 @@ sees every field it asked for.
 
 ###### `list_selection` gate_type
 
-Renders all `context_key` items as a single Slack `markdown` table (`ID` plus
-one column per distinct field key across every item), plus one shared
-selection control and one Select button (labeled/styled from `item_action`)
-below it — one block for the whole list regardless of row count, no per-row
-block cost. The selection control is a `static_select` dropdown of every
-selectable row, grouped into one `option_group` per source table when a level
-spans more than one; past Slack's 100-option cap it falls back to a plain
-id text box. The table itself is uncapped under either control. **This gate_type is only concerned with rendering.** What
+Renders all `context_key` items as a Slack `markdown` table per source table
+(`ID` plus one column per distinct field key across every item), each followed
+by an ID text box and one Select button (labeled/styled from `item_action`) —
+one block per table regardless of row count, no per-row block cost. The user
+types the ID of a row from the table's own ID column. When a level spans more
+than one source table each table gets its own box and button, so an id present
+in two tables is told apart by the box it was typed in (the button carries its
+table as `responseData.listGroup`; `matchListSelection` in `run-workflow.mjs`
+resolves it). The tables are uncapped and never paged. **This gate_type is only concerned with rendering.** What
 selecting a row *does* is entirely the calling workflow's concern, expressed
 through `item_action`'s own config — never a different gate_type for a
 different action semantic (Sprint 7 Track D2: this merges what were briefly
