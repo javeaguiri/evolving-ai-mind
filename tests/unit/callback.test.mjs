@@ -14,7 +14,8 @@
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { oversizedGateMessage, isPermanentRenderFailure, toSlackMrkdwn, dialogToBlocks,
-         buildRevealBlock, makeTableBudget } from '../../src/ui/slackbot/callback.mjs';
+         buildRevealBlock, makeTableBudget, buildListSections } from '../../src/ui/slackbot/callback.mjs';
+import { listIdBlockId } from '../../src/ui/slackbot/form-fields.mjs';
 
 // toSlackMrkdwn — the REAL exported function (not a copy). Normalizes standard
 // **bold** / __bold__ to Slack mrkdwn *bold* and GFM ~~strike~~ to ~strike~ for
@@ -276,57 +277,10 @@ function formatTableName(tableName) {
   return base.replace(/([a-z0-9])([A-Z])/g, '$1 $2').trim() || String(tableName ?? '');
 }
 
-// ── Faithful copy of buildTableBody from callback.mjs ────────────────────────
-// Keep in sync with src/ui/slackbot/callback.mjs:buildTableBody
-function buildTableBody(items, excludeColumn) {
-  const columns = ['ID'];
-  const seen = new Set(columns);
-  for (const item of items) {
-    for (const key of Object.keys(item.fields ?? {})) {
-      if (!seen.has(key)) { seen.add(key); columns.push(key); }
-    }
-  }
-  const tableColumns = columns.filter(col => col !== excludeColumn);
-
-  const headerLabels = tableColumns.map(col => formatColumnHeader(col, items.map(item => item.fields?.[col])));
-  const header = `| ${headerLabels.join(' | ')} |`;
-  const sep    = `|${tableColumns.map(() => '---').join('|')}|`;
-  const rows   = items.map(item => {
-    const cells = tableColumns.map(col => (col === 'ID' ? item.id : item.fields?.[col]));
-    return `| ${cells.map(escapeCell).join(' | ')} |`;
-  });
-  return [header, sep, ...rows].join('\n');
-}
-
-// ── Faithful copy of buildListTable from callback.mjs ────────────────────────
-// Keep in sync with src/ui/slackbot/callback.mjs:buildListTable
-function buildListTable(items, parentHeading) {
-  const groups = new Map();
-  for (const item of items) {
-    const table = item.responseData?.table;
-    if (!groups.has(table)) groups.set(table, []);
-    groups.get(table).push(item);
-  }
-  const entries = [...groups.entries()];
-
-  if (!parentHeading) {
-    return entries
-      .map(([table, groupItems]) => [`# ${formatTableName(table)}`, buildTableBody(groupItems)].join('\n'))
-      .join('\n\n');
-  }
-
-  const sections = entries.map(([table, groupItems]) => {
-    const excludeColumn = groupItems[0]?.responseData?.fkColumn ?? undefined;
-    return [`## ${formatTableName(table)}`, buildTableBody(groupItems, excludeColumn)].join('\n');
-  });
-  return [`# ${parentHeading}`, ...sections].join('\n\n');
-}
-
-// Expected values asserted against below — Slack's own static_select limits, as stated
-// in src/ui/slackbot/callback.mjs. Not a copy of any behaviour: the builders they bound
-// are exercised through the real exported dialogToBlocks.
-const SELECT_OPTION_LIMIT = 100;
-const OPTION_TEXT_LIMIT   = 75;
+// The list table as one markdown string — the real buildListSections, joined the way a
+// reader sees it. Each section also carries its own ID box in dialogToBlocks (tested there).
+const buildListTable = (items, parentHeading) =>
+  buildListSections(items, parentHeading).map(section => section.markdown).join('\n\n');
 
 // ── Faithful copy of the pure block-assembly slice of postHumanGate's
 // text_input branch from callback.mjs (excludes the routeCallback Slack call).
@@ -621,7 +575,7 @@ describe('dialogToBlocks — list', () => {
     assert.equal(blocks.some(b => b.type === 'actions'), false);
   });
 
-  it('at least one selectable item adds a shared select input and one Select button', () => {
+  it('at least one selectable item adds an ID text box and one Select button', () => {
     const field = {
       type:  'list',
       items: [{
@@ -634,13 +588,18 @@ describe('dialogToBlocks — list', () => {
     const inputBlock   = blocks.find(b => b.type === 'input');
     const actionsBlock = blocks.find(b => b.type === 'actions');
     assert.ok(inputBlock, 'input block should be present');
-    assert.equal(inputBlock.element.type, 'static_select');
+    // number_input renders only in modals; a list gate is a message.
+    assert.equal(inputBlock.element.type, 'plain_text_input');
+    assert.equal(inputBlock.element.action_id, 'list_select_value');
+    assert.equal(inputBlock.block_id, listIdBlockId(99, ''));
+    assert.equal(inputBlock.label.text, 'ID', 'a single-table list needs no table name on its box');
+    assert.equal(inputBlock.element.placeholder.text, 'e.g. PGD_Child');
     assert.ok(actionsBlock, 'actions block should be present');
     assert.equal(actionsBlock.elements[0].style, 'danger');
     assert.equal(actionsBlock.elements[0].text.text, 'Remove');
   });
 
-  it('a level spanning two child tables renders one option_group per table, each option carrying its own table', () => {
+  it('a level spanning two child tables gives each table its own ID box and Select button, beneath that table', () => {
     const field = {
       type:          'list',
       parentHeading: 'Paella',
@@ -649,67 +608,46 @@ describe('dialogToBlocks — list', () => {
         { id: 1, fields: { text: 'Simmer' }, responseData: { table: 'PGD_RecipeSteps', fkColumn: 'recipe_id' }, secondaryAction: { label: 'Open', action: 'open_row' } },
       ],
     };
-    const select = dialogToBlocks({ fields: [field] }, 7).find(b => b.type === 'input').element;
-    assert.equal(select.type, 'static_select');
-    assert.equal(select.option_groups.length, 2, 'one group per source table');
-    assert.equal(select.option_groups[0].label.text, 'Ingredients');
-    assert.equal(select.option_groups[1].label.text, 'Recipe Steps');
-    // The colliding id (1 in both tables) is disambiguated by the option value itself.
-    assert.deepEqual(JSON.parse(select.option_groups[0].options[0].value), { id: 1, table: 'PGD_Ingredients' });
-    assert.deepEqual(JSON.parse(select.option_groups[1].options[0].value), { id: 1, table: 'PGD_RecipeSteps' });
+    const all = dialogToBlocks({ fields: [field] }, 7);
+    // Headings become header blocks; the parent heading renders once, above the first table.
+    assert.deepEqual(all.filter(b => b.type === 'header').map(b => b.text.text), ['Paella', 'Ingredients', 'Recipe Steps']);
+    const blocks = all.filter(b => b.type !== 'header');
+    assert.deepEqual(blocks.map(b => b.type), ['markdown', 'input', 'actions', 'markdown', 'input', 'actions'],
+      'table, its box, its button — once per table');
+    assert.ok(blocks[0].text.includes('Rice'));
+    assert.ok(blocks[3].text.includes('Simmer'));
+    assert.equal(blocks[1].label.text, 'Ingredients ID');
+    assert.equal(blocks[4].label.text, 'Recipe Steps ID');
+    // The colliding id (1 in both tables) is told apart by which box and which button.
+    assert.equal(blocks[1].block_id, listIdBlockId(7, 'PGD_Ingredients'));
+    assert.equal(blocks[4].block_id, listIdBlockId(7, 'PGD_RecipeSteps'));
+    assert.equal(JSON.parse(blocks[2].elements[0].value).responseData.listGroup, 'PGD_Ingredients');
+    assert.equal(JSON.parse(blocks[5].elements[0].value).responseData.listGroup, 'PGD_RecipeSteps');
   });
 
-  it('option text is the row id plus its first non-empty field, skipping the parent-link column', () => {
+  it('a table group with no selectable row gets no box or button of its own', () => {
     const field = {
-      type:  'list',
+      type: 'list',
       items: [
-        { id: 42, fields: { recipe_id: 9, name: 'Olive oil' }, responseData: { table: 'PGD_Ingredients', fkColumn: 'recipe_id' }, secondaryAction: { label: 'Open', action: 'open_row' } },
+        { id: 1, fields: { name: 'Rice' },   responseData: { table: 'PGD_Ingredients' }, secondaryAction: { label: 'Open', action: 'open_row' } },
+        { id: 2, fields: { text: 'Simmer' }, responseData: { table: 'PGD_RecipeSteps' } },
       ],
     };
-    const select = dialogToBlocks({ fields: [field] }, 7).find(b => b.type === 'input').element;
-    assert.ok(!select.option_groups, 'a single-table level gets a flat option list, not a one-group header');
-    assert.equal(select.options[0].text.text, '42 — Olive oil');
+    const blocks = dialogToBlocks({ fields: [field] }, 7).filter(b => b.type !== 'header');
+    assert.deepEqual(blocks.map(b => b.type), ['markdown', 'input', 'actions', 'markdown']);
+    assert.equal(blocks[1].label.text, 'Ingredients ID', 'still named — the level shows two tables');
   });
 
-  it('option text is truncated to Slack’s 75-character limit', () => {
-    const field = {
-      type:  'list',
-      items: [
-        { id: 1, fields: { note: 'x'.repeat(200) }, secondaryAction: { label: 'Open', action: 'open_row' } },
-      ],
-    };
-    const select = dialogToBlocks({ fields: [field] }, 7).find(b => b.type === 'input').element;
-    assert.equal(select.options[0].text.text.length, OPTION_TEXT_LIMIT);
-  });
-
-  it('a list beyond Slack’s 100-option cap falls back to the shared text input', () => {
-    const items = Array.from({ length: SELECT_OPTION_LIMIT + 1 }, (_, i) => ({
+  it('a long list is never capped: every row stays in the table above one ID box', () => {
+    const items = Array.from({ length: 150 }, (_, i) => ({
       id: i + 1,
       fields: { name: `row ${i + 1}` },
       secondaryAction: { label: 'Open', action: 'open_row' },
     }));
     const blocks = dialogToBlocks({ fields: [{ type: 'list', items }] }, 7);
-    const inputBlock = blocks.find(b => b.type === 'input');
-    assert.equal(inputBlock.element.type, 'plain_text_input', 'past the cap the text box returns');
-    assert.equal(inputBlock.element.action_id, 'list_select_value', 'same action_id either way');
-    // The table itself stays uncapped — every row is still displayed.
-    const table = blocks.find(b => b.type === 'markdown').text;
-    assert.ok(table.includes(`| ${SELECT_OPTION_LIMIT + 1} |`), 'all rows remain visible in the table');
-  });
-
-  it('non-selectable rows are excluded from the options but stay in the table', () => {
-    const field = {
-      type:  'list',
-      items: [
-        { id: 1, fields: { name: 'Pickable' },     secondaryAction: { label: 'Open', action: 'open_row' } },
-        { id: 2, fields: { name: 'Not pickable' }, secondaryAction: null },
-      ],
-    };
-    const blocks = dialogToBlocks({ fields: [field] }, 7);
-    const select = blocks.find(b => b.type === 'input').element;
-    assert.equal(select.options.length, 1);
-    assert.equal(JSON.parse(select.options[0].value).id, 1);
-    assert.ok(blocks.find(b => b.type === 'markdown').text.includes('Not pickable'), 'still listed');
+    assert.equal(blocks.filter(b => b.type === 'input').length, 1);
+    const table = blocks.filter(b => b.type === 'markdown').map(b => b.text).join('\n');
+    assert.ok(table.includes('| 150 |'), 'all rows remain visible in the table');
   });
 
   it('Select button style "default" (or omitted) sends no style field — Slack rejects style: "default" as invalid_blocks', () => {
@@ -724,7 +662,7 @@ describe('dialogToBlocks — list', () => {
     assert.ok(!('style' in button), 'style: "default" must not be forwarded — Slack has no such enum value');
   });
 
-  it('Select button value encodes only workflowRunId and action — no per-row responseData', () => {
+  it('Select button value carries workflowRunId, action and its table group — never a row', () => {
     const field = {
       type:  'list',
       items: [{
@@ -738,7 +676,7 @@ describe('dialogToBlocks — list', () => {
     const value  = JSON.parse(button.value);
     assert.equal(value.workflowRunId, 77);
     assert.equal(value.action, 'remove_table');
-    assert.equal(value.responseData, undefined);
+    assert.deepEqual(value.responseData, { listGroup: '' }, 'rows with no table form the empty group');
   });
 
   it('the Select button reflects the first selectable row when rows have mixed actionability', () => {

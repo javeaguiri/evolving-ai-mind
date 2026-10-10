@@ -713,56 +713,23 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     ? stepRef.item_action
     : null;
 
-  // list_selection's Select button is a single shared control (Sprint 7 Track D —
-  // markdown table + one picker, replacing one accessory button per row, which was
-  // throwing msg_blocks_too_long above ~8 rows). The click identifies no row by
-  // itself — the chosen row rides in Slack's state.values — so resolve it here
+  // list_selection's Select button is one shared control per table group (Sprint 7
+  // Track D replaced one accessory button per row, which was throwing
+  // msg_blocks_too_long above ~8 rows). The click identifies no row by itself — the
+  // ID typed into that group's box rides in as inputValue, the group as listGroup —
+  // so resolve it here
   // against context_key's fully-resolved items (reusing buildDialog's own item_action
   // application rather than re-implementing it) before the advance logic below runs.
   // A selection that doesn't resolve to a selectable row re-renders the same gate in
   // place with an error line — it never silently advances on an unresolved value.
   if (itemActionMatch) {
-    // The click carries one of two things, depending on which control callback.mjs
-    // rendered for this list. Normally it's a static_select's chosen option
-    // (responseData.selectedValue — a JSON {id, table} payload), which pins the row's
-    // source table alongside its id, so a level spanning more than one child table
-    // can't resolve a colliding id to the wrong table's row. Past Slack's 100-option
-    // cap the list falls back to a shared text box, and the click carries a bare typed
-    // id (responseData.inputValue) with no table — there, a collision still resolves
-    // first-hit, unchanged and acceptable at this app's scale.
-    let selected = null;
-    if (responseData?.selectedValue) {
-      try {
-        selected = JSON.parse(responseData.selectedValue);
-      } catch {
-        selected = null;
-      }
-    }
-    const typedId = responseData?.inputValue?.trim();
-
     const dialogForLookup = buildDialog(stepRef, localState);
     const listItems = dialogForLookup.fields.find(f => f.type === 'list')?.items ?? [];
-
-    let matchedItem = null;
-    if (selected) {
-      matchedItem = listItems.find(item =>
-        item.secondaryAction
-        && String(item.id) === String(selected.id)
-        && (item.responseData?.table ?? null) === (selected.table ?? null)
-      ) ?? null;
-    } else if (typedId) {
-      matchedItem = listItems.find(item => item.secondaryAction && String(item.id) === typedId) ?? null;
-    }
+    const typedId   = responseData?.inputValue?.trim();
+    const { item: matchedItem, problem } = matchListSelection(listItems, typedId, responseData?.listGroup);
 
     if (!matchedItem) {
-      dialogForLookup.fields.unshift({
-        type:  'typography',
-        value: selected
-          ? '⚠️ That selection no longer matches a row in this list — please try again.'
-          : typedId
-            ? `⚠️ No selectable row with ID "${typedId}" — please check and try again.`
-            : '⚠️ Choose a record before selecting.',
-      });
+      dialogForLookup.fields.unshift({ type: 'typography', value: `⚠️ ${problem}` });
       await enqueueCallback(run.callback, {
         type:          'HUMAN_GATE',
         workflowRunId: run.id,
@@ -773,7 +740,7 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
         traceId,
       });
       console.info('run-workflow: list_selection — unresolved selection, gate re-rendered', {
-        workflowRunId: run.id, selected, typedId, traceId,
+        workflowRunId: run.id, typedId, listGroup: responseData?.listGroup, traceId,
       });
       return { action: 'list_selection_invalid' };
     }
@@ -1067,6 +1034,29 @@ function describeShape(value) {
   if (typeof value === 'object')              return `object{${Object.keys(value).length}}`;
   if (typeof value === 'string')              return `string(${value.length})`;
   return typeof value;
+}
+
+/**
+ * matchListSelection — the row a list_selection gate's typed ID names, or why none.
+ *
+ * The user reads an ID from a table's own ID column and types it into the box under
+ * that table. `listGroup` is the table the clicked button belongs to ('' for rows with
+ * none), so an ID present in two tables at one level resolves to the table whose box
+ * was used. Only selectable rows (those carrying a secondaryAction) can match.
+ *
+ * @param {object[]} listItems  the list field's items, as buildDialog resolves them
+ * @param {string}   typedId    the typed ID, trimmed; empty or absent when nothing was typed
+ * @param {string}   listGroup  the clicked button's table group
+ * @returns {{ item: object|null, problem?: string }}
+ */
+export function matchListSelection(listItems, typedId, listGroup) {
+  if (!typedId) return { item: null, problem: 'Enter an ID before selecting.' };
+  const inGroup = listItems.filter(item => (item.responseData?.table ?? '') === (listGroup ?? ''));
+  const item = inGroup.find(row => row.secondaryAction && String(row.id) === typedId) ?? null;
+  if (item) return { item };
+  return inGroup.some(row => String(row.id) === typedId)
+    ? { item: null, problem: `The row with ID ${typedId} can't be selected.` }
+    : { item: null, problem: `There is no row with ID ${typedId} in this list — check the ID column and try again.` };
 }
 
 /**

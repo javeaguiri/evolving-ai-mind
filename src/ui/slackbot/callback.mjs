@@ -21,7 +21,7 @@
 
 import { randomUUID }        from 'node:crypto';
 import { WebClient }         from '@slack/web-api';
-import { FORM_BLOCK_PREFIX, EMPTY_OPTION_VALUE } from './form-fields.mjs';
+import { FORM_BLOCK_PREFIX, EMPTY_OPTION_VALUE, listIdBlockId, numberActionId } from './form-fields.mjs';
 
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
@@ -958,7 +958,7 @@ function buildRevealTables(headerLabels, dataRows, budget, blockAllowance) {
 // buildRevealTable — builds chunked `table` blocks from an array of plain record
 // objects. Columns are the union of every item's own keys, first-seen order,
 // labeled via the same formatColumnHeader() used elsewhere — same
-// data-driven, no-domain-knowledge approach as buildListTable/
+// data-driven, no-domain-knowledge approach as buildListSections/
 // buildObjectArrayTable.
 function buildRevealTable(items, budget, blockAllowance) {
   const columns = [];
@@ -1118,7 +1118,7 @@ export function buildRevealBlock(field, budget = makeTableBudget()) {
 }
 
 // escapeCell — shared markdown-table cell escaping (pipe/newline), used by
-// both buildListTable and buildObjectArrayTable.
+// both buildListSections and buildObjectArrayTable.
 const escapeCell = v => String(v ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 
 // formatColumnHeader — pure presentation, no domain knowledge: title-cases a
@@ -1148,7 +1148,7 @@ function formatTableName(tableName) {
 }
 
 // buildTableBody — markdown header/sep/rows for one table's worth of rows,
-// no heading line (buildListTable decides headings — see below). Columns are
+// no heading line (buildListSections decides headings — see below). Columns are
 // entirely data-driven: ID first, then the union of every item's own `fields`
 // keys, in first-seen order — no synthesized Name/Detail columns. excludeColumn
 // (a def's own link back to this level's parent, tagged onto every item's
@@ -1175,7 +1175,7 @@ function buildTableBody(items, excludeColumn) {
   return [header, sep, ...rows].join('\n');
 }
 
-// buildListTable — markdown table(s) for a list_selection field's rows.
+// buildListSections — markdown table(s) for a list_selection field's rows.
 // Replaces the former one-section-plus-accessory-button-plus-divider-per-row
 // rendering, which cost 2 Block Kit blocks per row and started throwing
 // msg_blocks_too_long above ~8 rows (Sprint 7 Track D). A table is one
@@ -1199,7 +1199,11 @@ function buildTableBody(items, excludeColumn) {
 // group gets its own '##' heading instead; when absent (root level — no
 // parent), each table group is simply its own '#' heading, matching how a
 // single-table level has always rendered.
-function buildListTable(items, parentHeading) {
+//
+// Returned as one section per table group, in first-seen order, because each
+// group carries its own ID box beneath its table (see dialogToBlocks) — the
+// parent heading rides on the first section only.
+export function buildListSections(items, parentHeading) {
   const groups = new Map();
   for (const item of items) {
     const table = item.responseData?.table;
@@ -1209,16 +1213,17 @@ function buildListTable(items, parentHeading) {
   const entries = [...groups.entries()];
 
   if (!parentHeading) {
-    return entries
-      .map(([table, groupItems]) => [`# ${formatTableName(table)}`, buildTableBody(groupItems)].join('\n'))
-      .join('\n\n');
+    return entries.map(([table, groupItems]) => ({
+      table, items: groupItems,
+      markdown: [`# ${formatTableName(table)}`, buildTableBody(groupItems)].join('\n'),
+    }));
   }
 
-  const sections = entries.map(([table, groupItems]) => {
+  return entries.map(([table, groupItems], i) => {
     const excludeColumn = groupItems[0]?.responseData?.fkColumn ?? undefined;
-    return [`## ${formatTableName(table)}`, buildTableBody(groupItems, excludeColumn)].join('\n');
+    const body = [`## ${formatTableName(table)}`, buildTableBody(groupItems, excludeColumn)].join('\n');
+    return { table, items: groupItems, markdown: i === 0 ? [`# ${parentHeading}`, body].join('\n\n') : body };
   });
-  return [`# ${parentHeading}`, ...sections].join('\n\n');
 }
 
 // WIDGET_OPTION_LIMIT — Slack's per-element option ceilings, from its block element
@@ -1296,6 +1301,21 @@ export function buildInputElement(field) {
         ...placeholder,
         ...(field.initial !== undefined ? { initial_value: String(field.initial) } : {}),
       });
+
+    // Slack's number_input renders only in modals, and a form gate is a message — so a
+    // number field is a text box whose action_id carries the field's rule (whole or
+    // decimal, min, max). interactive.mjs reads the rule back, converts the typed value to
+    // a number, and refuses the click while it is not one. See form-fields.mjs.
+    case 'number': {
+      const hint = field.decimal === true ? 'e.g. 12.50' : `e.g. ${field.min ?? 3}`;
+      return withHint({
+        type:      'plain_text_input',
+        action_id: numberActionId(field),
+        placeholder: { type: 'plain_text', text: field.placeholder ? String(field.placeholder) : hint },
+        ...(field.initial !== undefined && field.initial !== null && String(field.initial) !== ''
+          ? { initial_value: String(field.initial) } : {}),
+      });
+    }
 
     case 'select':
       if (options.length === 0) return null;
@@ -1403,73 +1423,29 @@ function truncateOption(text) {
   return s.length <= OPTION_TEXT_LIMIT ? s : `${s.slice(0, OPTION_TEXT_LIMIT - 1)}…`;
 }
 
-// buildSelectOptionText — a one-line identifier for a row in the dropdown,
-// data-driven and domain-free exactly as buildTableBody's columns are: the row's
-// id (the same ID column the table shows, so dropdown and table can be read
-// against each other) followed by its first non-empty field value in first-seen
-// key order, skipping the parent-link column. The table above already carries the
-// full labeled detail — an option only has to be enough to pick a row by.
-function buildSelectOptionText(item, excludeColumn) {
-  const entry = Object.entries(item.fields ?? {}).find(([col, value]) =>
-    col !== excludeColumn && value !== null && value !== undefined && String(value).trim() !== ''
-  );
-  const summary = entry ? String(entry[1]).trim() : '';
-  return truncateOption(summary ? `${item.id} — ${summary}` : String(item.id));
-}
-
-// buildListSelect — a static_select over a list_selection field's selectable rows,
-// replacing the shared "type the ID" text box. Each option's value carries the
-// row's source table alongside its id, so a level spanning more than one child
-// table (a recipe's ingredients and its steps) can no longer resolve a bare id
-// that collides across both to the wrong table's row — the tables become their own
-// labeled option_groups and the table travels with the selection, which removes
-// the ambiguity by construction rather than asking the user to disambiguate it.
-// Returns null when nothing is selectable, or when the list exceeds Slack's
-// 100-option cap — the caller then falls back to the text input.
-function buildListSelect(items, workflowRunId) {
-  const selectable = items.filter(item => item.secondaryAction);
-  if (selectable.length === 0 || selectable.length > SELECT_OPTION_LIMIT) return null;
-
-  const groups = new Map();
-  for (const item of selectable) {
-    const table = item.responseData?.table;
-    if (!groups.has(table)) groups.set(table, []);
-    groups.get(table).push(item);
-  }
-  const entries = [...groups.entries()];
-
-  const toOptions = groupItems => {
-    const excludeColumn = groupItems[0]?.responseData?.fkColumn ?? undefined;
-    return groupItems.map(item => ({
-      text:  { type: 'plain_text', text: buildSelectOptionText(item, excludeColumn) },
-      value: JSON.stringify({
-        id: item.id,
-        ...(item.responseData?.table ? { table: item.responseData.table } : {}),
-      }),
-    }));
-  };
-
-  const element = {
-    type:        'static_select',
-    action_id:   'list_select_value',
-    placeholder: { type: 'plain_text', text: 'Choose a record' },
-  };
-  // Only group when the level genuinely spans more than one table — a single-table
-  // list gets a flat option list, with no redundant one-group header above it.
-  if (entries.length > 1) {
-    element.option_groups = entries.map(([table, groupItems]) => ({
-      label:   { type: 'plain_text', text: truncateOption(formatTableName(table)) },
-      options: toOptions(groupItems),
-    }));
-  } else {
-    element.options = toOptions(entries[0][1]);
-  }
-
+// buildListIdInput — the ID box beneath one table group of a list_selection
+// field: the user reads the row's ID from the table's own ID column and types it.
+// Replaces a static_select of the rows, which made the user find the same row twice —
+// once in the table, once in the dropdown — and capped the pick at 100 rows.
+//
+// A text box: Slack's number_input renders only in modals, and a list gate is a
+// message. Slack enforces nothing on a message's button, so run-workflow matches the
+// typed value against the gate's own rows and re-renders the gate for one that matches
+// none.
+// When a level shows more than one table, each table gets its own box and the label
+// names the table: the same id can appear in two tables, and the box typed in is
+// what says which was meant.
+function buildListIdInput(group, workflowRunId, labelTable) {
+  const example = group.items.find(item => item.secondaryAction)?.id;
   return {
     type:     'input',
-    block_id: `list_select_input_${workflowRunId}`,
-    element,
-    label:    { type: 'plain_text', text: 'Select a record' },
+    block_id: listIdBlockId(workflowRunId, group.table),
+    element:  {
+      type:      'plain_text_input',
+      action_id: 'list_select_value',
+      ...(example !== undefined ? { placeholder: { type: 'plain_text', text: `e.g. ${example}` } } : {}),
+    },
+    label: { type: 'plain_text', text: labelTable ? `${truncateOption(formatTableName(group.table))} ID` : 'ID' },
   };
 }
 
@@ -1481,7 +1457,7 @@ function buildListSelect(items, workflowRunId) {
 // {front, back} pair has no way to tell which value landed in which field from
 // an unlabeled dash-join alone. Columns are the union of every item's own keys,
 // in first-seen order — same data-driven, no-domain-knowledge approach as
-// buildListTable.
+// buildListSections.
 function buildObjectArrayTable(items) {
   const columns = [];
   const seen = new Set();
@@ -1558,37 +1534,24 @@ export function dialogToBlocks(dialog, workflowRunId, gateType) {
             text: { type: 'mrkdwn', text: `*${toSlackMrkdwn(field.label)}*` },
           });
         }
-        const items = field.items ?? [];
-        if (items.length > 0) {
-          blocks.push(...markdownToBlocks(buildListTable(items, field.parentHeading)));
-        }
-        // One shared selection control + button replaces the former per-row accessory
-        // button. list_selection's item_action is uniform across every row, so a
-        // single button (labeled from the first selectable row's own action) covers
-        // the whole list; run-workflow.mjs's resumeGate resolves the selection back
-        // to that row's responseData before advancing, exactly as a direct row click
-        // used to. Rows with no secondaryAction (item_action condition false, or the
-        // item explicitly opts out) stay visible in the table but aren't selectable —
-        // same as before, when they simply rendered with no accessory button.
+        // Each table group renders its table, then — when any of its rows is
+        // selectable — its own ID box and Select button. list_selection's item_action
+        // is uniform across every row, so one button per group (labeled from that
+        // group's first selectable row's own action) covers the group; run-workflow's
+        // resumeGate matches the typed id against that group's rows before advancing.
+        // Rows with no secondaryAction (item_action condition false, or the item
+        // explicitly opts out) stay visible in the table but aren't selectable.
         //
-        // The control is a static_select whose options carry each row's source table
-        // (see buildListSelect), so colliding ids across two child tables at one level
-        // resolve unambiguously. Past Slack's 100-option cap it falls back to the
-        // original shared text box, where a bare typed id is matched first-hit — the
-        // table stays uncapped and fully visible under either control.
-        const selectable = items.find(item => item.secondaryAction);
-        if (selectable) {
+        // The button names its group in responseData.listGroup, and interactive.mjs reads
+        // the box with that group's block_id and no other — so an id present in two
+        // tables resolves to the table whose box was used, never first-hit.
+        const sections = buildListSections(field.items ?? [], field.parentHeading);
+        for (const section of sections) {
+          blocks.push(...markdownToBlocks(section.markdown));
+          const selectable = section.items.find(item => item.secondaryAction);
+          if (!selectable) continue;
           const validStyle = selectable.secondaryAction.style === 'danger' || selectable.secondaryAction.style === 'primary';
-          blocks.push(buildListSelect(items, workflowRunId) ?? {
-            type:     'input',
-            block_id: `list_select_input_${workflowRunId}`,
-            element:  {
-              type:        'plain_text_input',
-              action_id:   'list_select_value',
-              placeholder: { type: 'plain_text', text: `e.g. ${selectable.id}` },
-            },
-            label: { type: 'plain_text', text: 'Enter the ID to select' },
-          });
+          blocks.push(buildListIdInput(section, workflowRunId, sections.length > 1));
           blocks.push({
             type:     'actions',
             elements: [{
@@ -1596,7 +1559,12 @@ export function dialogToBlocks(dialog, workflowRunId, gateType) {
               ...(validStyle ? { style: selectable.secondaryAction.style } : {}),
               text:      { type: 'plain_text', text: selectable.secondaryAction.label },
               action_id: `list_select_${selectable.secondaryAction.action}`,
-              value:     JSON.stringify({ workflowRunId, action: selectable.secondaryAction.action, label: selectable.secondaryAction.label }),
+              value:     JSON.stringify({
+                workflowRunId,
+                action:       selectable.secondaryAction.action,
+                label:        selectable.secondaryAction.label,
+                responseData: { listGroup: section.table ?? '' },
+              }),
             }],
           });
         }
