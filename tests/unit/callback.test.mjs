@@ -959,6 +959,27 @@ describe('dialogToBlocks — reveal', () => {
     assert.equal(table.rows[2].map(cellText).join('|'), '2|450');
   });
 
+  it('an empty or null cell renders as an em dash — Slack rejects empty cell text (run 871)', () => {
+    const field = {
+      type: 'reveal',
+      button_label: 'Expenses',
+      content: [{ Title: 'Rent', Payment: '' }, { Title: 'Bread', Payment: null }],
+    };
+    const [block] = dialogToBlocks({ fields: [field] }, 1);
+    const cellText = c => c.elements[0].elements[0].text;
+    const rows = block.child_blocks[0].rows;
+    assert.equal(rows[1].map(cellText).join('|'), 'Rent|—');
+    assert.equal(rows[2].map(cellText).join('|'), 'Bread|—');
+    assert.ok(rows.flat().every(c => cellText(c).length > 0), 'no empty text element reaches Slack');
+  });
+
+  it('an empty cell in a markdown pipe-table renders as an em dash too', () => {
+    const field = { type: 'reveal', button_label: 'T', content: '| A | B |\n|---|---|\n| x |  |' };
+    const [block] = dialogToBlocks({ fields: [field] }, 1);
+    const cellText = c => c.elements[0].elements[0].text;
+    assert.equal(block.child_blocks[0].rows[1].map(cellText).join('|'), 'x|—');
+  });
+
   it('array of objects uniformly shaped with syntax/verb/command still renders as bullets', () => {
     const field = {
       type: 'reveal',
