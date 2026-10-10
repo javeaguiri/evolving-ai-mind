@@ -71,6 +71,7 @@ const PERMANENT_SLACK_ERRORS = new Set([
   'invalid_blocks_format',
   'invalid_arguments',
   'msg_too_long',
+  'msg_blocks_too_long', // total block payload size — fires well under the documented 40k (run 872)
   'too_many_attachments',
 ]);
 
