@@ -88,7 +88,10 @@ proprietary syntax the harness has to learn.
 | **6** | **`edit_budget` (357 v6), moved from Sprint 12 Track E.** Novia converts its edit flow to the bulk-edit pattern, **then** it is retested end to end from Slack — once, against the design that will survive. Carried from Sprint 9 and Sprint 11 |
 | **7** | **The inventory correction workflow, moved whole from Sprint 12 Track C — see the section below.** Three of its four verbs are record edits over the same two tables, so it is the bulk-edit pattern's third consumer and its hardest test |
 | **8** | **`manage_expenses`, carried from Sprint 12 Track F.** Designed and evaluated, not built. **Two corrections must be sent before the build** — the `payment_method` vocabulary mismatch and the hard delete both destroy data during the troubleshooting session itself |
-| **9** | **`gate_too_many_fields` cannot see the case it exists for.** It guards `Array.isArray(s.fields)`, so a `"{{template}}"` fields reference is skipped — and that is the only shape whose length is a row count. `gate_option_set_unbounded` already solved the identical problem one field apart (walk back to every writer of the key, refuse an unbounded `serv_*`, warn where the length is unknowable); reuse it against `MAX_GATE_FIELDS`. Its current remedy text also prescribes one-record-at-a-time editing, which is the design this sprint replaces. **Held until Novia's feedback** — her behaviour against the new contract says whether the text alone suffices |
+| **9** | ~~**`gate_too_many_fields` cannot see the case it exists for.**~~ **FOLDED INTO ITEM 10, 2026-10-10.** The simulator is pure — it fetches no data — and a `fields` array built by a `js_transform` loop has no length until it runs on real rows, so a static check can only say *unknowable*. Workflow 360 v1 registered 54 fields past exactly this blind spot. Counting against real data through the real renderer is item 10. Original text: **`gate_too_many_fields` cannot see the case it exists for.** It guards `Array.isArray(s.fields)`, so a `"{{template}}"` fields reference is skipped — and that is the only shape whose length is a row count. `gate_option_set_unbounded` already solved the identical problem one field apart (walk back to every writer of the key, refuse an unbounded `serv_*`, warn where the length is unknowable); reuse it against `MAX_GATE_FIELDS`. Its current remedy text also prescribes one-record-at-a-time editing, which is the design this sprint replaces. **Held until Novia's feedback** — her behaviour against the new contract says whether the text alone suffices |
+
+| **10** | **`preview_step`, headless, with gate size measured — added 2026-10-10.** The tool adopted in Sprint 12 (`docs/backlog.md`, "Step preview") and never built: one step evaluated against a chosen state — hand-written or lifted from a run — through the real `buildDialog` → `dialogToBlocks`, returning for a `human_gate` the **block count and the payload size** alongside the resolved fields and options. Slack does not publish its size limit, so measuring before registering is the only dependable guard; run 872 was diagnosed by doing exactly this by hand. Spec-first: `openapi.yaml`, a tool row in `minds_eye_tool_schemas`, `docs/arch-minds-eye.md`. Headless only — the rendered form stays in the backlog |
+| **11** | **Measure Slack's real message-size threshold — added 2026-10-10.** `msg_blocks_too_long` fired at ~35,800 characters of block JSON (run 872) against a documented 40,000; developers report it near 13,000 and varying with content. Post a few form-shaped test messages of increasing size **to a test channel Javear names** (an outward post — needs his go-ahead per run) and record where it breaks, so G1 in the `human_gate` contract and item 10's warning can state a measured number rather than none |
 
 ## Out of scope
 
@@ -103,7 +106,7 @@ proprietary syntax the harness has to learn.
 
 ## Acceptance Criteria
 
-**Status as of 2026-09-26.** ⬜ not started · 🟡 in progress · ✅ met · ~~struck~~ withdrawn or moved.
+**Status as of 2026-10-10.** ⬜ not started · 🟡 in progress · ✅ met · ~~struck~~ withdrawn or moved.
 **This table is updated when a criterion's state changes, not at close** — it is how the sprint's
 position is read at a glance.
 
@@ -112,10 +115,10 @@ position is read at a glance.
 | **AC1** | ⬜ | A single gate edits several records and one click saves them all; only changed rows are written | [1](#scope) | Binary, from Slack |
 | **AC2** | ⬜ | `manage_budget` uses it | [4](#scope) | Binary, from Slack |
 | **AC3** | 🟡 | Novia selects the pattern unprompted when a design calls for it | [2](#scope), [3](#scope) | Binary, from a cold `/novia` session |
-| **AC4** | 🟡 | A gate that would exceed the ceiling fails in a way that names the cause and the remedy | [3](#scope), [5](#scope), [9](#scope) | Binary |
+| **AC4** | 🟡 | A gate that would exceed the ceiling fails in a way that names the cause and the remedy | [3](#scope), [5](#scope), [10](#scope), [11](#scope) | Binary |
 | **AC5** | ⬜ | `edit_budget` uses the pattern and runs end to end from Slack | [6](#scope) | Binary, from Slack |
 | **AC6** | ⬜ | One correction workflow performs rename, merge, recategorise and alias-fix; aliases **81**, **60** and **59** are corrected through it | [7](#scope), [Track C](#track-c-moved-from-sprint-12--the-inventory-correction-workflow) | Binary, from Slack, no raw SQL |
-| **AC7** | ⬜ | `manage_expenses` is built by Novia and runs end to end — add, delete and edit — with the two data-destroying corrections applied and the delete semantics decided | [8](#scope) | Binary, from Slack |
+| **AC7** | 🟡 | `manage_expenses` is built by Novia and runs end to end — add, delete and edit — with the two data-destroying corrections applied and the delete semantics decided | [8](#scope) | Binary, from Slack |
 
 ---
 
@@ -313,3 +316,60 @@ corrections to memory, then open a new session that starts from that memory plus
 data-destroying corrections (`payment_method` vocabulary, hard delete). The raw transcript is the
 fallback if her summary loses something. **Sequencing still holds:** the bulk-edit pattern (AC1,
 `edit_budget` / inventory edit) comes before `manage_expenses`, which consumes it.
+
+### Session 4 — 2026-10-10 — `manage_expenses` built, four engine fixes, G1–G5
+
+**Three engine fixes deployed, plus one classification fix; contract seed upserted.** 1177 → **1181**
+tests. Commits `3c20162`, `87145ef`, `1335f2b` deployed with `sam deploy`; `PGC_StepType.human_gate`
+upserted and verified equal to the seed.
+
+**Novia built `manage_expenses` in a fresh session, 1236** (session 1218 retired: it predated the
+2026-09-26 contract). Workflow **360**, now **v2**. Javear briefed her as a non-technical user would
+— no engine terms — and she:
+- **read the data unprompted** — distinct `payment_method` values, the month's row count. That is
+  Track F's second question answered yes;
+- designed the bulk edit as a templated-`fields` form with paging, per-page save, two blank rows for
+  new records, stored payment values preserved, the default currency read from a record at runtime;
+- **opened the `human_gate` contract only when Javear's message asked her to check the screen
+  limit** (turn 12's stated reason quotes it). So this session is **not AC3 evidence** — the pattern
+  was asked for in user terms, and the decision tree was read on prompting;
+- then **registered 54 fields while knowing the ceiling was ~40**, recording it as "marginal; monitor".
+  The simulator passed it, because a data-built `fields` array has no static length (item 9 → 10).
+
+**Four engine defects surfaced, all Execution, all fixed:**
+1. An inline form field's `default`/`placeholder` were not template-resolved while `label` was —
+   `{{default_year}}` rendered literally (`3c20162`). Her v1 was right; v2 is a workaround that also
+   works.
+2. An option valued `''` (HTML's standard *none*) made Slack reject the message (run 870). Rendered
+   as `EMPTY_OPTION_VALUE`, read back as null (`3c20162`).
+3. An empty reveal-table cell made Slack reject the message (run 871 — the Payment column, blank on
+   88 rows). Rendered as an em dash (`87145ef`).
+4. `msg_blocks_too_long` was retried silently every 30s instead of reported (run 872) — added to
+   `PERMANENT_SLACK_ERRORS` (`1335f2b`).
+
+**Run 872's real finding: a gate has a size limit as well as a count limit.** 45 blocks — under 50 —
+but ~35,800 characters of block JSON: 14 per-row dropdowns 16,100 (each repeating all 22
+categories), the collapsed "Show all" reveal 12,400. Slack documents 40,000; reports put it near
+13,000 and content-dependent. Measured by rebuilding the gate from run 872's saved `local_state`
+through the real `buildDialog` → `dialogToBlocks` — which is item 10's tool, by hand.
+
+**G1–G5 approved and upserted into the `human_gate` contract**, generic wording: G1 the two-limit
+ceiling (choice fields cost options × rows; reveals cost in full collapsed; no published threshold);
+G2 a reveal must not repeat what a form's fields show; G3 row identity is never a field; G4 an edit
+field's options must cover every stored value, and an empty/optional choice only on a nullable
+column; G5 a save returns to the page saved.
+
+**Still open on workflow 360 v2 — Novia's to fix (Generation):** the editable ID field (54→42 fields
+with it, and a typed ID overwrites another record), `(no category)` on a NOT NULL column, Previous/
+Next dropping unsaved edits, Save returning to page 1, `12,50` parsing as 12, and the size — drop the
+reveal, fewer rows with Category in the grid. Runs **870, 871, 872** are parked; not touched.
+
+**Backlog candidate, not yet written:** `local_state` is `jsonb`, which reorders object keys
+(shortest first), so a reveal table built from records loses the column order the workflow wrote.
+
+**Next session starts here:**
+1. **Brief Novia in session 1236** with the open list above. G1–G5 are now in the contract she reads
+   — ask her to re-read the `human_gate` row before revising, and see whether she does it unprompted.
+2. **Item 11** — get a test channel from Javear, measure the size threshold.
+3. **Item 10** — spec `preview_step` (headless + size) in `openapi.yaml` / `arch-minds-eye.md` before
+   any code.
