@@ -84,7 +84,7 @@ proprietary syntax the harness has to learn.
 | **2** | ~~The `human_gate` contract gains the dynamic-`fields` example~~ **ALREADY DONE — verified live 2026-09-22.** The contract already states that `fields` takes a `{{template}}`, frames it as *one field PER RECORD the workflow just read*, says *reach for it whenever the number of things to edit is known only at runtime*, and gives the ceiling **with the multiplication rule**: *"~40 rows at one field each but only ~13 at three"* |
 | **3** | **The real gap: what to do past the ceiling.** ✅ **CONTRACT LANDED 2026-09-26** — `gate_type` now opens with a seven-question decision tree (first yes wins, question 7 answering *then it is not a gate — use notify*), and `fields` carries the four routes past the ceiling (narrow, page, pick one, refuse) plus the paging mechanism drawn from `review_inventory` 359 v8. The row description stops describing the types a second time and states only what all gates share. ⬜ **The L1 half is outstanding** — see scope item 9 |
 | **4** | Apply it to `manage_budget` |
-| **5** | Decide whether the >40-cell case pages, narrows, or refuses — and make the refusal say which |
+| **5** | ~~Decide whether the >40-cell case pages, narrows, or refuses — and make the refusal say which~~ **DECIDED 2026-10-10 by Javear:** an editable grid is kept only for small sets; past that the route is **pick one** — a numbered list, type the row number, then a form for that one record (item 12). Paging an editable grid is dropped. Past what one list can show, **narrow**. A real spreadsheet edit is deferred to the planned web experience layer (`docs/arch-home-brain.md`). The grid threshold lands in the contract under item 12 |
 | **6** | **`edit_budget` (357 v6), moved from Sprint 12 Track E.** Novia converts its edit flow to the bulk-edit pattern, **then** it is retested end to end from Slack — once, against the design that will survive. Carried from Sprint 9 and Sprint 11 |
 | **7** | **The inventory correction workflow, moved whole from Sprint 12 Track C — see the section below.** Three of its four verbs are record edits over the same two tables, so it is the bulk-edit pattern's third consumer and its hardest test |
 | **8** | **`manage_expenses`, carried from Sprint 12 Track F.** Designed and evaluated, not built. **Two corrections must be sent before the build** — the `payment_method` vocabulary mismatch and the hard delete both destroy data during the troubleshooting session itself |
@@ -92,6 +92,7 @@ proprietary syntax the harness has to learn.
 
 | **10** | **`preview_step`, headless, with gate size measured — added 2026-10-10.** The tool adopted in Sprint 12 (`docs/backlog.md`, "Step preview") and never built: one step evaluated against a chosen state — hand-written or lifted from a run — through the real `buildDialog` → `dialogToBlocks`, returning for a `human_gate` the **block count and the payload size** alongside the resolved fields and options. Slack does not publish its size limit, so measuring before registering is the only dependable guard; run 872 was diagnosed by doing exactly this by hand. Spec-first: `openapi.yaml`, a tool row in `minds_eye_tool_schemas`, `docs/arch-minds-eye.md`. Headless only — the rendered form stays in the backlog |
 | **11** | **Measure Slack's real message-size threshold — added 2026-10-10.** `msg_blocks_too_long` fired at ~35,800 characters of block JSON (run 872) against a documented 40,000; developers report it near 13,000 and varying with content. Post a few form-shaped test messages of increasing size **to a test channel Javear names** (an outward post — needs his go-ahead per run) and record where it breaks, so G1 in the `human_gate` contract and item 10's warning can state a measured number rather than none |
+| **12** | **Numbered `list_selection` — added 2026-10-10.** Replaces the table-plus-dropdown pick with a `#` column numbered continuously across table groups and a *Row #* text input in its place, for every consumer **including `list_entity`'s drill-down**. The number is resolved against the gate's own displayed rows on resume (`resumeGate`), so no database key is ever typed (G3) and ids colliding across tables cannot be confused — the problem the dropdown was added for (`7bb20d2`). An out-of-range or non-numeric entry re-renders the gate saying so. No paging: the table is one markdown block, bounded by Slack's 12,000-character markdown total (~120–150 rows); past that, narrow. Execution domain — `callback.mjs` rendering, `run-workflow.mjs` matching — no new `gate_type`. **Contract half:** the `human_gate` row's `list_selection` text describes the numbered list, and the decision tree gains the grid threshold — measured per-field costs from run 875: text ~235, date ~190, 4-option select ~545, 22-option select ~1,760 characters; budget ≤12,000 until item 11 measures it; grid only for ≤10 rows × ≤3 editable columns with no row dropdown past ~5 options, or one column up to ~30 rows. Rendering proposed and agreed before code |
 
 ## Out of scope
 
@@ -115,10 +116,10 @@ position is read at a glance.
 | **AC1** | ⬜ | A single gate edits several records and one click saves them all; only changed rows are written | [1](#scope) | Binary, from Slack |
 | **AC2** | ⬜ | `manage_budget` uses it | [4](#scope) | Binary, from Slack |
 | **AC3** | 🟡 | Novia selects the pattern unprompted when a design calls for it | [2](#scope), [3](#scope) | Binary, from a cold `/novia` session |
-| **AC4** | 🟡 | A gate that would exceed the ceiling fails in a way that names the cause and the remedy | [3](#scope), [5](#scope), [10](#scope), [11](#scope) | Binary |
+| **AC4** | 🟡 | A gate that would exceed the ceiling fails in a way that names the cause and the remedy | [3](#scope), [5](#scope), [10](#scope), [11](#scope), [12](#scope) | Binary |
 | **AC5** | ⬜ | `edit_budget` uses the pattern and runs end to end from Slack | [6](#scope) | Binary, from Slack |
 | **AC6** | ⬜ | One correction workflow performs rename, merge, recategorise and alias-fix; aliases **81**, **60** and **59** are corrected through it | [7](#scope), [Track C](#track-c-moved-from-sprint-12--the-inventory-correction-workflow) | Binary, from Slack, no raw SQL |
-| **AC7** | 🟡 | `manage_expenses` is built by Novia and runs end to end — add, delete and edit — with the two data-destroying corrections applied and the delete semantics decided | [8](#scope) | Binary, from Slack |
+| **AC7** | 🟡 | `manage_expenses` is built by Novia and runs end to end — add, delete and edit — with the two data-destroying corrections applied and the delete semantics decided | [8](#scope), [12](#scope) | Binary, from Slack |
 
 ---
 
@@ -373,3 +374,31 @@ reveal, fewer rows with Category in the grid. Runs **870, 871, 872** are parked;
 2. **Item 11** — get a test channel from Javear, measure the size threshold.
 3. **Item 10** — spec `preview_step` (headless + size) in `openapi.yaml` / `arch-minds-eye.md` before
    any code.
+
+### Session 5 — 2026-10-10 — run 875, and pick-one replaces the paged grid
+
+**Docs only so far. Nothing deployed, nothing upserted.**
+
+**Run 875 (`manage_expenses` 360 v3) failed `msg_blocks_too_long` — Generation, Novia's.** Rebuilt
+from the run's saved state through the real `buildDialog` → `dialogToBlocks`: **44 blocks, 23,377
+characters** — under both documented limits, and still rejected. The 14 per-row dropdowns are
+16,127 of it (each Category select repeats 22 options, ~1,760 characters). v3 dropped the reveal
+(G2) but kept the editable ID field (G3) and `(no category)` on a NOT NULL column (G4). The engine
+reported the refusal at once, as `1335f2b` intended. The system's share is the blind spot items
+10 and 11 exist for: she had no way to measure before registering. Run 875 is parked, untouched.
+
+**Decided by Javear: an editable grid only for small sets; past that, pick one record from a
+numbered list and edit it in its own form; no paging of an editable grid; a true spreadsheet edit
+waits for the web experience layer.** Item 5 closed by that decision; item 12 added for the
+numbered `list_selection`, applied to every consumer including `list_entity`. Per-row buttons were
+rejected on the record — Sprint 7 Track D measured them failing above ~8 rows, which forces paging —
+and radio is capped at 10 options, which forces it too.
+
+**Open design question for `docs/arch-home-brain.md`:** a workflow that chooses pick-one *because
+Slack cannot fit a grid* is shaped by one experience provider, and the web console inherits that
+shape rather than a spreadsheet. Whether a workflow declares *edit this set* and each provider
+chooses grid or pick-one is undecided.
+
+**Next:** propose item 12's exact rendering and resume behaviour; on agreement, implement with
+tests, then the contract half (list_selection text + grid threshold in the decision tree), then
+brief Novia to rebuild 360's edit branch as list → form.
