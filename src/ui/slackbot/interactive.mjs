@@ -18,9 +18,9 @@
 // Button value encoding: JSON.stringify({ workflowRunId, action, responseData? })
 // e.g. '{"workflowRunId":42,"action":"confirm"}'
 // responseData is forwarded to the Step Processor for actions that carry item-specific data.
-// A list_selection gate's Select button carries no row identity of its own — the chosen
-// row arrives in state.values and is merged in below as selectedValue (dropdown) or
-// inputValue (the >100-option text-box fallback).
+// A list_selection gate's Select button carries no row identity of its own — only its
+// table group, as responseData.listGroup. The ID typed into that group's box arrives in
+// state.values and is merged in below as inputValue.
 //
 // Security: signature verified by handler.mjs before this function is called.
 // Experience tier — WebClient used only to disable buttons via chat.update.
@@ -29,7 +29,7 @@ import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { WebClient }                     from '@slack/web-api';
 import { ok, err }                       from '../../shared/lambda-utils.mjs';
 import { randomUUID }                    from 'crypto';
-import { FORM_BLOCK_PREFIX, collectFormValues } from './form-fields.mjs';
+import { FORM_BLOCK_PREFIX, LIST_ID_BLOCK_PREFIX, collectFormValues, collectListIdValue, invalidNumberFields } from './form-fields.mjs';
 
 const sqs   = new SQSClient({});
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
@@ -226,14 +226,42 @@ export async function handle(req) {
   // field name (parsed from each block_id) rather than collapsed to a single value.
   const formValues = collectFormValues(stateValues);
 
-  // Single-input gates (text_input's box, list_selection's picker) still report one
+  // A number field that does not read as a number is answered here, not in /proc: the run
+  // is not resumed, the gate is left exactly as it is — with everything the user typed
+  // still in it — and only the person who clicked is told what to fix. Cancel is never
+  // held back.
+  const badNumbers = userResponse === 'cancel' ? [] : invalidNumberFields(stateValues);
+  if (badNumbers.length > 0) {
+    const labelOf = blockId => payload.message?.blocks?.find(b => b.block_id === blockId)?.label?.text;
+    const text = `⚠️ ${badNumbers.map(f => `${labelOf(f.blockId) ?? f.name} ${f.problem}`).join('. ')}. Nothing was saved — correct it and click again.`;
+    try {
+      await slack.chat.postEphemeral({
+        channel:   payload.channel?.id,
+        user:      payload.user?.id,
+        text,
+        ...(payload.message?.thread_ts ? { thread_ts: payload.message.thread_ts } : {}),
+      });
+    } catch (error) {
+      console.error('interactive: postEphemeral failed', { error: error.message, workflowRunId });
+    }
+    console.info('interactive: form — invalid number, run not resumed', {
+      workflowRunId, fields: badNumbers.map(f => f.name),
+    });
+    return { statusCode: 200, body: '' };
+  }
+
+  // Single-input gates (text_input's box, list_selection's ID box) still report one
   // value. Form blocks are skipped here — their answers are already in formValues, and
   // folding a form's first text field into inputValue would make it look to
-  // run-workflow like a text_input submission.
-  let inputValue    = null;
+  // run-workflow like a text_input submission. A list_selection gate has one ID box per
+  // table group, so its value is read from the box of the clicked button's group alone —
+  // an ID typed under one table never answers another table's Select.
+  let inputValue    = typeof responseData?.listGroup === 'string'
+    ? collectListIdValue(stateValues, responseData.listGroup)
+    : null;
   let selectedValue = null;  // radio_buttons / static_select
   for (const [blockId, blockValues] of Object.entries(stateValues)) {
-    if (blockId.startsWith(FORM_BLOCK_PREFIX)) continue;
+    if (blockId.startsWith(FORM_BLOCK_PREFIX) || blockId.startsWith(LIST_ID_BLOCK_PREFIX)) continue;
     for (const actionValue of Object.values(blockValues)) {
       const text = actionValue?.value?.trim();
       if (text && !inputValue) {

@@ -560,6 +560,13 @@ export function buildDialog(step, localState) {
           // multi_select can still open on an array.
           ...(field.default !== undefined ? { initial: resolveInput(field.default, localState) } : {}),
           ...(options ? { options } : {}),
+          ...(field.type === 'number'
+            ? {
+                decimal: field.decimal === true,
+                ...(field.min !== undefined ? { min: field.min } : {}),
+                ...(field.max !== undefined ? { max: field.max } : {}),
+              }
+            : {}),
         });
       }
       break;

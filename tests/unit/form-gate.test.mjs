@@ -18,7 +18,9 @@ import { describe, it } from 'node:test';
 import assert           from 'node:assert/strict';
 
 import { buildDialog, resolveFormFields }   from '../../src/proc/step-executor.mjs';
-import { collectFormValues, extractFieldValue, FORM_BLOCK_PREFIX, EMPTY_OPTION_VALUE }
+import { collectFormValues, extractFieldValue, FORM_BLOCK_PREFIX, EMPTY_OPTION_VALUE,
+         numberActionId, parseNumberActionId, readNumber, invalidNumberFields,
+         listIdBlockId, collectListIdValue }
   from '../../src/ui/slackbot/form-fields.mjs';
 import { buildInputElement } from '../../src/ui/slackbot/callback.mjs';
 
@@ -304,5 +306,109 @@ describe('form-fields — reading Slack answers back', () => {
       list_select_input_42:  { list_select_value: { value: '7' } },
       text_input_block_42_x: { text_input_value:  { value: 'hi' } },
     }), null, 'no form fields present — nothing collected');
+  });
+});
+
+// A `number` field: Slack's number_input renders only in modals and a form gate is a
+// message, so the field is a text box and the experience layer keeps the contract —
+// what reaches /proc is a number or nothing. See form-fields.mjs.
+describe('number field — declared in /proc, kept by the experience layer', () => {
+  const numberBlock = name => `${FORM_BLOCK_PREFIX}42::${name}`;
+  const typed = (rule, value) => ({ [numberActionId(rule)]: { type: 'plain_text_input', value } });
+
+  it('buildDialog carries the field\'s decimal/min/max to the experience layer', () => {
+    const dialog = buildDialog({
+      gate_type: 'form',
+      fields: [
+        { name: 'year',   type: 'number', min: 1900, max: 2100, default: '{{y}}' },
+        { name: 'amount', type: 'number', decimal: true },
+      ],
+    }, { y: '2026' });
+    const [year, amount] = dialog.fields.filter(f => f.type === 'input');
+    assert.equal(year.input_type, 'number');
+    assert.equal(year.decimal, false, 'whole numbers unless the field says otherwise');
+    assert.equal(year.min, 1900);
+    assert.equal(year.max, 2100);
+    assert.equal(year.initial, '2026');
+    assert.equal(amount.decimal, true);
+  });
+
+  it('renders as a text box — never number_input, which a message cannot carry', () => {
+    const built = buildInputElement({ input_type: 'number', name: 'year', decimal: false, min: 1900, initial: '2026' });
+    assert.equal(built.element.type, 'plain_text_input');
+    assert.deepEqual(parseNumberActionId(built.element.action_id), { decimal: false, min: 1900 },
+      'the field\'s rule travels in the action_id');
+    assert.equal(built.element.initial_value, '2026');
+    assert.equal(built.element.placeholder.text, 'e.g. 1900');
+  });
+
+  it('a workflow\'s own placeholder wins over the default hint', () => {
+    const built = buildInputElement({ input_type: 'number', name: 'amount', decimal: true, placeholder: 'in euros' });
+    assert.equal(built.element.placeholder.text, 'in euros');
+  });
+
+  it('the rule round-trips, empty bounds meaning none', () => {
+    assert.deepEqual(parseNumberActionId(numberActionId({ decimal: true })), { decimal: true });
+    assert.deepEqual(parseNumberActionId(numberActionId({ min: -5, max: 0.5 })), { decimal: false, min: -5, max: 0.5 });
+    assert.equal(parseNumberActionId('form_value'), null, 'any other field is not a number field');
+  });
+
+  it('reads a decimal comma as the decimal point — 12,50 is 12.5', () => {
+    assert.deepEqual(readNumber('12,50', { decimal: true }), { value: 12.5 });
+    assert.deepEqual(readNumber('12.50', { decimal: true }), { value: 12.5 });
+    assert.deepEqual(readNumber(' -3 ', { decimal: false }), { value: -3 });
+  });
+
+  it('refuses rather than guesses', () => {
+    assert.deepEqual(readNumber('1,234.50', { decimal: true }), { problem: 'must be a number' }, 'two separators are ambiguous');
+    assert.deepEqual(readNumber('twenty', { decimal: false }), { problem: 'must be a number' });
+    assert.deepEqual(readNumber('12,5', { decimal: false }), { problem: 'must be a whole number' });
+    assert.deepEqual(readNumber('1850', { decimal: false, min: 1900 }), { problem: 'must be at least 1900' });
+    assert.deepEqual(readNumber('2200', { decimal: false, max: 2100 }), { problem: 'must be at most 2100' });
+  });
+
+  it('collectFormValues hands a valid number on as a number, and leaves other fields as they were', () => {
+    const values = collectFormValues({
+      [numberBlock('amount')]: typed({ decimal: true }, '12,50'),
+      [numberBlock('note')]:   { form_value: { value: '12,50' } },
+      [numberBlock('qty')]:    typed({ decimal: false }, ''),
+    });
+    assert.deepEqual(values, { amount: 12.5, note: '12,50', qty: null });
+  });
+
+  it('invalidNumberFields names each number field that does not read, and nothing else', () => {
+    const invalid = invalidNumberFields({
+      [numberBlock('year')]:   typed({ decimal: false }, 'twenty'),
+      [numberBlock('amount')]: typed({ decimal: true }, '12,50'),
+      [numberBlock('qty')]:    typed({ decimal: false }, ''),
+      [numberBlock('note')]:   { form_value: { value: 'twenty' } },
+    });
+    assert.deepEqual(invalid, [{ blockId: numberBlock('year'), name: 'year', problem: 'must be a number' }],
+      'an empty field is the required-field check\'s call, and text fields are not numbers');
+  });
+});
+
+describe('list_selection ID box — one per table group', () => {
+  it('reads the box of the clicked button\'s group, and no other', () => {
+    const state = {
+      [listIdBlockId(42, 'PGD_Ingredients')]: { list_select_value: { value: ' 7 ' } },
+      [listIdBlockId(42, 'PGD_RecipeSteps')]: { list_select_value: { value: '9' } },
+    };
+    assert.equal(collectListIdValue(state, 'PGD_Ingredients'), '7');
+    assert.equal(collectListIdValue(state, 'PGD_RecipeSteps'), '9');
+    assert.equal(collectListIdValue(state, 'PGD_Other'), null);
+  });
+
+  it('rows with no table use the empty group', () => {
+    const state = { [listIdBlockId(42, undefined)]: { list_select_value: { value: '3' } } };
+    assert.equal(collectListIdValue(state, ''), '3');
+  });
+
+  it('an empty box reads as nothing typed', () => {
+    assert.equal(collectListIdValue({ [listIdBlockId(42, '')]: { list_select_value: { value: '  ' } } }, ''), null);
+  });
+
+  it('list ID boxes are not form fields', () => {
+    assert.equal(collectFormValues({ [listIdBlockId(42, '')]: { list_select_value: { value: '3' } } }), null);
   });
 });
