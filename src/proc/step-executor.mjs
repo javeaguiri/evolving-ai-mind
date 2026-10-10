@@ -551,11 +551,14 @@ export function buildDialog(step, localState) {
           input_type: field.type ?? 'text',
           label:      resolveTemplate(String(field.label ?? field.name), localState),
           optional:   field.optional === true,
-          ...(field.placeholder ? { placeholder: field.placeholder } : {}),
+          ...(field.placeholder ? { placeholder: resolveDisplayText(field.placeholder, localState) } : {}),
           // `default` — the standard name for a pre-filled value (JSON Schema, HTML
           // forms), and what an LLM naturally emits. Carried through to the dialog as
-          // `initial` only because that is what Slack's elements call it.
-          ...(field.default !== undefined ? { initial: field.default } : {}),
+          // `initial` only because that is what Slack's elements call it. Resolved like
+          // any other step input: an inline field list has no other way to open on a
+          // value the workflow read, and a whole {{token}} keeps its type, so a
+          // multi_select can still open on an array.
+          ...(field.default !== undefined ? { initial: resolveInput(field.default, localState) } : {}),
           ...(options ? { options } : {}),
         });
       }

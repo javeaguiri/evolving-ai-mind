@@ -14,6 +14,12 @@
 // an underscore-delimited id could not be split back reliably.
 export const FORM_BLOCK_PREFIX = 'form_field_';
 
+// An option whose value is the empty string is the standard way to offer "none" in a
+// form (HTML's <option value="">), but Slack rejects an empty option value and with it
+// the whole message (run 870). callback.mjs renders '' as this token; extractFieldValue
+// reads it back as null — the same answer as a select left unchosen.
+export const EMPTY_OPTION_VALUE = '__empty__';
+
 /**
  * Normalise one Slack state.values entry to the value the workflow actually wants.
  * Each element type reports its answer under a different key.
@@ -26,10 +32,13 @@ export function extractFieldValue(actionValue) {
 
   // multi_static_select / checkboxes — an array of chosen options
   if (Array.isArray(actionValue.selected_options)) {
-    return actionValue.selected_options.map(o => o.value);
+    return actionValue.selected_options.map(o => o.value).filter(v => v !== EMPTY_OPTION_VALUE);
   }
   // static_select / radio_buttons
-  if (actionValue.selected_option) return actionValue.selected_option.value ?? null;
+  if (actionValue.selected_option) {
+    const value = actionValue.selected_option.value ?? null;
+    return value === EMPTY_OPTION_VALUE ? null : value;
+  }
   // datepicker / timepicker / datetimepicker
   if (actionValue.selected_date)      return actionValue.selected_date;
   if (actionValue.selected_time)      return actionValue.selected_time;
