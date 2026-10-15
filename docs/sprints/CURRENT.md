@@ -469,4 +469,9 @@ defects, neither in the engine:
 columns*. Also unapplied from the brief: `(no category)` still offered on the NOT NULL column.
 `12,50` and return-to-list remain untested — the form never populated. AC3 stays 🟡.
 
-**Next:** brief Novia in 1236 with both findings and run 886's step 7 and step 9 snapshots.
+**Next session starts here:** Javear is briefing Novia in 1236 with both findings (pointing her at
+run 886's step 7 and step 9 snapshots rather than handing her the fix) plus: *keep Category as a
+dropdown of category names saving the ID; drop the `(no category)` entry, because `category_id`
+is NOT NULL and picking it fails the save.* Ask for the outcome: did she read the run unprompted,
+did she re-read the contract (AC3), and — once the form populates — does `12,50` save as 12.5 and
+does a save return to the list (item 13, AC7). Then item 10's spec.
