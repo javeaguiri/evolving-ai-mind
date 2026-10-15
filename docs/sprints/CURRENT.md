@@ -449,3 +449,24 @@ live test, AC3 and AC7 evidence), and will finish later.
 **Next session starts here:** the outcome of the 360 rebuild — does the `number` field convert
 `12,50`, does a save return to the list, and did Novia re-read the `human_gate` row unprompted
 (AC3). Then item 10's spec.
+
+### Session 7 — 2026-10-15 — run 886: Novia's 360 v5, and a contract gap
+
+Run 886 ran **360 v5** (registered by Novia in session 1236 at 06:17, 11 s before the run). Two
+defects, neither in the engine:
+
+1. **The list showed IDs only — Generation.** Step 7 built flat rows `{ id, Date, Title, … }`;
+   only `fields` renders as columns (`step-executor.mjs:490`, `callback.mjs:1159`). The contract
+   already stated `{id, fields?, …}`.
+2. **The edit form opened empty — Instruction.** A list selection writes the row's **bare id** to
+   `output_key` (or the item's `responseData`, if it carries one — `run-workflow.mjs:748`, `:886`).
+   Step 9 read `sel.id` off a number, took the "add new" branch, and every `edit_*` came back blank.
+   The contract described `output_key` for `form`, `confirm` and `choice` only, and never named
+   `responseData`.
+
+**Contract fixed and upserted** (`human_gate` row verified live): `output_key` now says what
+`list_selection` writes, and the item shape gains `responseData?` with *only fields renders as
+columns*. Also unapplied from the brief: `(no category)` still offered on the NOT NULL column.
+`12,50` and return-to-list remain untested — the form never populated. AC3 stays 🟡.
+
+**Next:** brief Novia in 1236 with both findings and run 886's step 7 and step 9 snapshots.
