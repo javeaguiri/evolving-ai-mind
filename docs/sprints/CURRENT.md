@@ -93,7 +93,7 @@ proprietary syntax the harness has to learn.
 | **10** | **`preview_step`, headless, with gate size measured — added 2026-10-10.** The tool adopted in Sprint 12 (`docs/backlog.md`, "Step preview") and never built: one step evaluated against a chosen state — hand-written or lifted from a run — through the real `buildDialog` → `dialogToBlocks`, returning for a `human_gate` the **block count and the payload size** alongside the resolved fields and options. Slack does not publish its size limit, so measuring before registering is the only dependable guard; run 872 was diagnosed by doing exactly this by hand. Spec-first: `openapi.yaml`, a tool row in `minds_eye_tool_schemas`, `docs/arch-minds-eye.md`. Headless only — the rendered form stays in the backlog |
 | **11** | **Measure Slack's real message-size threshold — added 2026-10-10.** `msg_blocks_too_long` fired at ~35,800 characters of block JSON (run 872) against a documented 40,000; developers report it near 13,000 and varying with content. Post a few form-shaped test messages of increasing size **to a test channel Javear names** (an outward post — needs his go-ahead per run) and record where it breaks, so G1 in the `human_gate` contract and item 10's warning can state a measured number rather than none |
 | **12** | **`list_selection` picks by typed ID — added 2026-10-10.** 🟡 **CODE `26698b8` + CONTRACT `332c739` DEPLOYED AND UPSERTED 2026-10-10** (live `human_gate` row verified equal to the seed). **`/m list` confirmed working from Slack by Javear 2026-10-15**; the two-table drill-down and wrong/empty-ID cases not yet reported separately. Replaces the table-plus-dropdown pick with the table and an ID **text box** into which the user types the row's **database ID**, already the table's first column — decided by Javear 2026-10-10 over a renumbered `#` column. (`number_input` was decided and then withdrawn the same day: Slack renders it only in modals, and a list gate is a message.) For every consumer, **including `list_entity`'s drill-down**. **A level spanning two tables gets one box and Select button per table** (decided by Javear), so an ID present in both is told apart by the box it is typed in. Resolved by `matchListSelection` (`run-workflow.mjs`); an empty, unknown or non-selectable ID re-renders the gate saying which. No paging: the table is one markdown block, bounded by Slack's 12,000-character markdown total (~120–150 rows); past that, narrow. Execution domain — `callback.mjs` rendering, `run-workflow.mjs` matching — no new `gate_type`. **Contract half:** the `human_gate` row's `list_selection` text, and the decision tree gains the grid threshold — measured per-field costs from run 875: text ~235, date ~190, 4-option select ~545, 22-option select ~1,760 characters; budget ≤12,000 until item 11 measures it; grid only for ≤10 rows × ≤3 editable columns with no row dropdown past ~5 options, or one column up to ~30 rows |
-| **13** | **A `number` form field — added 2026-10-10.** 🟡 **CODE `26698b8` + CONTRACT `332c739` DEPLOYED AND UPSERTED 2026-10-10** (live `human_gate` row verified equal to the seed) — **awaiting Javear's Slack test.** **Built in the experience layer, by Javear's decision:** `/proc` declares a number and receives a number; how it is typed and checked is the display's job, and a web page gets it from `<input type="number">`. In Slack (no `number_input` in a message) the field is a text box whose `action_id` carries its rule; `interactive.mjs` converts it, and an invalid entry gets an ephemeral message and **never resumes the run**, leaving the gate and what was typed intact. Original scope text: The `human_gate` contract's field types stop at `text … datetime`; there is no `number`, and `buildInputElement` has no case for one, so every numeric field in a generated form is a text box (workflow 360 v3: the period form's Year, the grid's Amount — the cause of `12,50` saving as 12). Execution domain, extend-the-harness: `{ type: "number", decimal?, min?, max? }` renders as Slack's `number_input`; resume returns a JS number, and — since Slack validates only on modal submit — a non-numeric or out-of-range entry re-renders the gate saying so. **A decimal comma is accepted: `12,50` reads as 12.50** (decided by Javear 2026-10-10). Contract: `number` joins the field-type list with *a numeric value is a number field, never text*; L0 follows from the contract. Shares the `number_input` rendering with item 12 — built together, separate commits |
+| **13** | **A `number` form field — added 2026-10-10.** 🟡 **CODE `26698b8` + CONTRACT `332c739` DEPLOYED AND UPSERTED 2026-10-10** (live `human_gate` row verified equal to the seed). **Default flipped to decimals 2026-10-16 (`3549ae6`, `cfc044e`)** after run 888 refused an amount; `decimal: false` for whole numbers. **First live use run 888 — the refusal path works; `12,50` not yet saved.** **Built in the experience layer, by Javear's decision:** `/proc` declares a number and receives a number; how it is typed and checked is the display's job, and a web page gets it from `<input type="number">`. In Slack (no `number_input` in a message) the field is a text box whose `action_id` carries its rule; `interactive.mjs` converts it, and an invalid entry gets an ephemeral message and **never resumes the run**, leaving the gate and what was typed intact. Original scope text: The `human_gate` contract's field types stop at `text … datetime`; there is no `number`, and `buildInputElement` has no case for one, so every numeric field in a generated form is a text box (workflow 360 v3: the period form's Year, the grid's Amount — the cause of `12,50` saving as 12). Execution domain, extend-the-harness: `{ type: "number", decimal?, min?, max? }` renders as Slack's `number_input`; resume returns a JS number, and — since Slack validates only on modal submit — a non-numeric or out-of-range entry re-renders the gate saying so. **A decimal comma is accepted: `12,50` reads as 12.50** (decided by Javear 2026-10-10). Contract: `number` joins the field-type list with *a numeric value is a number field, never text*; L0 follows from the contract. Shares the `number_input` rendering with item 12 — built together, separate commits |
 
 ## Out of scope
 
@@ -475,3 +475,35 @@ dropdown of category names saving the ID; drop the `(no category)` entry, becaus
 is NOT NULL and picking it fails the save.* Ask for the outcome: did she read the run unprompted,
 did she re-read the contract (AC3), and — once the form populates — does `12,50` save as 12.5 and
 does a save return to the list (item 13, AC7). Then item 10's spec.
+
+### Session 8 — 2026-10-16 — runs 887/888: the form populates; two engine gaps closed
+
+**Run 887 (360 v6): the edit form still opened empty — Generation.** Step 8 wrote
+`selected_expense = 277` (proc log); step 9 still read `sel.id`, i.e. `277.id`. Novia had read
+the corrected contract in session 1236 and written the opposite into memory **441** (*"the gate
+writes the full selected item object"*), with an invented cause (`edit_amount` a string).
+Asked about it (#68), she diagnosed it correctly from run 887 and built **v7**: bare id read
+directly, `action_key: list_action` on step 8 to tell Add from Edit. **She claimed 441 was
+corrected; it was not** — she wrote **443** (p2) beside it; 441 still states the wrong rule.
+
+**Run 888 (360 v7): the form populated** — first time on this workflow. Saving an amount was
+refused *"must be a whole number"*: Amount was `type: number` without `decimal: true`.
+
+**Landed, deployed (`sam deploy`), `PGC_StepType` upserted, live row verified equal to seed:**
+- `3549ae6` — **Execution.** `action_key` now records a `list_selection` row's `item_action`
+  (`gateActionValue`, `run-workflow.mjs`). It matched only options and special buttons, so an Edit
+  after an Add New would have read `confirm` and opened a blank add form — v7 depends on this.
+  **The `number` default flipped to decimals** (Javear's decision): JSON Schema's `number` is any
+  number and an LLM writes an amount that way; `decimal: false` opts into whole numbers.
+  1197 → **1201** tests.
+- `cfc044e` — **Instruction.** `output_key` (list_selection): written by a row selection only —
+  unset before the first pick, every other button leaves it as it was; use `action_key` to tell
+  Add from Edit (Novia's "unset on first entry" wording adopted). `arch-step-types.md`'s field
+  table gains `number` — it still said number was absent.
+
+**Run 888 is parked at its form** — rendered under the old whole-number rule; untouched.
+
+**Next session starts here:** a fresh run of `manage_expenses` (v7, no workflow change needed for
+either fix): edit an amount to `12,50` (→ 12.5), Save returns to the list, then **Add New → Save →
+Edit** a row (opens that row, not a blank form). Memory **441** still needs correcting — ask
+Novia to fix the row itself, not write beside it. Then item 10's spec.
