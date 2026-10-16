@@ -320,17 +320,17 @@ describe('number field — declared in /proc, kept by the experience layer', () 
     const dialog = buildDialog({
       gate_type: 'form',
       fields: [
-        { name: 'year',   type: 'number', min: 1900, max: 2100, default: '{{y}}' },
-        { name: 'amount', type: 'number', decimal: true },
+        { name: 'year',   type: 'number', decimal: false, min: 1900, max: 2100, default: '{{y}}' },
+        { name: 'amount', type: 'number' },
       ],
     }, { y: '2026' });
     const [year, amount] = dialog.fields.filter(f => f.type === 'input');
     assert.equal(year.input_type, 'number');
-    assert.equal(year.decimal, false, 'whole numbers unless the field says otherwise');
+    assert.equal(year.decimal, false);
     assert.equal(year.min, 1900);
     assert.equal(year.max, 2100);
     assert.equal(year.initial, '2026');
-    assert.equal(amount.decimal, true);
+    assert.equal(amount.decimal, true, 'decimals unless the field says otherwise — JSON Schema\'s number (run 888)');
   });
 
   it('renders as a text box — never number_input, which a message cannot carry', () => {
@@ -349,7 +349,8 @@ describe('number field — declared in /proc, kept by the experience layer', () 
 
   it('the rule round-trips, empty bounds meaning none', () => {
     assert.deepEqual(parseNumberActionId(numberActionId({ decimal: true })), { decimal: true });
-    assert.deepEqual(parseNumberActionId(numberActionId({ min: -5, max: 0.5 })), { decimal: false, min: -5, max: 0.5 });
+    assert.deepEqual(parseNumberActionId(numberActionId({ min: -5, max: 0.5 })), { decimal: true, min: -5, max: 0.5 });
+    assert.deepEqual(parseNumberActionId(numberActionId({ decimal: false })), { decimal: false });
     assert.equal(parseNumberActionId('form_value'), null, 'any other field is not a number field');
   });
 

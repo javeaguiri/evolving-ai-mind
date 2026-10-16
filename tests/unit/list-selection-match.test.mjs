@@ -4,14 +4,15 @@
 // tests/unit/list-selection-match.test.mjs
 //
 // matchListSelection — resolving the ID typed under one table of a list_selection gate
-// to the row it names. The real exported function, no copy.
+// to the row it names. gateActionValue — what action_key records for the button clicked.
+// The real exported functions, no copies.
 //
 // Run: node --test tests/unit/list-selection-match.test.mjs
 
 import { describe, it } from 'node:test';
 import assert           from 'node:assert/strict';
 
-import { matchListSelection } from '../../src/proc/run-workflow.mjs';
+import { matchListSelection, gateActionValue } from '../../src/proc/run-workflow.mjs';
 
 const open = { label: 'Open', action: 'open_row' };
 const ingredient = { id: 7, fields: { name: 'Flour' },  responseData: { table: 'PGD_Ingredients' }, secondaryAction: open };
@@ -48,5 +49,26 @@ describe('matchListSelection', () => {
 
   it('a click from a gate posted before ID boxes existed (no group) still resolves rows with no table', () => {
     assert.equal(matchListSelection([plain], '3', undefined).item, plain);
+  });
+});
+
+describe('gateActionValue — action_key on a list_selection gate', () => {
+  const addNew = { label: 'Add New', action: 'confirm', on_select: '9' };
+  const edit   = { label: 'Edit', action: 'edit', on_select: '9' };
+
+  it('a row click records the item_action, so Edit after Add New is not read as Add (run 888)', () => {
+    assert.equal(gateActionValue(undefined, edit), 'edit');
+  });
+
+  it('a special button records its own action', () => {
+    assert.equal(gateActionValue(addNew, null), 'confirm');
+  });
+
+  it('an option\'s value is its identity, ahead of its action', () => {
+    assert.equal(gateActionValue({ value: 'save', action: 'confirm' }, null), 'save');
+  });
+
+  it('nothing matched writes nothing', () => {
+    assert.equal(gateActionValue(undefined, null), undefined);
   });
 });

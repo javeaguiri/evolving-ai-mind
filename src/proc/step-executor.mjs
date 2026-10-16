@@ -562,7 +562,7 @@ export function buildDialog(step, localState) {
           ...(options ? { options } : {}),
           ...(field.type === 'number'
             ? {
-                decimal: field.decimal === true,
+                decimal: field.decimal !== false,
                 ...(field.min !== undefined ? { min: field.min } : {}),
                 ...(field.max !== undefined ? { max: field.max } : {}),
               }
