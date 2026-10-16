@@ -235,8 +235,12 @@ clicked row, or — on a `form` — the field values. It does **not** record whi
 was pressed. `on_select` routes on the click and then discards it.
 
 `action_key` is the local_state key that captures the click itself (an option's `value`
-on `choice` gates, its `action` on all others). Set it when a **later** step must know
-the gate's outcome.
+on `choice` gates, its `action` on all others; on `list_selection`, a row's click records
+its `item_action`'s `action`). Set it when a **later** step must know the gate's outcome.
+
+On `list_selection` it is the only way to tell *Add* from *Edit*: `output_key` is written
+by a row selection alone, so it is unset before the first pick and every other button
+leaves it holding the last row picked.
 
 The case that requires it is a **save-and-continue loop**: *"Save persists and re-shows
 the form; Done persists and exits."* Both buttons run the **same** write and diverge only
@@ -318,9 +322,14 @@ A field's `type` states **what is being collected**, never which widget draws it
 | `date` | `"YYYY-MM-DD"` | `datepicker` | — |
 | `time` | `"HH:mm"` | `timepicker` | — |
 | `datetime` | Epoch seconds | `datetimepicker` | — |
+| `number` | A **number** — any decimal unless `decimal: false`; `min`/`max` bound it | `plain_text_input`, its rule carried in the `action_id` | — |
 
-`number`, `email`, `url` and `file` are deliberately absent — Slack supports those
-elements only in modals. Collect `text` and validate in a `js_transform`.
+Slack's `number_input` renders only in modals, so `/ui/slack` draws a `number` field as a
+text box and keeps its contract itself: `interactive.mjs` converts what is typed (a decimal
+comma included — `12,50` is 12.5) and refuses the click while it is not an acceptable number,
+so the run never resumes on one. Decimals are the default because that is what JSON Schema's
+`number` means, and what an LLM emits for an amount. `email`, `url` and `file` are absent —
+Slack supports those elements only in modals.
 
 `default` pre-fills a field, so a user amends an existing record rather than retyping
 it (`"YYYY-MM-DD"` for `date`; the option's `value` for `select`/`radio`). It is named
