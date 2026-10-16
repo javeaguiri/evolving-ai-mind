@@ -1307,7 +1307,7 @@ export function buildInputElement(field) {
     // decimal, min, max). interactive.mjs reads the rule back, converts the typed value to
     // a number, and refuses the click while it is not one. See form-fields.mjs.
     case 'number': {
-      const hint = field.decimal === true ? 'e.g. 12.50' : `e.g. ${field.min ?? 3}`;
+      const hint = field.decimal === false ? `e.g. ${field.min ?? 3}` : 'e.g. 12.50';
       return withHint({
         type:      'plain_text_input',
         action_id: numberActionId(field),

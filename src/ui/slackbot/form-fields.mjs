@@ -130,7 +130,7 @@ export function collectFormValues(stateValues = {}) {
 export const NUMBER_ACTION_PREFIX = 'form_number';
 
 export function numberActionId({ decimal, min, max } = {}) {
-  return `${NUMBER_ACTION_PREFIX}:${decimal === true ? 'd' : 'i'}:${min ?? ''}:${max ?? ''}`;
+  return `${NUMBER_ACTION_PREFIX}:${decimal === false ? 'i' : 'd'}:${min ?? ''}:${max ?? ''}`;
 }
 
 export function parseNumberActionId(actionId) {

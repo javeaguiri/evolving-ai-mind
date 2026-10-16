@@ -911,8 +911,8 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
   //
   // Writes the option's `value` — its identity — falling back to `action`. `label` is
   // display text and is never the contract.
-  if (stepRef.action_key && matchedOption) {
-    const actionValue = matchedOption.value ?? matchedOption.action;
+  const actionValue = gateActionValue(matchedOption, itemActionMatch);
+  if (stepRef.action_key && actionValue !== undefined) {
     setPath(localState, stepRef.action_key, actionValue);
     frame.local_state = localState;
     console.info('run-workflow: gate action written to local_state', {
@@ -1049,6 +1049,21 @@ function describeShape(value) {
  * @param {string}   listGroup  the clicked button's table group
  * @returns {{ item: object|null, problem?: string }}
  */
+/**
+ * The value a gate's action_key records for the button that was clicked.
+ *
+ * A list_selection row's button is its `item_action`, which lives outside options[] and
+ * special_buttons — so a row click matches no option. Without this fallback an Edit click
+ * left action_key at whatever an earlier Add New wrote, and the next step read the stale
+ * action (run 888, manage_expenses v7).
+ *
+ * @returns {string|undefined}  undefined when no button matched — nothing is written
+ */
+export function gateActionValue(matchedOption, itemActionMatch) {
+  const chosen = matchedOption ?? itemActionMatch;
+  return chosen ? (chosen.value ?? chosen.action) : undefined;
+}
+
 export function matchListSelection(listItems, typedId, listGroup) {
   if (!typedId) return { item: null, problem: 'Enter an ID before selecting.' };
   const inGroup = listItems.filter(item => (item.responseData?.table ?? '') === (listGroup ?? ''));
