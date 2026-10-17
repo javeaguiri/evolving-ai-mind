@@ -5,21 +5,21 @@
 // Handles POST /api/v1/proc/troubleshoot-workflow (HTTP) and
 //         TROUBLESHOOT_WORKFLOW SQS WorkflowQueue messages (async).
 //
-// Tier 1 reactive repair — Level 1 static analysis on a registered or
-// supplied workflow step array. No WorkflowRun lifecycle — fire-and-forget.
+// Diagnostic only — Level 1 static analysis on a registered or supplied
+// workflow step array. No WorkflowRun lifecycle — fire-and-forget. Run on
+// request; nothing enqueues it automatically.
 //
 // Input modes:
 //   workflowName only        — load live steps from PGC_Workflow
 //   workflowName + steps     — analyse supplied steps; name used for identification
 //   steps only               — analyse raw step array with no DB lookup
 //
-// When autoFix=true (SQS path only) and issues are found, enqueues FIX_WORKFLOW.
 // Always posts a TroubleshootWorkflowResponse summary to the callback channel.
 //
 // Transport-agnostic — no AWS SDK, no Slack SDK.
 
 import { ok, err }              from '../shared/lambda-utils.mjs';
-import { enqueueWorkflow, enqueueCallback } from '../shared/sqs-callback.mjs';
+import { enqueueCallback }      from '../shared/sqs-callback.mjs';
 import { getRows }              from '../shared/serv-client.mjs';
 import { runSimulation }        from './simulation-engine.mjs';
 import { loadStepTypeContracts } from './step-type-registry.mjs';
@@ -28,7 +28,6 @@ export async function handle(req) {
   const body         = req.body ?? {};
   const workflowName = body.workflowName ?? null;
   const suppliedSteps = body.steps ?? null;
-  const autoFix      = body.autoFix === true;
   const stackTrace   = body.stackTrace ?? null;
   const callback     = req.callback ?? body.callback ?? null;
   const traceId      = req.traceId  ?? req.correlationId;
@@ -40,7 +39,7 @@ export async function handle(req) {
     return;
   }
 
-  console.info('proc/troubleshoot-workflow: start', { traceId, workflowName, autoFix });
+  console.info('proc/troubleshoot-workflow: start', { traceId, workflowName });
 
   // ── Load steps ────────────────────────────────────────────────────────────
   let steps         = suppliedSteps;
@@ -126,19 +125,5 @@ export async function handle(req) {
   // ── SQS path — post summary to Slack ─────────────────────────────────────
   if (callback) {
     await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: summary });
-  }
-
-  // ── autoFix — chain to FIX_WORKFLOW if issues found ───────────────────────
-  if (autoFix && !passed && workflowName) {
-    console.info('proc/troubleshoot-workflow: autoFix=true — enqueueing FIX_WORKFLOW', {
-      traceId, workflowName, issueCount: issues.length,
-    });
-    await enqueueWorkflow({
-      type:               'FIX_WORKFLOW',
-      troubleshootResult: result,
-      stackTrace,
-      traceId,
-      callback,
-    });
   }
 }

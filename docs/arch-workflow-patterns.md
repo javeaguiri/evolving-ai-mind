@@ -525,28 +525,23 @@ user is only interrupted where their specific input is genuinely required.
 
 ---
 
-### 6.12 Right-Brain Self-Repair — troubleshoot-workflow and fix-workflow
+### 6.12 Self-Repair — Novia, troubleshoot-workflow, and diagnose-prompt-schema
 
-This section documents the right-brain self-repair loop: the system's ability to
-detect structural errors in registered workflows and correct them autonomously,
-with a human confirmation gate before any change is committed.
+This section documents how a broken workflow is diagnosed and repaired. Every change
+to a registered workflow passes a human confirmation gate before it is committed.
 
 ---
 
 #### Three tiers of right-brain activity
 
-**Tier 1 — Reactive repair** (implemented — Session 22)
-Triggered by a workflow execution failure. `TROUBLESHOOT_WORKFLOW` fire-and-forget SQS
-message loads the failing workflow from `PGC_Workflow`, runs Level 1 static analysis,
-and if issues are found enqueues `FIX_WORKFLOW`. The fix LLM call produces corrected
-steps, validates them, presents a human confirmation gate ("here's what I'm about to
-change — confirm?"), and on confirmation writes the fix to `PGC_Workflow`, cancels
-active broken runs, and posts a "fixed — try again" reply to Slack.
+**Tier 1 — Workflow repair**
+A failed step reaches the user as `WORKFLOW_ERROR` and nothing more is enqueued.
+Repair is Novia's: `propose_workflow_fix` takes a patch of complete steps, validates the
+merged workflow, and writes it only after a human gate (`docs/arch-minds-eye.md`).
 
-Both are PROC modules (`troubleshoot-workflow.mjs`, `fix-workflow.mjs`) — no
-`PGC_WorkflowRun` lifecycle. There is one human gate in `fix-workflow` for the
-confirmation step. This is intentional: the LLM produces a diagnosis and a proposed
-change set, but a human approves the write before it goes to the database.
+`troubleshoot-workflow.mjs` is a diagnostic run on request — it loads a workflow from
+`PGC_Workflow` (or takes a supplied step array), runs Level 1 static analysis, and posts
+the summary. It writes nothing.
 
 **Tier 1b — Reactive prompt schema repair** (implemented — Sessions 23–25)
 Triggered when an `llm_call` step receives `Agent API error 400` from the structured
@@ -567,8 +562,8 @@ defect. `TROUBLESHOOT_WORKFLOW` is not appropriate (it analyses `PGC_Workflow.st
 The repair is deterministic because the API compatibility rules are fully enumerated.
 Using an LLM for this repair would be unnecessary and slower.
 
-`run-workflow.mjs` discriminates the 400 error from other LLM errors — `Agent API error 400`
-on an `llm_call` step enqueues `DIAGNOSE_PROMPT_SCHEMA` instead of `TROUBLESHOOT_WORKFLOW`.
+`run-workflow.mjs` enqueues `DIAGNOSE_PROMPT_SCHEMA` on `Agent API error 400` from an
+`llm_call` step — the only failure that enqueues anything beyond `WORKFLOW_ERROR`.
 
 **API structured output compatibility rules (R1–R7):**
 
@@ -587,18 +582,9 @@ R2 only flags typed-object forms (`{type:...}`) and `true` values — NOT `false
 seed corrected an over-broad v2 R2 rule that incorrectly flagged `true`.
 
 **Tier 2 — Proactive self-improvement** (medium-term)
-After every successful `fix-workflow` repair, the module updates `PGC_SystemContext`
-rows that are injected into the prompts that generated the broken steps. For example,
-a condition routing violation fix updates the `workflow_constraints` or
-`routing_value_rules` context row so that future calls to `generate_workflow_steps`
-receive corrected contracts and do not repeat the same mistake.
-
-`fix-workflow` does not modify `PGC_Prompt.prompt_text` directly. However, the
-`fix_workflow_steps` LLM prompt is not prohibited from recommending a prompt text
-change in its output. If the LLM returns a `prompt_text_change` recommendation,
-the fix-workflow module logs it to `PGC_Prompt.error_log` for human review rather
-than applying it automatically. If this path is reached frequently for the same
-prompt, it signals that the prompt itself needs redesign — a Tier 3 concern.
+A repair whose root cause is a generation-time instruction updates the `PGC_SystemContext`
+or `PGC_StepType` rows injected into the prompts that produced the broken steps, so the
+same mistake is not generated again. Novia proposes these through her gated write tools.
 
 **Tier 3 — Scheduled maintenance loop** (Backlog)
 Triggered on a schedule or after every N workflow runs (configurable in
@@ -611,28 +597,12 @@ or automated application subject to confidence threshold.
 
 ---
 
-#### Why troubleshoot and fix are PROC modules, not PGC_Workflow workflows
-
-`create_domain` and `create_workflow` are workflows because they have multiple
-human-in-the-loop gate steps where the user reviews LLM output and makes structural
-decisions. The execution stack suspends between gates — the user is part of the
-execution path.
+#### Why troubleshoot is a PROC module, not a PGC_Workflow workflow
 
 `troubleshoot-workflow` has no human gates — it is pure diagnosis: load steps, run
 Level 1, format report, post to Slack. One SQS message in, one `HUMAN_NOTIFICATION` out.
-
-`fix-workflow` has exactly one human gate — the confirmation step before committing
-the corrected steps. This gate is structurally simpler than the `create_*` gates:
-it shows the `changesApplied` diff and asks confirm/cancel. No LLM output review
-loop, no iterator, no schema design. Implementing this as a workflow would add
-`PGC_WorkflowRun` overhead (DB row, stack frames, idempotency guard, execute_top
-hops) to what is effectively a two-step operation: LLM call → human confirm → DB
-write. The PROC module pattern with a single `enqueueWorkflow` for the gate is
-the correct fit.
-
-If `fix-workflow` eventually requires multiple gate steps (e.g. separate confirmation
-for steps changes vs. context changes vs. prompt changes), that is the signal to
-promote it to a workflow. The current single-gate design does not meet that bar.
+A `PGC_WorkflowRun` lifecycle would add a DB row, stack frames and execute_top hops to
+an operation with no suspension point.
 
 ---
 
@@ -647,100 +617,24 @@ HTTP route: POST /api/v1/proc/troubleshoot-workflow
 Input:
   workflowName  string     — load steps from PGC_Workflow (required unless steps supplied)
   steps         array?     — raw step array; overrides DB lookup when present
-  autoFix       boolean?   — when true and issues found, enqueue FIX_WORKFLOW (SQS only)
   callback      Callback
 
 Behaviour:
   1. Load steps from PGC_Workflow by name, or use supplied steps array
   2. Run Level 1 static analysis (executeSimulate Level 1 in step-executor.mjs)
   3. Format TroubleshootWorkflowResponse with summary string
-  4. If autoFix=true and issues found: enqueue TROUBLESHOOT_WORKFLOW → FIX_WORKFLOW
-  5. enqueueCallback HUMAN_NOTIFICATION with summary
+  4. enqueueCallback HUMAN_NOTIFICATION with summary
 
 HTTP: return TroubleshootWorkflowResponse directly
 SQS: post to Slack thread via callback
 ```
 
-**`fix-workflow.mjs`**
-
-```
-SQS type:   FIX_WORKFLOW
-HTTP route: POST /api/v1/proc/fix-workflow
-
-Input (primary path — from TROUBLESHOOT_WORKFLOW output):
-  troubleshootResult  TroubleshootWorkflowResponse  — full output of troubleshoot call
-  stackTrace          string?                       — CloudWatch error string for LLM context
-  callback            Callback
-
-Input (direct path — no prior troubleshoot call):
-  workflowName   string
-  issues         StaticAnalysisIssue[]
-  brokenSteps    array?   — if omitted, loaded from PGC_Workflow by name
-  stackTrace     string?
-  callback       Callback
-
-Behaviour:
-  1. Resolve workflowName, brokenSteps, issues from troubleshootResult or direct fields
-  2. Call LLM fix_workflow_steps prompt:
-       Input: workflowName, brokenSteps, issues, step_type_contracts (PGC_SystemContext),
-              routing_value_rules (PGC_SystemContext), stackTrace (if present)
-       Output: { diagnosis, changesApplied, correctedSteps, context_updates?, prompt_text_change? }
-  3. Run Level 1 static analysis on correctedSteps
-  4. If validation fails: log to PGC_Prompt.error_log, enqueueCallback with failure report, return
-  5. Human confirmation gate:
-       Show changesApplied diff + diagnosis
-       Options: [Apply fix → confirm] [Cancel → cancel]
-  6. On confirm:
-       a. updateRows PGC_Workflow: steps=correctedSteps, version=version+1
-       b. If context_updates present: updateRows PGC_SystemContext for each key
-       c. If prompt_text_change present: log to PGC_Prompt.error_log (do NOT apply)
-       d. Cancel all active/failed WorkflowRun rows for this workflowName
-       e. For each cancelled run: enqueueCallback HUMAN_NOTIFICATION "Workflow repaired — try again"
-       f. enqueueCallback HUMAN_NOTIFICATION with FixWorkflowResponse summary
-
-HTTP: return FixWorkflowResponse directly (skips human gate — for developer testing)
-SQS: post confirmation gate via callback, await resume_gate
-```
-
----
-
-#### fix_workflow_steps prompt — contract
-
-| Field | Notes |
-|---|---|
-| Input: `workflow_name` | For context only — not in the output |
-| Input: `broken_steps` | Full current step array |
-| Input: `issues` | `StaticAnalysisIssue[]` array from Level 1 |
-| Input: `step_type_contracts` | Injected from `PGC_SystemContext` |
-| Input: `routing_value_rules` | Injected from `PGC_SystemContext` |
-| Input: `stack_trace` | Optional runtime error string |
-| Output: `diagnosis` | Plain-language explanation of root cause |
-| Output: `changes_applied` | `[{ step, field, before, after, reason }]` |
-| Output: `corrected_steps` | Complete fixed step array — not a diff |
-| Output: `context_updates` | Optional `[{ key, updated_content }]` for `PGC_SystemContext` rows |
-| Output: `prompt_text_change` | Optional `{ intent_category, recommendation }` — logged only, never applied |
-
-The prompt instructs the LLM that `prompt_text` changes are out of scope for
-automatic application. If the LLM believes a prompt change is the correct fix, it
-should describe the recommendation in `prompt_text_change` and explain why it could
-not fix the issue through step corrections or context updates alone. This is a
-signal for human review, not an automated write.
-
----
-
 #### SQS message types added
 
 | Type | Category | Sent by | Handled by |
 |---|---|---|---|
-| `TROUBLESHOOT_WORKFLOW` | 1 — fire-and-forget | Guard 1 / developer curl / autoFix chain | `troubleshoot-workflow.mjs` |
-| `FIX_WORKFLOW` | 1 — fire-and-forget (becomes Category 2 if human gate present) | `troubleshoot-workflow.mjs` (autoFix) / developer curl | `fix-workflow.mjs` |
+| `TROUBLESHOOT_WORKFLOW` | 1 — fire-and-forget | developer curl | `troubleshoot-workflow.mjs` |
 | `DIAGNOSE_PROMPT_SCHEMA` | 1 — fire-and-forget (becomes Category 2 at human gate) | `run-workflow.mjs` on `Agent API error 400` from `llm_call` step | `diagnose-prompt-schema.mjs` |
-
-`FIX_WORKFLOW` is unusual: it begins as a fire-and-forget (no `workflowRunId`) but
-if the human confirmation gate is reached, `fix-workflow.mjs` inserts a
-`PGC_WorkflowRun` row and transitions to a Category 2 `WORKFLOW_STEP execute_top`
-message to drive the gate. This is the same pattern as any other fire-and-forget
-that spawns a workflow run (e.g. `CLASSIFY_INTENT` → `WORKFLOW_STEP`).
 
 ---
 
@@ -1028,7 +922,6 @@ System workflows are rows in `PGC_Workflow` that ship with the system (seeded vi
 |---|---|---|---|
 | `create_domain` | 37 | 5 | Design and register a new data domain (schema + PGC registration) |
 | `create_workflow` | 63 | 9 | Design, simulate, and register a new domain workflow |
-| `fix_workflow` | 21 | 1 | Repair a broken registered workflow |
 | `diagnose_prompt_schema` | 17 | 0 | Detect and repair `PGC_Prompt.output_schema` API incompatibilities |
 | `add_entity` | 22 | 3 | Insert a new domain entity from natural language input |
 | `get_entity` | 20 | 1 | Fetch a single entity by id or name |
@@ -1054,25 +947,6 @@ Full annotated step-by-step design (six-phase structure, L/R collaboration
 decisions, gap taxonomy application, simulation correction loops, prompt
 dependencies): `docs/arch-create-workflow.md` — authoritative, do not duplicate
 step detail here.
-
----
-
-#### `fix_workflow`
-
-Triggered via `FIX_WORKFLOW` SQS or `POST /proc/fix-workflow`. Design rationale in §6.12.
-
-- `1–2` `condition` + `serv_query` — use supplied `brokenSteps` or load live steps from `PGC_Workflow`
-- `3` `js_transform` — assemble `fix_context` (normalise input from troubleshoot output or direct fields)
-- `4` `llm_call` [`fix_workflow_steps`] — RIGHT BRAIN repair: diagnose root cause; produce corrected step array; optional `context_updates` for `PGC_SystemContext` and `prompt_text_change` recommendation
-- `4b` `js_transform` — merge corrected steps back into full step array (LLM returns only changed steps)
-- `5` `simulate` — Level 1 static analysis on merged array
-- `6` `human_gate` (review_object) — show diagnosis, proposed changes, and any remaining validation issues; options: Apply fix / Cancel
-- `7–8` `js_transform` + `serv_update` — compute `version + 1`; write corrected steps to `PGC_Workflow`
-- `8b–8d` `simulate` + `serv_update` + `notify` — post-write L1 verification; revert and notify if it fails
-- `9–10` `condition` + `iterator` — apply each `PGC_SystemContext` update produced by the LLM (Tier 2 improvement)
-- `11–13` `serv_query` × 2 + `js_transform` — load and filter active/failed runs for the repaired workflow
-- `14–15` `condition` + `iterator` — cancel each active run; notify its callback channel
-- `16` `notify` — confirm fix applied; report version bump and context rows updated
 
 ---
 
