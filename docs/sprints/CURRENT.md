@@ -507,3 +507,23 @@ refused *"must be a whole number"*: Amount was `type: number` without `decimal: 
 either fix): edit an amount to `12,50` (→ 12.5), Save returns to the list, then **Add New → Save →
 Edit** a row (opens that row, not a blank form). Memory **441** still needs correcting — ask
 Novia to fix the row itself, not write beside it. Then item 10's spec.
+
+### Session 9 — 2026-10-17 — a read with no limit means every row
+
+**Run 892 (`help`) failed at step 1c: 105 `PGC_IntentMap` rows matched, SERV's unstated default
+cut it at 100.** Not a one-off — Javear reported the same error recurring in legacy workflows.
+`PGC_WorkflowRunStep` shows the truncation check (`c9d0f12`) has failed four workflows whose
+tables outgrew 100: runs **807** (`review_inventory`, 132), **827** (`budget_vs_expense_report`,
+102), **857** (`edit_budget`, 104), **892** (`help`, 105). A sweep of live workflows found **24
+`serv_query` reads stating no limit across 10 workflows**, nearly all meaning "every row".
+
+**Execution, unscoped — extend the harness (`5f1fa97`, deployed, `PGC_StepType` upserted).** A
+read with no LIMIT means every matching row, as in SQL; 100 was a convention no author wrote
+against. `DEFAULT_READ_LIMIT` = `MAX_READ_LIMIT` = 1000, still reported as `default`, so a cut at
+the ceiling still fails loudly. The `serv_query` contract states it. Probed live: step 1c's read
+now returns 105, `limit_applied: default`. Also fixes Novia's own `PGC_IntentMap` read
+(`minds-eye.mjs:1727`), silently capped at 100 with no check. 1201 → **1202** tests.
+
+**Seen, not touched:** `fix_workflow` (dead path) step 11 reads `PGC_WorkflowRun` unprojected —
+already an Internal server error at 100 rows (6MB Lambda response, the `stack` column). The
+`help` seed row says v3 while live is v10 — check for drift before its next upsert.
