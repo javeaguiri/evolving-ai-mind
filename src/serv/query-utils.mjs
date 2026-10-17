@@ -84,8 +84,11 @@ export function buildOrderClause(terms, prefix = '') {
 }
 
 // SERV's read bounds. A read that states no limit gets DEFAULT_READ_LIMIT rows; no read,
-// however large its stated limit, gets more than MAX_READ_LIMIT.
-export const DEFAULT_READ_LIMIT = 100;
+// however large its stated limit, gets more than MAX_READ_LIMIT. The two are equal: a read
+// with no LIMIT means every matching row, as it does in SQL. A default of 100 was a
+// convention no caller wrote against, and every table that grew past it failed a workflow
+// that had worked (runs 807, 827, 857, 892).
+export const DEFAULT_READ_LIMIT = 1000;
 export const MAX_READ_LIMIT     = 1000;
 
 function parseLimit(raw) {
