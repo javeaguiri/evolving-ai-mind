@@ -196,7 +196,7 @@ async function loadToolDefinitions(traceId) {
   return tools;
 }
 
-// SERV's getRows defaults a page to 100 rows and hard-caps it at 1000 (`table.mjs`). Both
+// SERV's getRows defaulted a page to 100 rows and hard-caps it at 1000 (`table.mjs`). Both
 // session loads passed no limit, so a session past 100 entries loaded only its OLDEST 100 —
 // and `nextSeq`, derived from that page, then collided with an entry that already existed,
 // failing uq_pgc_sessionentry_session_seq and killing that resume and every one after it.

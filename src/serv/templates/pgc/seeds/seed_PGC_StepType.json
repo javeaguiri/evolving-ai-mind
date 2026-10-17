@@ -386,7 +386,7 @@
         "type": "integer",
         "field": "input.limit",
         "required": false,
-        "description": "Maximum number of rows to return. A read that states no limit returns at most 100 rows, and no read returns more than 1000. A read cut by a bound the step did not choose \u2014 the 100-row default, or the 1000-row ceiling on a larger request \u2014 fails the step, rather than handing a partial list to later steps as if it were complete. A limit the step states is its own choice, and reaching it is not a failure. State a limit whenever a partial read is intended; narrow with filters whenever the whole result is needed and could exceed 100 rows."
+        "description": "Maximum number of rows to return. A read that states no limit returns at most 1000 rows, and no read returns more than 1000 \u2014 so a read with no limit means every matching row, as in SQL. A read cut by that bound, which the step did not choose, fails the step, rather than handing a partial list to later steps as if it were complete. A limit the step states is its own choice, and reaching it is not a failure. State a limit whenever a partial read is intended; narrow with filters whenever the whole result could exceed 1000 rows."
       },
       {
         "type": "object",
