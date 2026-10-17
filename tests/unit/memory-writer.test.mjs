@@ -47,11 +47,6 @@ describe('shouldWriteEpisodicMemory', () => {
     assert.equal(shouldWriteEpisodicMemory(run), false);
   });
 
-  it('returns false for fix_workflow', () => {
-    const run = { workflow_name: 'fix_workflow', input: { domain: 'flashcards' } };
-    assert.equal(shouldWriteEpisodicMemory(run), false);
-  });
-
   it('returns false for ping_core', () => {
     const run = { workflow_name: 'ping_core', input: { domain: 'flashcards' } };
     assert.equal(shouldWriteEpisodicMemory(run), false);

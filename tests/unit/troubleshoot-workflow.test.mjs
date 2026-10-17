@@ -1,36 +1,23 @@
 // Copyright (c) 2026 Javea Guiri. All rights reserved.
 // Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
 // See LICENSE file in the project root for full license terms.
-// tests/unit/troubleshoot-fix-workflow.test.mjs
+// tests/unit/troubleshoot-workflow.test.mjs
 //
-// Unit tests for the pure logic used by troubleshoot-workflow.mjs,
-// fix-workflow.mjs, and the fix_workflow PGC_Workflow definition.
-//
-// Architecture note:
-//   fix-workflow.mjs is a thin entry point (like create-domain.mjs) — it
-//   validates inputs, creates a PGC_WorkflowRun, and enqueues execute_top.
-//   All LLM, validation, gate, and DB-write logic lives in the fix_workflow
-//   workflow definition in seed_PGC_Workflow.json, driven by the Step Processor.
-//   There is nothing to unit-test in the handle() functions beyond input
-//   validation — those are integration concerns tested via curl.
+// Unit tests for the pure logic used by troubleshoot-workflow.mjs — the
+// diagnostic-only Level 1 analysis, run on request.
 //
 // What IS unit-testable without I/O:
-//   1. runSimulation (step-executor.mjs) — the Level 1 engine used by
-//      troubleshoot-workflow and the fix_workflow simulate step
+//   1. runSimulation (simulation-engine.mjs) — the Level 1 engine troubleshoot uses
 //   2. buildTroubleshootSummary — pure fn mirrored from troubleshoot-workflow
-//   3. validateCorrectedSteps — pure fn: run Level 1 on LLM output
-//   4. resolveFixInputs — pure fn: input normalisation in fix-workflow.handle()
-//   5. fix_workflow step definitions — structural validity of the workflow
-//      itself (condition bare keys, dead targets, iterator contracts)
 //
-// Run: node --test tests/unit/troubleshoot-fix-workflow.test.mjs
+// Run: node --test tests/unit/troubleshoot-workflow.test.mjs
 
-import { test, describe, before } from 'node:test';
+import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { runSimulation } from '../../src/proc/simulation-engine.mjs';
 
 // ---------------------------------------------------------------------------
-// Pure helpers — mirror logic from troubleshoot-workflow.mjs / fix-workflow.mjs
+// Pure helpers — mirror logic from troubleshoot-workflow.mjs
 // If source changes, update these too.
 // ---------------------------------------------------------------------------
 
@@ -46,38 +33,6 @@ function buildTroubleshootSummary({ workflowName, workflowVersion, issues }) {
   );
   if (issues.length > 10) bulletLines.push(`• …and ${issues.length - 10} more`);
   return `❌ ${label} — ${issues.length} issue${issues.length !== 1 ? 's' : ''} found\n\n${bulletLines.join('\n')}`;
-}
-
-function validateCorrectedSteps(correctedSteps) {
-  if (!Array.isArray(correctedSteps) || correctedSteps.length === 0) {
-    return { passed: false, reason: 'empty_corrected_steps', issues: [] };
-  }
-  const result = runSimulation({ steps: correctedSteps, mockOutputs: null, simulationPaths: null });
-  const issues = result.static_analysis?.issues ?? [];
-  return { passed: issues.length === 0, issues };
-}
-
-function resolveFixInputs(body) {
-  if (body.troubleshootResult) {
-    const r = body.troubleshootResult;
-    if (r.passed) return { error: 'troubleshootResult.passed is true — nothing to fix' };
-    return {
-      workflowName:    r.workflowName    ?? null,
-      issues:          r.staticAnalysis?.issues ?? [],
-      workflowVersion: r.workflowVersion ?? null,
-      brokenSteps:     body.brokenSteps  ?? null,
-      stackTrace:      body.stackTrace   ?? r.stackTrace ?? null,
-    };
-  }
-  if (!body.workflowName) return { error: 'workflowName is required' };
-  if (!body.issues || body.issues.length === 0) return { error: 'issues array is required and must be non-empty' };
-  return {
-    workflowName:    body.workflowName,
-    issues:          body.issues,
-    workflowVersion: body.workflowVersion ?? null,
-    brokenSteps:     body.brokenSteps     ?? null,
-    stackTrace:      body.stackTrace      ?? null,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -125,8 +80,7 @@ const HEALTHY_STEPS = [
 ];
 
 // ---------------------------------------------------------------------------
-// 1. Level 1 — the diagnostic engine (used by troubleshoot-workflow and
-//    the fix_workflow simulate step)
+// 1. Level 1 — the diagnostic engine (used by troubleshoot-workflow)
 // ---------------------------------------------------------------------------
 
 describe('Level 1 static analysis — condition routing contract', () => {
@@ -159,7 +113,7 @@ describe('Level 1 static analysis — condition routing contract', () => {
     assert.equal(result.static_analysis.issues.length, 0);
   });
 
-  test('each issue has the fields the fix_workflow_steps LLM prompt expects', () => {
+  test('each issue carries step, failure_class, detail and check', () => {
     const result = runSimulation({ steps: BROKEN_CONDITION_STEPS });
     for (const issue of result.static_analysis.issues) {
       assert.ok(issue.step,          `issue.step missing in: ${JSON.stringify(issue)}`);
@@ -288,246 +242,7 @@ describe('buildTroubleshootSummary', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 3. Post-fix validation gate
-// ---------------------------------------------------------------------------
-
-describe('validateCorrectedSteps', () => {
-
-  test('passed=false for null', () => { assert.equal(validateCorrectedSteps(null).passed, false); });
-
-  test('passed=false and reason=empty_corrected_steps for []', () => {
-    const r = validateCorrectedSteps([]);
-    assert.equal(r.passed, false);
-    assert.equal(r.reason, 'empty_corrected_steps');
-  });
-
-  test('passed=false when corrected steps still have condition routing bugs', () => {
-    const r = validateCorrectedSteps(BROKEN_CONDITION_STEPS);
-    assert.equal(r.passed, false);
-    assert.ok(r.issues.length > 0);
-  });
-
-  test('passed=true for correctly fixed steps', () => {
-    const r = validateCorrectedSteps(FIXED_CONDITION_STEPS);
-    assert.equal(r.passed, true);
-    assert.equal(r.issues.length, 0);
-  });
-
-  test('issues array is structured when failed', () => {
-    const r = validateCorrectedSteps(BROKEN_CONDITION_STEPS);
-    assert.ok(r.issues.every(i => i.step && i.failure_class && i.detail));
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 4. Input resolution — fix-workflow.handle() normalisation
-// ---------------------------------------------------------------------------
-
-describe('resolveFixInputs', () => {
-
-  test('extracts all fields from troubleshootResult', () => {
-    const r = resolveFixInputs({
-      troubleshootResult: {
-        workflowName: 'create_workflow', workflowVersion: 4, passed: false,
-        staticAnalysis: { issues: [{ step: '4', failure_class: 'unknown_routing_value', detail: 'x', check: 'y' }] },
-      },
-    });
-    assert.equal(r.workflowName, 'create_workflow');
-    assert.equal(r.workflowVersion, 4);
-    assert.equal(r.issues.length, 1);
-    assert.equal(r.error, undefined);
-  });
-
-  test('error when troubleshootResult.passed is true', () => {
-    const r = resolveFixInputs({ troubleshootResult: { workflowName: 'test', passed: true, staticAnalysis: { issues: [] } } });
-    assert.ok(r.error);
-    assert.match(r.error, /nothing to fix/);
-  });
-
-  test('extracts from direct fields when no troubleshootResult', () => {
-    const r = resolveFixInputs({ workflowName: 'create_workflow', issues: [{ step: '4', failure_class: 'x', detail: 'x', check: 'y' }] });
-    assert.equal(r.workflowName, 'create_workflow');
-    assert.equal(r.workflowVersion, null);
-    assert.equal(r.issues.length, 1);
-  });
-
-  test('error when no troubleshootResult and no workflowName', () => {
-    assert.match(
-      resolveFixInputs({ issues: [{ step: '4', failure_class: 'x', detail: 'x', check: 'y' }] }).error,
-      /workflowName is required/
-    );
-  });
-
-  test('error when no troubleshootResult and empty issues', () => {
-    assert.match(
-      resolveFixInputs({ workflowName: 'test', issues: [] }).error,
-      /issues array is required/
-    );
-  });
-
-  test('body.brokenSteps overrides null default', () => {
-    const r = resolveFixInputs({
-      troubleshootResult: {
-        workflowName: 'test', passed: false,
-        staticAnalysis: { issues: [{ step: '1', failure_class: 'x', detail: 'x', check: 'y' }] },
-      },
-      brokenSteps: HEALTHY_STEPS,
-    });
-    assert.deepEqual(r.brokenSteps, HEALTHY_STEPS);
-  });
-
-  test('stackTrace forwarded from troubleshootResult when absent in body', () => {
-    const r = resolveFixInputs({
-      troubleshootResult: {
-        workflowName: 'test', passed: false,
-        stackTrace: 'Error: step not found',
-        staticAnalysis: { issues: [{ step: '1', failure_class: 'x', detail: 'x', check: 'y' }] },
-      },
-    });
-    assert.equal(r.stackTrace, 'Error: step not found');
-  });
-
-  test('body.stackTrace overrides troubleshootResult.stackTrace', () => {
-    const r = resolveFixInputs({
-      troubleshootResult: {
-        workflowName: 'test', passed: false,
-        stackTrace: 'from result',
-        staticAnalysis: { issues: [{ step: '1', failure_class: 'x', detail: 'x', check: 'y' }] },
-      },
-      stackTrace: 'from body',
-    });
-    assert.equal(r.stackTrace, 'from body');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 5. fix_workflow workflow definition — structural validity
-// The workflow itself must pass Level 1 before it can repair other workflows.
-// ---------------------------------------------------------------------------
-
-describe('fix_workflow workflow definition — structural validity', () => {
-  let fixWorkflowSteps;
-
-  // Load from seed file synchronously
-  before(async () => {
-    const { readFileSync } = await import('node:fs');
-    const { fileURLToPath } = await import('node:url');
-    const { dirname, resolve } = await import('node:path');
-    const __dirname = dirname(fileURLToPath(import.meta.url));
-    const seedPath = resolve(__dirname, '../../src/serv/templates/pgc/seeds/seed_PGC_Workflow.json');
-    const workflows = JSON.parse(readFileSync(seedPath, 'utf8'));
-    const fw = workflows.find(w => w.name === 'fix_workflow');
-    assert.ok(fw, 'fix_workflow must exist in seed_PGC_Workflow.json');
-    fixWorkflowSteps = fw.steps;
-  });
-
-  test('fix_workflow step array passes Level 1 static analysis', () => {
-    const result = runSimulation({ steps: fixWorkflowSteps });
-    if (!result.static_analysis.passed) {
-      const issueLines = result.static_analysis.issues.map(i => `  step ${i.step} [${i.failure_class}]: ${i.detail}`).join('\n');
-      assert.fail(`fix_workflow has structural issues:\n${issueLines}`);
-    }
-    assert.equal(result.static_analysis.passed, true);
-  });
-
-  test('all condition steps use bare step keys (not routing tokens or pre-prefixed)', () => {
-    const conditions = fixWorkflowSteps.filter(s => s.type === 'condition');
-    assert.ok(conditions.length > 0, 'Expected at least one condition step');
-    const stepKeys = new Set(fixWorkflowSteps.map(s => String(s.step)));
-    for (const s of conditions) {
-      assert.ok(stepKeys.has(String(s.on_success)),
-        `Step ${s.step} on_success "${s.on_success}" is not a valid step key`);
-      assert.ok(stepKeys.has(String(s.on_else)),
-        `Step ${s.step} on_else "${s.on_else}" is not a valid step key`);
-      assert.doesNotMatch(String(s.on_success), /^(next|end|cancel)$/,
-        `Step ${s.step} on_success must be a bare step key, not a routing token`);
-      assert.doesNotMatch(String(s.on_else), /^(next|end|cancel)$/,
-        `Step ${s.step} on_else must be a bare step key, not a routing token`);
-      assert.doesNotMatch(String(s.on_success), /^step:/,
-        `Step ${s.step} on_success must not be pre-prefixed with step:`);
-      assert.doesNotMatch(String(s.on_else), /^step:/,
-        `Step ${s.step} on_else must not be pre-prefixed with step:`);
-    }
-  });
-
-  test('fix_workflow ends with type: end', () => {
-    const last = fixWorkflowSteps[fixWorkflowSteps.length - 1];
-    assert.equal(last.type, 'end');
-  });
-
-  test('fix_workflow has exactly one human_gate step (the confirmation gate)', () => {
-    const gates = fixWorkflowSteps.filter(s => s.type === 'human_gate');
-    assert.equal(gates.length, 1, 'Expected exactly one human_gate in fix_workflow');
-  });
-
-  test('human_gate has cancel option', () => {
-    const gate = fixWorkflowSteps.find(s => s.type === 'human_gate');
-    const hasCancel = (gate.options ?? []).some(o => o.action === 'cancel');
-    assert.ok(hasCancel, 'human_gate must have a cancel option');
-  });
-
-  test('human_gate has Try again option routing back to llm_call step', () => {
-    const gate    = fixWorkflowSteps.find(s => s.type === 'human_gate');
-    const retry   = (gate.options ?? []).find(o => o.action === 'retry');
-    assert.ok(retry, 'human_gate should have a retry option');
-    // retry routes back to the llm_call step (step 4)
-    assert.match(retry.on_select, /^step:4$/, 'retry should route to step:4 (llm_call)');
-  });
-
-  test('step 4b js_transform merges corrected steps into full array — output_key is merged_steps', () => {
-    const merge = fixWorkflowSteps.find(s => s.step === '4b');
-    assert.ok(merge, 'Expected a step 4b merge transform');
-    assert.equal(merge.type, 'js_transform');
-    assert.equal(merge.output_key, 'merged_steps');
-    assert.match(merge.expression, /corrected/, 'expression should reference corrected steps');
-    assert.match(merge.expression, /fullSteps|workflow_row/, 'expression should reference full step array');
-  });
-
-  test('simulate step uses steps_key pointing to merged_steps (full merged array)', () => {
-    const simulate = fixWorkflowSteps.find(s => s.type === 'simulate');
-    assert.ok(simulate, 'Expected a simulate step');
-    assert.equal(simulate.input?.steps_key, 'merged_steps');
-  });
-
-  test('serv_update for PGC_Workflow writes merged_steps (not fix_result.corrected_steps)', () => {
-    const wfUpdate = fixWorkflowSteps.find(s =>
-      s.type === 'serv_update' &&
-      String(s.input?.tableName ?? '').includes('PGC_Workflow')
-    );
-    assert.ok(wfUpdate, 'Expected a serv_update step targeting PGC_Workflow');
-    assert.match(
-      JSON.stringify(wfUpdate.input?.updates ?? {}),
-      /merged_steps/,
-      'serv_update must write merged_steps, not fix_result.corrected_steps'
-    );
-  });
-
-  test('serv_update for PGC_Workflow uses name filter (not id)', () => {
-    const wfUpdate = fixWorkflowSteps.find(s =>
-      s.type === 'serv_update' &&
-      String(s.input?.tableName ?? '').includes('PGC_Workflow')
-    );
-    assert.ok(wfUpdate, 'Expected a serv_update step targeting PGC_Workflow');
-    const filters = wfUpdate.input?.filters ?? [];
-    const nameFilter = filters.find(f => f.column === 'name');
-    assert.ok(nameFilter, 'PGC_Workflow update must filter by name');
-  });
-
-  test('iterate over context_updates uses item.key and item.updated_content', () => {
-    const ctxIter = fixWorkflowSteps.find(s =>
-      s.type === 'iterator' &&
-      s.items_key === 'fix_result.context_updates'
-    );
-    assert.ok(ctxIter, 'Expected iterator over fix_result.context_updates');
-    const itemStep = ctxIter.item_step;
-    assert.equal(itemStep.type, 'serv_update');
-    assert.match(JSON.stringify(itemStep.input), /item\.key/);
-    assert.match(JSON.stringify(itemStep.input), /item\.updated_content/);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 6. Level 2a — Routing matrix
+// 3. Level 2a — Routing matrix
 // ---------------------------------------------------------------------------
 
 describe('Level 2a — routing matrix', () => {
@@ -594,7 +309,7 @@ describe('Level 2a — routing matrix', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 7. Level 2b — js_transform smoke test
+// 4. Level 2b — js_transform smoke test
 // ---------------------------------------------------------------------------
 
 describe('Level 2b — js_transform smoke test', () => {
@@ -681,34 +396,22 @@ describe('Level 2b — js_transform smoke test', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 8. End-to-end: detect → correct → validate cycle
+// 5. End-to-end: detect → summarise
 // ---------------------------------------------------------------------------
 
-describe('detect → correct → validate cycle', () => {
+describe('detect → summarise', () => {
 
-  test('broken steps produce issues that pass to fix_workflow_steps LLM as-is', () => {
+  test('broken steps produce issues with every field the summary reads', () => {
     const diag = runSimulation({ steps: BROKEN_CONDITION_STEPS });
     assert.equal(diag.static_analysis.passed, false);
     const issues = diag.static_analysis.issues;
-    // Verify the issues array has the schema the fix_workflow_steps prompt expects
     assert.ok(issues.length >= 1);
     for (const i of issues) {
       assert.ok(i.step && i.failure_class && i.detail && i.check);
     }
   });
 
-  test('valid LLM correction passes post-fix validation — fix proceeds', () => {
-    const postFix = validateCorrectedSteps(FIXED_CONDITION_STEPS);
-    assert.equal(postFix.passed, true, 'Corrected steps must pass Level 1 before commit');
-  });
-
-  test('invalid LLM correction fails post-fix validation — fix is blocked', () => {
-    const postFix = validateCorrectedSteps(BROKEN_CONDITION_STEPS);
-    assert.equal(postFix.passed, false);
-    assert.ok(postFix.issues.length > 0);
-  });
-
-  test('fix summary shows ✅ and incremented version after successful repair', () => {
+  test('summary shows ✅ and the version for a clean workflow', () => {
     const summary = buildTroubleshootSummary({
       workflowName: 'create_workflow', workflowVersion: 5, issues: [],
     });
