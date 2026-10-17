@@ -108,7 +108,7 @@ proprietary syntax the harness has to learn.
 
 ## Acceptance Criteria
 
-**Status as of 2026-10-10.** ⬜ not started · 🟡 in progress · ✅ met · ~~struck~~ withdrawn or moved.
+**Status as of 2026-10-17.** ⬜ not started · 🟡 in progress · ✅ met · ~~struck~~ withdrawn or moved.
 **This table is updated when a criterion's state changes, not at close** — it is how the sprint's
 position is read at a glance.
 
@@ -542,3 +542,11 @@ dispatch, openapi entry, seed row and tests (1202 → **1174**; the rest of the 
 `/delete-workflow` would take its five failed runs with it. Its prompts (`fix_workflow_steps`)
 and `inject_for` entries are left for the cleanup inventory's Pass A. The `help` seed was checked
 against live: all 11 seeded workflows match on every fingerprinted field.
+
+**AC7 — Javear tested 360 v7 from Slack 2026-10-17: the edit path works.** Still to test:
+**Add New → Save → Edit** (opens that row, not a blank add form — the `action_key` path from
+`3549ae6`). AC7 stays 🟡; delete semantics (`deleted_at` vs hard delete) also still open.
+
+**Next session starts here:** (1) Javear's Add New test on 360; (2) Novia corrects memory 441 in
+place; (3) confirm AC1/AC2 wording against the 2026-10-10 small-grid decision; (4) item 10 spec.
+Row 316 (`fix_workflow`) left in the DB for cleanup Pass A unless Javear says otherwise.
