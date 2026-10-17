@@ -527,3 +527,18 @@ now returns 105, `limit_applied: default`. Also fixes Novia's own `PGC_IntentMap
 **Seen, not touched:** `fix_workflow` (dead path) step 11 reads `PGC_WorkflowRun` unprojected —
 already an Internal server error at 100 rows (6MB Lambda response, the `stack` column). The
 `help` seed row says v3 while live is v10 — check for drift before its next upsert.
+
+**Then: `fix_workflow` and the automatic repair chain retired (`ff76115`, deployed, Novia's
+system prompt v37 upserted) — Javear's decision on cleanup D1, option 3.** Looking into
+`fix_workflow` step 11 found it had never run: all **five** `fix_workflow` runs (467, 468, 640,
+808, 858) failed at step 4's repair `llm_call`, and 808/858 were auto-started ~2s after 807/857 —
+every non-LLM failure was adding a failing LLM call. Step 11 would also have cancelled `failed`
+and `awaiting_human_gate` runs unasked. Now a failed step reaches the user as `WORKFLOW_ERROR`
+only; repair is Novia's `propose_workflow_fix`. `troubleshoot-workflow` stays as a diagnostic on
+request; `DIAGNOSE_PROMPT_SCHEMA` unchanged (D2 open). Removed: `fix-workflow.mjs`, its SQS/HTTP
+dispatch, openapi entry, seed row and tests (1202 → **1174**; the rest of the file kept as
+`troubleshoot-workflow.test.mjs`). `arch-workflow-patterns.md` §6.12 rewritten.
+**Still live:** the `PGC_WorkflowRun`-bearing row 316 — nothing reaches it; deleting it via
+`/delete-workflow` would take its five failed runs with it. Its prompts (`fix_workflow_steps`)
+and `inject_for` entries are left for the cleanup inventory's Pass A. The `help` seed was checked
+against live: all 11 seeded workflows match on every fingerprinted field.
