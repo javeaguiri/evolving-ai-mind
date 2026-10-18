@@ -34,7 +34,6 @@ import { handle as classifyIntent }     from './classify-intent.mjs';
 import { handle as simulateWorkflow }   from './simulate-workflow.mjs';
 import { handle as createWorkflow }     from './create-workflow.mjs';
 import { handle as troubleshootWorkflow } from './troubleshoot-workflow.mjs';
-import { handle as fixWorkflow }        from './fix-workflow.mjs';
 import { handle as diagnosePromptSchema } from './diagnose-prompt-schema.mjs';
 import { handle as monitorPromptQuality } from './monitor-prompt-quality.mjs';
 import { handle as chat }               from './chat.mjs';
@@ -151,20 +150,11 @@ async function processSqsBatch(records) {
         await createWorkflow(req);
         continue;
       }
-      // TROUBLESHOOT_WORKFLOW — Tier 1 reactive repair: Level 1 static analysis.
-      // Enqueued by run-workflow.mjs on step failure or stuck-step guard fire.
-      // Also triggered manually via curl or /m troubleshoot workflow <n>.
+      // TROUBLESHOOT_WORKFLOW — Level 1 static analysis, diagnostic only.
+      // Nothing enqueues it automatically; sent on request.
       if (message.type === 'TROUBLESHOOT_WORKFLOW') {
         const req = buildReqFromSqs(message);
         await troubleshootWorkflow(req);
-        continue;
-      }
-      // FIX_WORKFLOW — Tier 1 reactive repair: LLM-driven correction + human gate.
-      // Enqueued by troubleshoot-workflow.mjs when autoFix=true and issues found.
-      // Also triggered manually via curl.
-      if (message.type === 'FIX_WORKFLOW') {
-        const req = buildReqFromSqs(message);
-        await fixWorkflow(req);
         continue;
       }
       // DIAGNOSE_PROMPT_SCHEMA — Tier 1b reactive repair: deterministic output_schema
@@ -318,9 +308,6 @@ async function dispatch(req) {
 
     case 'troubleshoot-workflow':
       return troubleshootWorkflow(req);
-
-    case 'fix-workflow':
-      return fixWorkflow(req);
 
     case 'diagnose-prompt-schema':
       return diagnosePromptSchema(req);

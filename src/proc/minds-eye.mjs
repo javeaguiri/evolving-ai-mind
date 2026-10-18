@@ -47,7 +47,7 @@ import { resolvePath }                                    from './template-resol
 //
 // It replaces ACTION_SCHEMA, which described a {action, params, reasoning} envelope that was
 // never actually enforced: it was passed to callLlm, but response_format is gated to sonar
-// models and Novia runs anthropic/claude-sonnet-4-6, so the schema was dropped at the seam
+// models and Novia runs an anthropic/* model, so the schema was dropped at the seam
 // every single time. Tool schemas are enforced by the gateway, so the contract is now real.
 const STANDING_INSTRUCTION =
   'Decide your next action and call exactly one tool. Call respond when you are holding ' +
@@ -55,7 +55,7 @@ const STANDING_INSTRUCTION =
 
 const DEFAULT_PREFERENCES = {
   name:                   'Agent',
-  model:                  'anthropic/claude-sonnet-4-6',
+  model:                  'anthropic/claude-opus-5-5',
   max_output_tokens:      8192,
   // Wall clock for one round, sized under ProcFunction's Lambda timeout with room left for
   // the session writes and the continue gate that follow the last turn. It is a fallback:
@@ -196,7 +196,7 @@ async function loadToolDefinitions(traceId) {
   return tools;
 }
 
-// SERV's getRows defaults a page to 100 rows and hard-caps it at 1000 (`table.mjs`). Both
+// SERV's getRows defaulted a page to 100 rows and hard-caps it at 1000 (`table.mjs`). Both
 // session loads passed no limit, so a session past 100 entries loaded only its OLDEST 100 —
 // and `nextSeq`, derived from that page, then collided with an entry that already existed,
 // failing uq_pgc_sessionentry_session_seq and killing that resume and every one after it.

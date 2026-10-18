@@ -224,15 +224,6 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
         traceId,
       });
     }
-    // Tier 1 self-repair — broken routing target produced an invalid step key
-    await enqueueWorkflow({
-      type:         'TROUBLESHOOT_WORKFLOW',
-      workflowName: run.workflow_name,
-      stackTrace:   msg,
-      autoFix:      true,
-      traceId,
-      callback:     run.callback,
-    });
     return { skipped: true, reason: 'step_not_found' };
   }
 
@@ -267,15 +258,6 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
           traceId,
         });
       }
-      // Tier 1 self-repair — diagnose the workflow that just failed
-      await enqueueWorkflow({
-        type:         'TROUBLESHOOT_WORKFLOW',
-        workflowName: run.workflow_name,
-        stackTrace:   msg,
-        autoFix:      true,
-        traceId,
-        callback:     run.callback,
-      });
       return { skipped: true, reason: 'stuck' };
     }
 
@@ -321,7 +303,7 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
     // Resolve output_key → local_state writes here rather than at the write site below,
     // so a step whose declared output_key cannot be satisfied by what it returned fails
     // inside the step's own failure envelope — audit row, run status, WORKFLOW_ERROR
-    // callback, TROUBLESHOOT_WORKFLOW. Below this block the step is already audited as
+    // callback. Below this block the step is already audited as
     // completed, and a throw there would escape unhandled. Application stays below so
     // an llm_break still returns before local_state is touched.
     if (step.output_key && result.outputValue !== undefined) {
@@ -341,26 +323,17 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
         traceId,
       });
     }
-    // Tier 1 self-repair — only for structural errors, not transient LLM response failures.
-    // LLM errors (invalid JSON, timeout, empty response) and validation failures indicate
-    // a prompt or service quality issue — TROUBLESHOOT_WORKFLOW analyses workflow definition
-    // structure and cannot fix those.
+    // A failed step reaches the user as the WORKFLOW_ERROR above and nothing more; repair
+    // is Novia's (`propose_workflow_fix`). The automatic TROUBLESHOOT_WORKFLOW → FIX_WORKFLOW
+    // chain that ran here on every failure was retired 2026-10-17: fix_workflow failed all
+    // five runs it was given.
     //
-    // Tier 1b — Agent API 400 on an llm_call step means output_schema is incompatible
-    // with the structured output spec. DIAGNOSE_PROMPT_SCHEMA runs a deterministic repair
-    // and presents a human confirmation gate before writing the fix.
-    //
-    // System workflow guard: self-repair workflows (fix_workflow, diagnose_prompt_schema)
-    // must not re-enter the repair loop when they themselves fail. They are the repair
-    // layer — recursing into TROUBLESHOOT_WORKFLOW or DIAGNOSE_PROMPT_SCHEMA from inside
-    // them causes an infinite loop. Log the failure only.
-    const SYSTEM_REPAIR_WORKFLOWS = new Set(['fix_workflow', 'diagnose_prompt_schema']);
-    const isSystemRepairWorkflow  = SYSTEM_REPAIR_WORKFLOWS.has(run.workflow_name);
-
-    const isApiSchemaError = !isSystemRepairWorkflow
+    // Agent API 400 on an llm_call step means output_schema is incompatible with the
+    // structured output spec. DIAGNOSE_PROMPT_SCHEMA runs a deterministic repair and presents
+    // a human confirmation gate before writing the fix. It must not re-enter itself when
+    // diagnose_prompt_schema is the workflow that failed.
+    const isApiSchemaError = run.workflow_name !== 'diagnose_prompt_schema'
       && step.type === 'llm_call' && /Agent API error 400/i.test(stepError.message);
-    const isLlmError = isApiSchemaError
-      || /LLM (returned|call timed)|llm_call validation failed/i.test(stepError.message);
 
     if (isApiSchemaError && step.input?.prompt) {
       await enqueueWorkflow({
@@ -369,20 +342,6 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
         workflowRunId:  run.id,
         traceId,
         callback:       run.callback,
-      });
-    } else if (!isLlmError && !isSystemRepairWorkflow) {
-      await enqueueWorkflow({
-        type:         'TROUBLESHOOT_WORKFLOW',
-        workflowName: run.workflow_name,
-        stackTrace:   `Step ${frame.current_step} (${step.type}) failed: ${stepError.message}`,
-        autoFix:      true,
-        traceId,
-        callback:     run.callback,
-      });
-    } else if (isSystemRepairWorkflow) {
-      console.error('run-workflow: system repair workflow failed — suppressing recursive repair', {
-        workflowName: run.workflow_name, step: frame.current_step,
-        error: stepError.message, traceId,
       });
     }
     throw stepError;
@@ -713,56 +672,23 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     ? stepRef.item_action
     : null;
 
-  // list_selection's Select button is a single shared control (Sprint 7 Track D —
-  // markdown table + one picker, replacing one accessory button per row, which was
-  // throwing msg_blocks_too_long above ~8 rows). The click identifies no row by
-  // itself — the chosen row rides in Slack's state.values — so resolve it here
+  // list_selection's Select button is one shared control per table group (Sprint 7
+  // Track D replaced one accessory button per row, which was throwing
+  // msg_blocks_too_long above ~8 rows). The click identifies no row by itself — the
+  // ID typed into that group's box rides in as inputValue, the group as listGroup —
+  // so resolve it here
   // against context_key's fully-resolved items (reusing buildDialog's own item_action
   // application rather than re-implementing it) before the advance logic below runs.
   // A selection that doesn't resolve to a selectable row re-renders the same gate in
   // place with an error line — it never silently advances on an unresolved value.
   if (itemActionMatch) {
-    // The click carries one of two things, depending on which control callback.mjs
-    // rendered for this list. Normally it's a static_select's chosen option
-    // (responseData.selectedValue — a JSON {id, table} payload), which pins the row's
-    // source table alongside its id, so a level spanning more than one child table
-    // can't resolve a colliding id to the wrong table's row. Past Slack's 100-option
-    // cap the list falls back to a shared text box, and the click carries a bare typed
-    // id (responseData.inputValue) with no table — there, a collision still resolves
-    // first-hit, unchanged and acceptable at this app's scale.
-    let selected = null;
-    if (responseData?.selectedValue) {
-      try {
-        selected = JSON.parse(responseData.selectedValue);
-      } catch {
-        selected = null;
-      }
-    }
-    const typedId = responseData?.inputValue?.trim();
-
     const dialogForLookup = buildDialog(stepRef, localState);
     const listItems = dialogForLookup.fields.find(f => f.type === 'list')?.items ?? [];
-
-    let matchedItem = null;
-    if (selected) {
-      matchedItem = listItems.find(item =>
-        item.secondaryAction
-        && String(item.id) === String(selected.id)
-        && (item.responseData?.table ?? null) === (selected.table ?? null)
-      ) ?? null;
-    } else if (typedId) {
-      matchedItem = listItems.find(item => item.secondaryAction && String(item.id) === typedId) ?? null;
-    }
+    const typedId   = responseData?.inputValue?.trim();
+    const { item: matchedItem, problem } = matchListSelection(listItems, typedId, responseData?.listGroup);
 
     if (!matchedItem) {
-      dialogForLookup.fields.unshift({
-        type:  'typography',
-        value: selected
-          ? '⚠️ That selection no longer matches a row in this list — please try again.'
-          : typedId
-            ? `⚠️ No selectable row with ID "${typedId}" — please check and try again.`
-            : '⚠️ Choose a record before selecting.',
-      });
+      dialogForLookup.fields.unshift({ type: 'typography', value: `⚠️ ${problem}` });
       await enqueueCallback(run.callback, {
         type:          'HUMAN_GATE',
         workflowRunId: run.id,
@@ -773,7 +699,7 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
         traceId,
       });
       console.info('run-workflow: list_selection — unresolved selection, gate re-rendered', {
-        workflowRunId: run.id, selected, typedId, traceId,
+        workflowRunId: run.id, typedId, listGroup: responseData?.listGroup, traceId,
       });
       return { action: 'list_selection_invalid' };
     }
@@ -944,8 +870,8 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
   //
   // Writes the option's `value` — its identity — falling back to `action`. `label` is
   // display text and is never the contract.
-  if (stepRef.action_key && matchedOption) {
-    const actionValue = matchedOption.value ?? matchedOption.action;
+  const actionValue = gateActionValue(matchedOption, itemActionMatch);
+  if (stepRef.action_key && actionValue !== undefined) {
     setPath(localState, stepRef.action_key, actionValue);
     frame.local_state = localState;
     console.info('run-workflow: gate action written to local_state', {
@@ -1067,6 +993,44 @@ function describeShape(value) {
   if (typeof value === 'object')              return `object{${Object.keys(value).length}}`;
   if (typeof value === 'string')              return `string(${value.length})`;
   return typeof value;
+}
+
+/**
+ * matchListSelection — the row a list_selection gate's typed ID names, or why none.
+ *
+ * The user reads an ID from a table's own ID column and types it into the box under
+ * that table. `listGroup` is the table the clicked button belongs to ('' for rows with
+ * none), so an ID present in two tables at one level resolves to the table whose box
+ * was used. Only selectable rows (those carrying a secondaryAction) can match.
+ *
+ * @param {object[]} listItems  the list field's items, as buildDialog resolves them
+ * @param {string}   typedId    the typed ID, trimmed; empty or absent when nothing was typed
+ * @param {string}   listGroup  the clicked button's table group
+ * @returns {{ item: object|null, problem?: string }}
+ */
+/**
+ * The value a gate's action_key records for the button that was clicked.
+ *
+ * A list_selection row's button is its `item_action`, which lives outside options[] and
+ * special_buttons — so a row click matches no option. Without this fallback an Edit click
+ * left action_key at whatever an earlier Add New wrote, and the next step read the stale
+ * action (run 888, manage_expenses v7).
+ *
+ * @returns {string|undefined}  undefined when no button matched — nothing is written
+ */
+export function gateActionValue(matchedOption, itemActionMatch) {
+  const chosen = matchedOption ?? itemActionMatch;
+  return chosen ? (chosen.value ?? chosen.action) : undefined;
+}
+
+export function matchListSelection(listItems, typedId, listGroup) {
+  if (!typedId) return { item: null, problem: 'Enter an ID before selecting.' };
+  const inGroup = listItems.filter(item => (item.responseData?.table ?? '') === (listGroup ?? ''));
+  const item = inGroup.find(row => row.secondaryAction && String(row.id) === typedId) ?? null;
+  if (item) return { item };
+  return inGroup.some(row => String(row.id) === typedId)
+    ? { item: null, problem: `The row with ID ${typedId} can't be selected.` }
+    : { item: null, problem: `There is no row with ID ${typedId} in this list — check the ID column and try again.` };
 }
 
 /**

@@ -235,8 +235,14 @@ clicked row, or — on a `form` — the field values. It does **not** record whi
 was pressed. `on_select` routes on the click and then discards it.
 
 `action_key` is the local_state key that captures the click itself (an option's `value`
-on `choice` gates, its `action` on all others). Set it when a **later** step must know
-the gate's outcome.
+on `choice` gates, its `action` on all others; on `list_selection`, a row's click records
+its `item_action`'s `action`). Set it when a **later** step must know the gate's outcome.
+
+On `list_selection` it is the only way to tell *Add* from *Edit*: `output_key` is written
+by a row selection alone, so it is unset before the first pick and every other button
+leaves it holding the last row picked. Nor can a special button act on a picked row — it
+never carries the typed ID — so a second action on a row (delete, archive, …) is an option
+on the gate the row selection leads to.
 
 The case that requires it is a **save-and-continue loop**: *"Save persists and re-shows
 the form; Done persists and exits."* Both buttons run the **same** write and diverge only
@@ -318,9 +324,14 @@ A field's `type` states **what is being collected**, never which widget draws it
 | `date` | `"YYYY-MM-DD"` | `datepicker` | — |
 | `time` | `"HH:mm"` | `timepicker` | — |
 | `datetime` | Epoch seconds | `datetimepicker` | — |
+| `number` | A **number** — any decimal unless `decimal: false`; `min`/`max` bound it | `plain_text_input`, its rule carried in the `action_id` | — |
 
-`number`, `email`, `url` and `file` are deliberately absent — Slack supports those
-elements only in modals. Collect `text` and validate in a `js_transform`.
+Slack's `number_input` renders only in modals, so `/ui/slack` draws a `number` field as a
+text box and keeps its contract itself: `interactive.mjs` converts what is typed (a decimal
+comma included — `12,50` is 12.5) and refuses the click while it is not an acceptable number,
+so the run never resumes on one. Decimals are the default because that is what JSON Schema's
+`number` means, and what an LLM emits for an amount. `email`, `url` and `file` are absent —
+Slack supports those elements only in modals.
 
 `default` pre-fills a field, so a user amends an existing record rather than retyping
 it (`"YYYY-MM-DD"` for `date`; the option's `value` for `select`/`radio`). It is named
@@ -391,14 +402,15 @@ sees every field it asked for.
 
 ###### `list_selection` gate_type
 
-Renders all `context_key` items as a single Slack `markdown` table (`ID` plus
-one column per distinct field key across every item), plus one shared
-selection control and one Select button (labeled/styled from `item_action`)
-below it — one block for the whole list regardless of row count, no per-row
-block cost. The selection control is a `static_select` dropdown of every
-selectable row, grouped into one `option_group` per source table when a level
-spans more than one; past Slack's 100-option cap it falls back to a plain
-id text box. The table itself is uncapped under either control. **This gate_type is only concerned with rendering.** What
+Renders all `context_key` items as a Slack `markdown` table per source table
+(`ID` plus one column per distinct field key across every item), each followed
+by an ID text box and one Select button (labeled/styled from `item_action`) —
+one block per table regardless of row count, no per-row block cost. The user
+types the ID of a row from the table's own ID column. When a level spans more
+than one source table each table gets its own box and button, so an id present
+in two tables is told apart by the box it was typed in (the button carries its
+table as `responseData.listGroup`; `matchListSelection` in `run-workflow.mjs`
+resolves it). The tables are uncapped and never paged. **This gate_type is only concerned with rendering.** What
 selecting a row *does* is entirely the calling workflow's concern, expressed
 through `item_action`'s own config — never a different gate_type for a
 different action semantic (Sprint 7 Track D2: this merges what were briefly
