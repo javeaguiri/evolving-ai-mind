@@ -14,7 +14,7 @@
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { oversizedGateMessage, isPermanentRenderFailure, toSlackMrkdwn, dialogToBlocks,
-         buildRevealBlock, makeTableBudget, buildListSections } from '../../src/ui/slackbot/callback.mjs';
+         buildRevealBlock, makeTableBudget, buildListSections, markdownToBlocks } from '../../src/ui/slackbot/callback.mjs';
 import { listIdBlockId } from '../../src/ui/slackbot/form-fields.mjs';
 
 // toSlackMrkdwn — the REAL exported function (not a copy). Normalizes standard
@@ -161,67 +161,8 @@ function textToBlocks(text, contextText) {
   return blocks;
 }
 
-// ── Faithful copy of markdownToBlocks from callback.mjs ─────────────────────
-// Keep in sync with src/ui/slackbot/callback.mjs:markdownToBlocks
-const HEADER_TEXT_LIMIT = 150;
-
-function markdownToBlocks(text, contextText) {
-  const blocks = [];
-
-  const headingSegments = text.split(/^(#{1,6}[ \t]+.+)$/m);
-
-  for (const seg of headingSegments) {
-    const headingMatch = seg.match(/^(#{1,6})[ \t]+(.+)$/);
-    if (headingMatch) {
-      const level = Math.min(headingMatch[1].length, 4);
-      let headingText = headingMatch[2].trim();
-      if (headingText.length > HEADER_TEXT_LIMIT) {
-        headingText = `${headingText.slice(0, HEADER_TEXT_LIMIT - 3)}...`;
-      }
-      blocks.push({ type: 'header', text: { type: 'plain_text', text: headingText, emoji: true }, level });
-    } else if (seg.trim()) {
-      blocks.push(...markdownProseToBlocks(seg));
-    }
-  }
-
-  if (contextText) {
-    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: contextText }] });
-  }
-  return blocks;
-}
-
-// ── Faithful copy of markdownProseToBlocks from callback.mjs ────────────────
-// Keep in sync with src/ui/slackbot/callback.mjs:markdownProseToBlocks
-function markdownProseToBlocks(text) {
-  const BLOCK_CHAR_LIMIT = 2800;
-  const blocks = [];
-
-  const segments = text.split(/(```[\s\S]*?```)/);
-
-  for (const seg of segments) {
-    if (seg.startsWith('```')) {
-      const block = seg.length > BLOCK_CHAR_LIMIT
-        ? `${seg.slice(0, BLOCK_CHAR_LIMIT - 7)}...\n\`\`\``
-        : seg;
-      blocks.push({ type: 'markdown', text: block });
-    } else {
-      const paragraphs = seg.split(/\n\n+/);
-      let chunk = '';
-      for (const para of paragraphs) {
-        if (!para.trim()) continue;
-        const candidate = chunk ? `${chunk}\n\n${para}` : para;
-        if (candidate.length > BLOCK_CHAR_LIMIT) {
-          if (chunk) blocks.push({ type: 'markdown', text: chunk });
-          chunk = para.length > BLOCK_CHAR_LIMIT ? `${para.slice(0, BLOCK_CHAR_LIMIT - 3)}...` : para;
-        } else {
-          chunk = candidate;
-        }
-      }
-      if (chunk) blocks.push({ type: 'markdown', text: chunk });
-    }
-  }
-  return blocks;
-}
+// markdownToBlocks is imported from callback.mjs — a copy here would have kept testing
+// the old 2800-char cut on tables after the fix (run 908).
 
 // ── Faithful copy of groupBlocksForSlack from callback.mjs ──────────────────
 // Keep in sync with src/ui/slackbot/callback.mjs:groupBlocksForSlack
@@ -467,6 +408,58 @@ describe('markdownToBlocks — heading splitting', () => {
     assert.equal(blocks[0].level, 1);
     assert.equal(blocks[1].text.text, 'Nov 20, 2024');
     assert.equal(blocks[1].level, 2);
+  });
+});
+
+// A table was one paragraph, and every paragraph over 2800 chars was cut with '...':
+// run 908's 50-row list (3,425 chars) stopped mid-row at ~41, and every later row was gone.
+describe('markdownToBlocks — a table is one block, never cut mid-row', () => {
+  const row   = i => `| ${i} | 2026-10-17 | A title of some length | €41.90 | Dining Out / Entertainment |`;
+  const table = n => ['| ID | Date | Title | Amount | Category |', '|---|---|---|---|---|',
+                      ...Array.from({ length: n }, (_, i) => row(i + 1))].join('\n');
+
+  it('a table past 2800 chars goes out whole as one block (run 908)', () => {
+    const md     = table(50);
+    assert.ok(md.length > 2800 && md.length < 12000);
+    const blocks = markdownToBlocks(`# Expenses\n${md}`);
+    assert.deepEqual(blocks.map(b => b.type), ['header', 'markdown']);
+    assert.equal(blocks[1].text.trim(), md);
+  });
+
+  it('a table past 12000 chars is cut between rows and says how many it withheld', () => {
+    const md     = table(200);
+    const [blk]  = markdownToBlocks(md);
+    assert.ok(blk.text.length <= 12000);
+    const shown  = blk.text.split('\n').filter(l => /^\| \d+ \|/.test(l));
+    assert.equal(shown.at(-1), row(shown.length), 'the last row shown is whole');
+    assert.ok(blk.text.endsWith(`_…and ${200 - shown.length} more rows not shown — narrow the list_`));
+  });
+
+  it('a list_selection gate shows every row of a 50-row list — text directly above the table (run 908)', () => {
+    const items = Array.from({ length: 50 }, (_, i) => ({
+      id: 255 + i,
+      fields: { Date: '2026-10-17', Title: 'A title of some length', Amount: '€41.90', Category: 'Dining Out / Entertainment' },
+      secondaryAction: { label: 'Edit', action: 'edit' },
+    }));
+    const md = dialogToBlocks({ fields: [{ type: 'list', items }] }, 908)
+      .filter(b => b.type === 'markdown').map(b => b.text).join('\n');
+    assert.ok(md.length > 2800);
+    assert.ok(md.includes('| 304 |'), 'the last row is shown');
+    assert.ok(!md.endsWith('...'));
+  });
+
+  it('a short table with text is still accumulated with neighbouring prose, as before', () => {
+    const blocks = markdownToBlocks(`Summary:\n${table(3)}\n\nShort note.`);
+    assert.equal(blocks.length, 1);
+  });
+
+  it('prose around a table keeps its own blocks; long prose is still chunked at 2800', () => {
+    const prose  = 'p'.repeat(3000);
+    const blocks = markdownToBlocks(`Intro.\n\n${table(50)}\n\n${prose}`);
+    assert.equal(blocks.length, 3);
+    assert.equal(blocks[0].text, 'Intro.');
+    assert.ok(blocks[1].text.startsWith('| ID |'));
+    assert.equal(blocks[2].text.length, 2800);
   });
 });
 
