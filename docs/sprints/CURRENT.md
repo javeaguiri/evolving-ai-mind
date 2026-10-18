@@ -608,5 +608,17 @@ ID, so a second action on a row is an option on the gate the row selection leads
 `arch-step-types.md`, `PGC_StepType` upserted (1 updated). Whether it changes her behaviour is
 the open question — she had read the sentence it extends.
 
-**Next:** Javear briefs Novia with run 911 and her own item-3 quote; retest delete (AC7); then
+**Run 913 (360 v9) — delete works end to end.** Novia moved Delete onto the edit form (step 10)
+as *Delete this expense*, routed to 8a; "Delete Selected" is gone from step 8. In one run: Edit →
+Delete on **302** and **287** (the duplicates — `deleted_at` set, both gone from the reload; 284
+and 301 kept), Add New → **303**, Edit **260**. Every step completed.
+
+**One hazard left — Generation.** Delete is a `special_button`, and special buttons take no
+`condition` (only `options` do — `resolveGateOptions`), so it also shows on the **Add New** form.
+There `selected_expense_id` still holds the last row picked: after an Edit it offers to delete
+*that* row (the confirm shows its title, so not silent), and on a fresh run's first Add it is
+`null` — run 911 again. Remedy for her: Delete as an `option` with a condition on
+`edit_state.is_new`. No engine change.
+
+**Next:** Javear decides whether AC7 waits for that; then
 the session 9 list — Novia corrects memory 441, AC1/AC2 wording, item 10 spec.
