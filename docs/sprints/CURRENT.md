@@ -550,3 +550,20 @@ against live: all 11 seeded workflows match on every fingerprinted field.
 **Next session starts here:** (1) Javear's Add New test on 360; (2) Novia corrects memory 441 in
 place; (3) confirm AC1/AC2 wording against the 2026-10-10 small-grid decision; (4) item 10 spec.
 Row 316 (`fix_workflow`) left in the DB for cleanup Pass A unless Javear says otherwise.
+
+### Session 10 — 2026-10-18 — Add New on 360: an upsert with an empty key
+
+**Run 904 (`manage_expenses` v7, Add New → Save) failed at step 11:** `upsertRows failed: invalid
+input syntax for type integer: ""`. Step 9 gives a new record `edit_id: ''`; step 11 is one
+`serv_upsert` serving both Add and Edit, matching on `id`. `upsertRows` looked it up as
+`WHERE id = ''` and Postgres refused the cast; the INSERT would have failed the same way on the
+`serial` column. Rolled back — nothing written.
+
+**Execution — extend the harness (`3ce72e9`, deployed, `PGC_StepType` upserted).** An empty key
+on a new record is the standard form of a single save step, and the contract already steers
+Novia to one upsert over a lookup-plus-branch. `unkeyedInsertRow` (`table.mjs`, pure): a row whose
+`matchColumns` are all `null`/`''`/absent skips the lookup and is inserted without them, so the
+database assigns them. Contract states it and its exception (a stored `''` in a text match
+column cannot be matched). No workflow change. 1174 → **1179** tests. Run 904 left as is.
+
+**Next:** Javear re-runs Add New → Save → Edit on 360 (and `12,50` → 12.5). AC7 stays 🟡.
