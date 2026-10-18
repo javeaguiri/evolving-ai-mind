@@ -287,7 +287,7 @@ function textToBlocks(text, contextText) {
 const HEADER_TEXT_LIMIT  = 150; // Slack header block text.text max length
 const SLACK_BLOCK_LIMIT  = 50;  // Slack rejects any message with more than 50 blocks (invalid_blocks)
 
-function markdownToBlocks(text, contextText) {
+export function markdownToBlocks(text, contextText) {
   const blocks = [];
 
   // Split on heading lines first (capturing so they're isolated from prose).
@@ -316,6 +316,12 @@ function markdownToBlocks(text, contextText) {
 // markdownProseToBlocks — code-block and paragraph chunking for non-heading
 // markdown text. Extracted from markdownToBlocks so heading segments never
 // enter this path (a heading line is never chunked as prose).
+//
+// A paragraph holding a table is never cut at BLOCK_CHAR_LIMIT: Slack sets no
+// per-block limit on a markdown block, only MARKDOWN_CUMULATIVE_LIMIT across the
+// payload, and a table cut at 2800 lost every row past ~40 with no sign of it
+// (run 908). Past 2800 it goes out whole as one block — one scrolling table — up
+// to that limit; see markdownTableBlock. Under 2800 nothing changes.
 function markdownProseToBlocks(text) {
   const BLOCK_CHAR_LIMIT = 2800;
   const blocks = [];
@@ -336,6 +342,12 @@ function markdownProseToBlocks(text) {
       let chunk = '';
       for (const para of paragraphs) {
         if (!para.trim()) continue;
+        if (para.length > BLOCK_CHAR_LIMIT && containsMarkdownTable(para)) {
+          if (chunk) blocks.push({ type: 'markdown', text: chunk });
+          chunk = '';
+          blocks.push(markdownTableBlock(para));
+          continue;
+        }
         const candidate = chunk ? `${chunk}\n\n${para}` : para;
         if (candidate.length > BLOCK_CHAR_LIMIT) {
           if (chunk) blocks.push({ type: 'markdown', text: chunk });
@@ -348,6 +360,28 @@ function markdownProseToBlocks(text) {
     }
   }
   return blocks;
+}
+
+// containsMarkdownTable — a paragraph with at least one `| … |` row. A table often
+// sits directly under a line of text with no blank line between (a list's heading).
+const isTableRow            = l => /^\s*\|.*\|\s*$/.test(l);
+const containsMarkdownTable = para => para.split('\n').some(isTableRow);
+
+// markdownTableBlock — a paragraph holding a table as one markdown block, whole
+// when it fits within MARKDOWN_CUMULATIVE_LIMIT. Past that it is cut between
+// lines, never inside a row, and says how many rows it withheld — a silent cut
+// cannot be told from a complete table.
+function markdownTableBlock(para) {
+  if (para.length <= MARKDOWN_CUMULATIVE_LIMIT) return { type: 'markdown', text: para };
+  const lines = para.split('\n');
+  const note  = i => `\n\n_…and ${lines.slice(i).filter(isTableRow).length} more rows not shown — narrow the list_`;
+  let kept = lines[0];
+  let i = 1;
+  while (i < lines.length && kept.length + 1 + lines[i].length + note(i + 1).length <= MARKDOWN_CUMULATIVE_LIMIT) {
+    kept += `\n${lines[i]}`;
+    i++;
+  }
+  return { type: 'markdown', text: kept + note(i) };
 }
 
 // groupBlocksForSlack — splits content blocks into per-message groups honoring
