@@ -93,4 +93,4 @@ v1 build memory awaits Javear.
 **Next session starts here:** "start sprint" — read back this scope and its ACs for Javear's
 confirmation, then scope item 0, the detailed design (`docs/arch-web-app.md`). Open with him: whether
 the wireframes are for his review only or also to show the construction-company partner (a visual
-page if so); and his answer to Novia on deleting stale memories 422 and the v1 build memory.
+page if so). Novia deleted stale memory 422 (verified); the v1 build memory (**424**, "54 fields … within ~40") is still there.
