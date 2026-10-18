@@ -33,6 +33,10 @@ is an independent reason to track it where someone else can read it.
 | **R4** | Log hygiene | Open, carried since Sprint 7 |
 | **R5** | Aurora Serverless v2 — **an option, undecided** | Open decision |
 
+**Boundary reviews.** *Sprint 13 → 14 (2026-10-18):* no item moved during Sprint 13 and none was
+worked; R1–R5 **held**, pending Javear's confirmation. Nothing in the sprint changed R1's analysis —
+`template.yaml` gained no environment parameter, and no new literal names or SSM paths were added.
+
 ---
 
 ## R1 — `template.yaml` cannot stand up a second environment
