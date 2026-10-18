@@ -3,9 +3,10 @@
 <!-- Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). -->
 <!-- See LICENSE file in the project root for full license terms. -->
 
-Version: 4.0
-Status: Active development — Sprint 12 in progress (Track A landed)
-Last updated: 2026-09-07 (Sprint 12 Track A — the repair loop takes a patch: `propose_workflow_fix` and `simulate_workflow` accept a patch of complete steps merged by `step` identifier; deletion explicit in `removeSteps`; `baseVersion` refuses a write onto a workflow that moved; L0/L1/L2 now runs at both ends of the repair path, having run at neither)
+Version: 4.1
+Status: Active development — Sprint 13 closed 2026-10-18; Sprint 14 proposed
+Last updated: 2026-10-18 (Sprint 13 close — `gate_type` governs rendering only, no `table_edit` gate; `list_selection` picks by typed ID; a `number` form field validated in the experience layer; `fix-workflow.mjs` and the automatic TROUBLESHOOT→FIX chain retired, a failure sends `WORKFLOW_ERROR` only; an unkeyed upsert row is inserted with its key left to the database; a markdown table is never cut at the section-block 2800, only at Slack's 12,000 payload total)
+Previously: 4.0 — 2026-09-07 (Sprint 12 Track A — the repair loop takes a patch: `propose_workflow_fix` and `simulate_workflow` accept a patch of complete steps merged by `step` identifier; deletion explicit in `removeSteps`; `baseVersion` refuses a write onto a workflow that moved; L0/L1/L2 now runs at both ends of the repair path, having run at neither)
 Previously: 3.9 — 2026-08-30 (Sprint 11 close — bounded views carry their own provenance: capOutput names what it withheld and where the rest is; read_session_entry recall tool; read_workflow outline/steps projection; query_table columns; diffStepFields replacing both DIFF_FIELDS allow-lists; explicit limit on both PGC_SessionEntry loads; output_snapshot as a structural summary)
 Previously: 3.8 — 2026-08-06 — Sprint 9 close (Sprint 10 close did not bump this header) — Novia builds workflows: step-type-registry.mjs added; L0 shape check as a `level` selector on runSimulation, replacing the `skeleton` flag; register_workflow gated write tool; option_source on the human_gate contract with static/dynamic render bounds in callback.mjs; L1 numeric-index check and a template walk that descends the whole step input
 Previously: 3.7 — 2026-07-25 — Sprint 8 close — LLM replay harness: fingerprint.mjs + replay-corpus.mjs + proc/replay.mjs + slackbot/replay.mjs; awaiting_llm_break run status; resume_llm/REPLAY/REPLAY_RESUME SQS; /proc/replay endpoints; L1 gate-size check; experience/procedure partition swept clean in callback.mjs via toSlackMrkdwn, zero Slack/mrkdwn references across prompts

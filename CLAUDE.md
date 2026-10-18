@@ -243,30 +243,26 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 
 ## Current State
 
-Sprints 7–12: see `docs/sprints/sprint-07.md` through `docs/sprints/sprint-12.md` (outcome, validation, retro).
+Sprints 7–13: see `docs/sprints/sprint-07.md` through `docs/sprints/sprint-13.md` (outcome, validation, retro).
 
-**Sprint 12 closed 2026-09-22 → 19 sessions, branch `sprint/12-repair-loop-and-release`. 1044 → 1177 unit tests.** The repair loop and release readiness. **Two ACs met, two withdrawn, two moved, one carried — and that undersells it**, because as in Sprint 11 most of what shipped was never an AC.
+**Sprint 13 closed 2026-10-18 → 10 sessions, branch `sprint/13-bulk-record-edit`. 1177 → 1184 unit tests.** Editing a list of records. **One AC met, five moved, one folded** — and the engine work that shipped was again mostly unscoped, every piece of it surfaced by a run Javear made.
 
-**AC1 met twice live.** `propose_workflow_fix` now takes a patch of complete steps merged by `step` identifier, so repairing one step no longer means resubmitting all 38. The second case (session 1199) was unrehearsed: patch-mode `simulate_workflow` before proposing, `baseVersion: 5`, two steps replaced, diff exact. That removed the requirement behind the whole 2026-08-27 defect class rather than patching its instances. **AC6 met** — replay **declined** (a developer tool; it performs real SERV writes), `preview_step` **adopted** and specified as a new tool.
+**AC7 met.** `manage_expenses` (360 v9), built by Novia: add, edit and **soft delete** (`deleted_at`) confirmed from Slack (runs 905, 908, 913). One accepted gap: Delete is a `special_button`, which takes no `condition`, so it also shows on the Add form, where it fails without writing.
 
-**Unscoped, and the larger half:** the `human_gate` gate-contract repair; gate options that carry a `condition`; the L1 `expression_reads_unwritten_key` check plus `add_entity` v24 (step 2a read a `local_state.domain` nothing writes, so every reference-enrichment run got a blank domain); three simulator read-divergences fixed, leaving **every registered workflow passing L2**; `capOutput` improvements with system prompt v35/v36; `review_inventory` 359 → v8 with a working pager; Novia's own memory corrected twice.
+**Shipped, unscoped, all Execution — the harness extended to the form an LLM naturally writes:** `list_selection` picks by **typed ID**, one box per table group; a `number` form field validated in the UI layer (decimal comma accepted, decimals by default); `action_key` records a row click; a read with no limit returns every row up to 1000; an upsert row whose match columns are empty is **inserted with its key left to the database**; a markdown table past 2800 characters goes out **whole**, up to Slack's 12,000 (Slack sets no per-block markdown limit — the 2800 came from the section block). **Retired:** `fix_workflow` and the automatic repair chain on every failure — all five of its runs had failed; a failure now sends `WORKFLOW_ERROR` only and repair is Novia's `propose_workflow_fix`.
 
-**Two ACs were withdrawn because the work was wrong, not because time ran out.** AC4's premise inverted under its own probes: steps 8/8c of workflow 358 are `serv_query` **retrieval**, so **no value of either 0.4 threshold decides a merge** — the merge is decided by step 10's prompt. The specimens turned out to be **wrong alias rows**, proven by aliases 41 and 89 resolving `PAN M(.)100%INT FAM` correctly to inventory 36 while **81** (`PAN MOLD INT ALTEZ`) points at 17. AC2 was withdrawn for a different reason: release readiness had lost to code work in five consecutive sprints, so it left the sprint container entirely.
+**Decided:** no `table_edit` gate type; past a small grid (≤10 rows × ≤3 editable columns, or one column of ≤30 rows) the route is **pick one** — no paged editable grid, a spreadsheet waits for the web layer; soft delete for expenses. **Novia now runs `anthropic/claude-opus-5-5`** (`minds_eye_preferences` v7) — she cost $1.23 over 30 days on sonnet-4-6, and her recurring failure is reasoning: reading a rule, then building the opposite (runs 887, 911). `docs/perplexityLLMs.json` is a cache of the gateway's `/models`; prices are in `docs/perplexity-agent-llm`.
 
-**Release readiness is now a standing workstream — `docs/ops-release-readiness.md`**, branch prefix `ops/<slug>`, reviewed at every sprint boundary and scoped into none. It carries **R1**, the finding that `template.yaml` cannot stand up a second environment: four literal `FunctionName`s, four literal `QueueName`s, `UsagePlanName` and `RoleName: LambdaExecutionRole` all collide account-wide, and **all 12 SSM references are hardcoded to prod's paths with pinned versions** — so a dev stack would come up green, pointed at prod's database, posting as prod's Slack bot. **Aurora Serverless v2 is R5: an option, undecided.** It had been written into four places as decided, from one session's analysis, by the analyst rather than the decider; the measurement stands, the adoption does not.
+Read `docs/sprints/sprint-13.md` (outcome, retro) before adding anything to Sprint 14.
 
-**Decided 2026-09-22: no `table_edit` gate type.** A bulk record edit renders identically to the existing `form` gate, and `gate_type` governs rendering only. The mechanism already exists and had never been used — `resolveFormFields` takes `step.fields` as a `{{template}}` resolving out of `local_state`, `collectFormValues` returns every field on one click, and the live `human_gate` contract **already** tells Novia to reach for it. The ceiling is **50 blocks, not 100** (form gates are messages via `chat.postMessage`; only `text_input` uses `views.open`), which the contract states as ~40 fields with the fields-by-rows multiplication. **The one real gap is paging past that ceiling** — the contract says filter or narrow, never page, and `nav_state` appears in no seed.
+### Open Work (Sprint 14 — `docs/sprints/CURRENT.md`, PROPOSED)
 
-Read `docs/sprints/sprint-12.md` (outcome, validation, retro) before adding anything to Sprint 13.
-
-### Open Work (Sprint 13 — `docs/sprints/CURRENT.md`)
-
-1. **The bulk-edit pattern**, and the paging remedy past the ~40-field ceiling. Scope items 1–5.
-2. **`edit_budget` (357 v6)** — Novia converts it to the pattern, **then** it is retested once. Scope item 6, carried from Sprints 9 and 11.
-3. **The inventory correction workflow** — rename, merge, recategorise, fix an alias. Scope item 7, moved whole from Sprint 12 Track C. Its three specimens are live: aliases **81**, **60**, **59**. Aliases must be keyed on the **raw receipt string**, never the English rendering.
-4. **`manage_expenses`** — designed by Novia and evaluated, not built. **Two corrections must precede the build** because they destroy data during the troubleshooting session itself: the `payment_method` vocabulary mismatch (an unrepresented stored value yields no `initial_option`, so `extractFieldValue` returns **null** and the column is **blanked** on save — ~18 `debit` rows), and the hard delete against a `deleted_at` that has never been written. The missing `cancel` self-corrects (`missing_cancel_option` is a live L1 check). **Currency is not closed by converting the data** — the column is NOT NULL default `'USD'`.
-5. **Standing observations, not tasks:** AC9 (per-receipt cost falls with use), AC13 (the friend), workflow 358's never-executed v6/v7 fixes, and **pooled candidate attribution** — steps 8b/8d keep the maximum similarity across all receipt items, so the number step 10 reads is not per-pair. Real Contract defect, deliberately unworked. **Trigger: if wrong merges persist after 81, 60 and 59 are corrected, this is the cause.**
-6. **Release readiness** is *not* Sprint 13 work — `docs/ops-release-readiness.md`, reviewed at this sprint's boundary.
+1. **`manage_budget`** (= `edit_budget`, workflow 357 v7) — already one form, one save; four findings for Novia: every save writes all 21 rows, amounts are `text` (so `12,50` saves as 12), `currency: 'USD'` hardcoded in a euro household, grouping by label prefix. AC1, AC2.
+2. **A form field `group` rendering a heading where it changes** — Execution; the standard `<fieldset>`/`<legend>` form.
+3. **`preview_step`, headless, spec first** — and measuring Slack's message-size threshold. AC4.
+4. **AC3** — Novia's first cold design on Opus 5.5. Do not answer her rule-reversals with more contract text.
+5. **The inventory correction workflow** — aliases **81**, **60**, **59**, keyed on the raw receipt string. AC6.
+6. **Release readiness** is *not* sprint work — `docs/ops-release-readiness.md`, reviewed at the boundary.
 
 ### Deferred
 
