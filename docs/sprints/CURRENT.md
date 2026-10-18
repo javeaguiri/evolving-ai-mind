@@ -118,7 +118,7 @@ position is read at a glance.
 | **AC2** | ~~⬜~~ | ~~`manage_budget` uses it~~ **Moved to Sprint 14 by Javear 2026-10-18, with a clarification:** `manage_budget` is one editable field (amount) per category, ~21 rows — inside the contract's small-grid route (*one editable column of up to about 30 rows*), so it stays a single form, **not** `manage_expenses`' pick-one. Its one gap is grouping: income / discretionary / non-discretionary are label prefixes because a form field cannot carry a sub-title — a field `group` rendering a heading where it changes (Execution) | [4](#scope) | Binary, from Slack |
 | **AC3** | 🟡 | Novia selects the pattern unprompted when a design calls for it | [2](#scope), [3](#scope) | Binary, from a cold `/novia` session |
 | **AC4** | 🟡 | A gate that would exceed the ceiling fails in a way that names the cause and the remedy | [3](#scope), [5](#scope), [10](#scope), [11](#scope), [12](#scope) | Binary |
-| **AC5** | ⬜ | `edit_budget` uses the pattern and runs end to end from Slack | [6](#scope) | Binary, from Slack |
+| **AC5** | ~~⬜~~ | ~~`edit_budget` uses the pattern and runs end to end from Slack~~ **Folded into AC2 and moved to Sprint 14 (Javear, 2026-10-18): `edit_budget` (357) *is* `manage_budget`.** v7 already is the bulk-edit pattern — templated `fields` → one form → one upsert — and runs 914/915 completed from Slack | [6](#scope) | Binary, from Slack |
 | **AC6** | ⬜ | One correction workflow performs rename, merge, recategorise and alias-fix; aliases **81**, **60** and **59** are corrected through it | [7](#scope), [Track C](#track-c-moved-from-sprint-12--the-inventory-correction-workflow) | Binary, from Slack, no raw SQL |
 | **AC7** | ✅ | `manage_expenses` is built by Novia and runs end to end — add, delete and edit — with the two data-destroying corrections applied and the delete semantics decided. **Add and edit confirmed from Slack 2026-10-18 (runs 905/908); delete decided as soft delete (`deleted_at`); v8's run 911 failed (Generation), v9's run 913 deleted end to end. Met 2026-10-18, accepted by Javear with one known gap (Delete on the Add form fails without writing)** | [8](#scope), [12](#scope), [13](#scope) | Binary, from Slack |
 
@@ -637,4 +637,14 @@ route, and pick-one is only *"for any editable set larger than a small grid"*. `
 grouping gap is real and Execution: form fields are inputs only (`step-executor.mjs` `case 'form'`),
 so there is nothing to render a sub-title between them.
 
-**Next:** sprint close — dispositions for AC1, AC3, AC4, AC5, AC6 awaiting Javear.
+**`edit_budget` = `manage_budget` (Javear) — runs 914, 915 on 357 v7.** Already the bulk-edit
+pattern and working: month picker → one form of 21 amounts with subtotals → one `serv_upsert`;
+run 914 also used the save-and-refresh loop. AC5 folded into AC2; both to Sprint 14 with four
+findings, three Generation and one Execution: (1) **every save writes all 21 rows** — step 15
+builds one per category, changed or not, so AC1's *only changed rows are written* is unmet;
+(2) amounts are `text` fields read with `parseFloat`, so `12,50` saves as 12 silently — use
+`number` (item 13); (3) **step 15 hardcodes `currency: 'USD'` on every row**, in a euro
+household — the summary prints `$`; (4) grouping is a label prefix — needs a field `group`
+(Execution, above).
+
+**Next:** sprint close — dispositions for AC1, AC3, AC4, AC6 awaiting Javear.
