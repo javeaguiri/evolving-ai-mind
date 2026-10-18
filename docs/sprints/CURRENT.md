@@ -120,7 +120,7 @@ position is read at a glance.
 | **AC4** | 🟡 | A gate that would exceed the ceiling fails in a way that names the cause and the remedy | [3](#scope), [5](#scope), [10](#scope), [11](#scope), [12](#scope) | Binary |
 | **AC5** | ⬜ | `edit_budget` uses the pattern and runs end to end from Slack | [6](#scope) | Binary, from Slack |
 | **AC6** | ⬜ | One correction workflow performs rename, merge, recategorise and alias-fix; aliases **81**, **60** and **59** are corrected through it | [7](#scope), [Track C](#track-c-moved-from-sprint-12--the-inventory-correction-workflow) | Binary, from Slack, no raw SQL |
-| **AC7** | 🟡 | `manage_expenses` is built by Novia and runs end to end — add, delete and edit — with the two data-destroying corrections applied and the delete semantics decided. **Add and edit confirmed from Slack 2026-10-18 (runs 905/908); delete and its semantics outstanding** | [8](#scope), [12](#scope), [13](#scope) | Binary, from Slack |
+| **AC7** | 🟡 | `manage_expenses` is built by Novia and runs end to end — add, delete and edit — with the two data-destroying corrections applied and the delete semantics decided. **Add and edit confirmed from Slack 2026-10-18 (runs 905/908); delete decided as soft delete (`deleted_at`), v8 built it, run 911 failed (Generation) — retest pending** | [8](#scope), [12](#scope), [13](#scope) | Binary, from Slack |
 
 ---
 
@@ -587,5 +587,26 @@ carry no `responseData.table` renders an empty `# ` heading line above its table
 **Confirmed from Slack by Javear 2026-10-18:** October renders as one table, all 50 rows, ending
 at 302 — Slack opens a long table in its own scrolling viewer on click.
 
-**Next:** the delete path and its semantics (AC7); then
+**Delete semantics decided by Javear: soft delete** (`deleted_at`). Novia built it as 360 **v8**
+(session 1236, seq 91) and deleted memory **441** (443 remains — session 9's item closed).
+
+**Run 911 (v8, Delete) failed at step 9b** — `updateRows failed: invalid input syntax for type
+integer: ""`, and the confirm gate rendered `**** ()`. **Generation.** v8 put Delete on the list
+as a *special button*; only the group's Select button reads the ID box, and a special button
+never writes `output_key`, so `selected_expense_id` was `null`, 8a built an empty
+`delete_state`, and 9b filtered `id = ''`. She quoted that very contract sentence ("any special
+button leaves it holding whatever it held") in the same reply — the 887/441 pattern again: the
+rule read, the opposite built. Sound otherwise: `deleted_at` = now, step 6's `deleted_at IS NULL`
+already hides it, confirm and go-back route correctly. **Remedy for her (findings, not the fix):**
+Delete belongs on the edit form (step 10) beside Save, routed to 8a and hidden for a new record
+by an option `condition`; "Delete Selected" leaves step 8.
+
+**Her suggested rule declined** ("never pass the id through a form field…") — it restates *row
+identity is never a field* and is unrelated to the failure. **Instruction, added instead (Javear's
+call):** the `list_selection` `output_key` text gains *a special button never carries the typed
+ID, so a second action on a row is an option on the gate the row selection leads to*. Seed +
+`arch-step-types.md`, `PGC_StepType` upserted (1 updated). Whether it changes her behaviour is
+the open question — she had read the sentence it extends.
+
+**Next:** Javear briefs Novia with run 911 and her own item-3 quote; retest delete (AC7); then
 the session 9 list — Novia corrects memory 441, AC1/AC2 wording, item 10 spec.

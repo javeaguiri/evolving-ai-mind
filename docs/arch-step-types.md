@@ -240,7 +240,9 @@ its `item_action`'s `action`). Set it when a **later** step must know the gate's
 
 On `list_selection` it is the only way to tell *Add* from *Edit*: `output_key` is written
 by a row selection alone, so it is unset before the first pick and every other button
-leaves it holding the last row picked.
+leaves it holding the last row picked. Nor can a special button act on a picked row — it
+never carries the typed ID — so a second action on a row (delete, archive, …) is an option
+on the gate the row selection leads to.
 
 The case that requires it is a **save-and-continue loop**: *"Save persists and re-shows
 the form; Done persists and exits."* Both buttons run the **same** write and diverge only
