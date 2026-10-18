@@ -1170,10 +1170,10 @@
     "section": "minds_eye",
     "inject_always": false,
     "inject_for": [],
-    "version": 6,
+    "version": 7,
     "content": {
       "name": "Novia",
-      "model": "anthropic/claude-sonnet-4-6",
+      "model": "anthropic/claude-opus-5-5",
       "max_output_tokens": 10240,
       "round_budget_ms": 195000,
       "turn_limit": 30,
