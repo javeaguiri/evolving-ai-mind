@@ -27,14 +27,14 @@ is an independent reason to track it where someone else can read it.
 
 | # | Item | State |
 |---|---|---|
-| **R1** | Multiple environments in `template.yaml` | **Open — blocks R2** |
-| **R2** | A test environment parallel to prod | Open. Being confirmed 2026-09-22 |
-| **R3** | README bootstrap from a clean machine | Open, carried since Sprint 7 |
+| **R1** | Multiple environments in `template.yaml` | **Moving 2026-10-18 — first, alongside Sprint 14's web site. Blocks R2** |
+| **R2** | A test environment parallel to prod | **Moving 2026-10-18**, after R1 |
+| **R3** | README bootstrap from a clean machine | **Moving 2026-10-18** — wide release means someone else can stand it up |
 | **R4** | Log hygiene | Open, carried since Sprint 7 |
 | **R5** | Aurora Serverless v2 — **an option, undecided** | Open decision |
 
 **Boundary reviews.** *Sprint 13 → 14 (2026-10-18):* no item moved during Sprint 13 and none was
-worked; R1–R5 **held**, pending Javear's confirmation. Nothing in the sprint changed R1's analysis —
+worked. **Javear's decision: R1–R3 move forward** alongside Sprint 14's web site, on `ops/<slug>` branches, R1 first — a public-facing site should not be built against prod; R4 and R5 **held**. Nothing in the sprint changed R1's analysis —
 `template.yaml` gained no environment parameter, and no new literal names or SSM paths were added.
 
 ---
