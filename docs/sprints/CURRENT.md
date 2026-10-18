@@ -89,3 +89,8 @@ retrospective lists second: diagnosing without reading the later runs.
 "Delete me", via 11a, category 17, debit, EUR), delete (304 `deleted_at` set). Delete-on-Add is
 hidden — **confirmed from Slack by Javear** (`edit_id` is `''` on Add). Her request to delete stale memories 422 and the
 v1 build memory awaits Javear.
+
+**Next session starts here:** "start sprint" — read back this scope and its ACs for Javear's
+confirmation, then scope item 0, the detailed design (`docs/arch-web-app.md`). Open with him: whether
+the wireframes are for his review only or also to show the construction-company partner (a visual
+page if so); and his answer to Novia on deleting stale memories 422 and the v1 build memory.
