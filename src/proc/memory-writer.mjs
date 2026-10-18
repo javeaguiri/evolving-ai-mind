@@ -10,7 +10,7 @@ import { getRows, insertRow } from '../shared/serv-client.mjs';
 
 // System meta-workflows do not generate user-activity episodic memories.
 const SYSTEM_WORKFLOWS = new Set([
-  'create_domain', 'create_workflow', 'fix_workflow',
+  'create_domain', 'create_workflow',
   'diagnose_prompt_schema', 'ping_core', 'troubleshoot_workflow',
 ]);
 

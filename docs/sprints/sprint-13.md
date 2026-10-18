@@ -1,0 +1,730 @@
+# Sprint 13 — Editing a list of records
+
+**Status: CLOSED 2026-10-18.** Opened 2026-09-22, when Sprint 12 closed. Outcome and retro at the end of this file.
+Sprint 12's outcome and retro are in `docs/sprints/sprint-12.md`.
+
+**Branch:** `sprint/13-bulk-record-edit`
+
+> **Sprint 12's retro asks this sprint not to grow.** Two sprints running have scoped five and
+> seven acceptance criteria and delivered two apiece, with most of the real work unscoped. This
+> sprint opens with six criteria, three of them inherited work that is already designed. That is
+> the ceiling, not the floor.
+
+> Release readiness is **not** in this sprint. It is a standing workstream in
+> `docs/ops-release-readiness.md`, reviewed at this sprint's boundary rather than scoped into it.
+
+---
+
+## Sprint Goal
+
+**Make "change several records and save once" a thing a workflow can do, without inventing a new
+way to render a gate.**
+
+There is no good way to edit a list of records today. Every correction is one record at a time
+through a gate that reloads between each. `manage_budget` wants it — twelve categories, one
+editable amount each — and so does the edit branch of `manage_expenses`.
+
+---
+
+## The decision this sprint rests on: no new `gate_type`
+
+**A "table edit" gate type was proposed and rejected on 2026-09-22.**
+
+`gate_type` governs **rendering only**. The test is whether the thing renders differently from
+what already exists, and it does not: a bulk edit is the existing `form` gate with more fields.
+The `form` gate's own contract says so (`step-executor.mjs:505-509`):
+
+> *"form — collect any number of typed values in one gate. **Replaces what would otherwise be a new
+> gate_type per widget** (select_one, select_many, date_input, …): a widget is a field type, not a
+> gate type."*
+
+Two gate types rendering identically would let Novia pick either with nothing downstream
+differing — a distinction with no mechanism behind it. The seven existing types
+(`list_selection`, `form`, `text_input`, `confirm`, `review_object`, `choice`,
+`followup_prompt`) each earn their own rendering.
+
+**Where a change would be legitimate, if this sprint decides it wants one:** a header row, aligned
+columns, or the new Block Kit data table block above the inputs are all **rendering**. Those are a
+new widget row in the renderer or a new field `input_type` — `callback.mjs:1235` and `1598` both
+say so explicitly — and still never a new `gate_type`.
+
+---
+
+## What already exists, and has never been used
+
+The save-all-at-once mechanism is **already built**. Nothing in system code needs to change for
+the basic case:
+
+| Piece | Where | What it gives |
+|---|---|---|
+| `resolveFormFields` | `step-executor.mjs:386-392` | `step.fields` accepts a `{{template}}` resolving out of `local_state` — **the field list is data, not authoring** |
+| `collectFormValues` | `form-fields.mjs:58-76` | Returns *every* rendered form field's value, keyed by the name encoded in its `block_id`, on one button click |
+| The block guard | `callback.mjs:287, 579-600` | `SLACK_BLOCK_LIMIT = 50` with an input-aware message when a gate exceeds it |
+
+So a `js_transform` emits one field per editable cell, the gate renders them, one click returns
+all of them, and a second `js_transform` diffs against the loaded rows and writes only what
+changed.
+
+**The ceiling is 50, not 100.** Form gates go out as messages via `chat.postMessage`; Slack caps a
+message at 50 blocks. Modals allow 100, but only `text_input` gates use `views.open`. That is
+**~45 editable cells** after the message and header blocks, stacked vertically — no column
+alignment, no tabbing across, no pasting a range.
+
+**Keep the row-id encoding out of system code.** The workflow's own `js_transform` encodes and
+decodes the field name that carries a row id, so it stays workflow-local rather than becoming a
+proprietary syntax the harness has to learn.
+
+---
+
+## Scope
+
+| # | Item |
+|---|---|
+| **1** | The bulk-edit pattern as a reference workflow: load rows → `js_transform` builds `fields` → `form` gate → `js_transform` diffs → iterator writes only changed rows |
+| **2** | ~~The `human_gate` contract gains the dynamic-`fields` example~~ **ALREADY DONE — verified live 2026-09-22.** The contract already states that `fields` takes a `{{template}}`, frames it as *one field PER RECORD the workflow just read*, says *reach for it whenever the number of things to edit is known only at runtime*, and gives the ceiling **with the multiplication rule**: *"~40 rows at one field each but only ~13 at three"* |
+| **3** | **The real gap: what to do past the ceiling.** ✅ **CONTRACT LANDED 2026-09-26** — `gate_type` now opens with a seven-question decision tree (first yes wins, question 7 answering *then it is not a gate — use notify*), and `fields` carries the four routes past the ceiling (narrow, page, pick one, refuse) plus the paging mechanism drawn from `review_inventory` 359 v8. The row description stops describing the types a second time and states only what all gates share. ⬜ **The L1 half is outstanding** — see scope item 9 |
+| **4** | Apply it to `manage_budget` |
+| **5** | ~~Decide whether the >40-cell case pages, narrows, or refuses — and make the refusal say which~~ **DECIDED 2026-10-10 by Javear:** an editable grid is kept only for small sets; past that the route is **pick one** — a numbered list, type the row number, then a form for that one record (item 12). Paging an editable grid is dropped. Past what one list can show, **narrow**. A real spreadsheet edit is deferred to the planned web experience layer (`docs/arch-home-brain.md`). The grid threshold lands in the contract under item 12 |
+| **6** | **`edit_budget` (357 v6), moved from Sprint 12 Track E.** Novia converts its edit flow to the bulk-edit pattern, **then** it is retested end to end from Slack — once, against the design that will survive. Carried from Sprint 9 and Sprint 11 |
+| **7** | **The inventory correction workflow, moved whole from Sprint 12 Track C — see the section below.** Three of its four verbs are record edits over the same two tables, so it is the bulk-edit pattern's third consumer and its hardest test |
+| **8** | ✅ **DONE 2026-10-18 — 360 v9: add, edit and soft delete confirmed from Slack (runs 905, 908, 913); accepted by Javear.** **`manage_expenses`, carried from Sprint 12 Track F.** Designed and evaluated, not built. **Two corrections must be sent before the build** — the `payment_method` vocabulary mismatch and the hard delete both destroy data during the troubleshooting session itself |
+| **9** | ~~**`gate_too_many_fields` cannot see the case it exists for.**~~ **FOLDED INTO ITEM 10, 2026-10-10.** The simulator is pure — it fetches no data — and a `fields` array built by a `js_transform` loop has no length until it runs on real rows, so a static check can only say *unknowable*. Workflow 360 v1 registered 54 fields past exactly this blind spot. Counting against real data through the real renderer is item 10. Original text: **`gate_too_many_fields` cannot see the case it exists for.** It guards `Array.isArray(s.fields)`, so a `"{{template}}"` fields reference is skipped — and that is the only shape whose length is a row count. `gate_option_set_unbounded` already solved the identical problem one field apart (walk back to every writer of the key, refuse an unbounded `serv_*`, warn where the length is unknowable); reuse it against `MAX_GATE_FIELDS`. Its current remedy text also prescribes one-record-at-a-time editing, which is the design this sprint replaces. **Held until Novia's feedback** — her behaviour against the new contract says whether the text alone suffices |
+
+| **10** | **`preview_step`, headless, with gate size measured — added 2026-10-10.** The tool adopted in Sprint 12 (`docs/backlog.md`, "Step preview") and never built: one step evaluated against a chosen state — hand-written or lifted from a run — through the real `buildDialog` → `dialogToBlocks`, returning for a `human_gate` the **block count and the payload size** alongside the resolved fields and options. Slack does not publish its size limit, so measuring before registering is the only dependable guard; run 872 was diagnosed by doing exactly this by hand. Spec-first: `openapi.yaml`, a tool row in `minds_eye_tool_schemas`, `docs/arch-minds-eye.md`. Headless only — the rendered form stays in the backlog |
+| **11** | **Measure Slack's real message-size threshold — added 2026-10-10.** `msg_blocks_too_long` fired at ~35,800 characters of block JSON (run 872) against a documented 40,000; developers report it near 13,000 and varying with content. Post a few form-shaped test messages of increasing size **to a test channel Javear names** (an outward post — needs his go-ahead per run) and record where it breaks, so G1 in the `human_gate` contract and item 10's warning can state a measured number rather than none |
+| **12** | **`list_selection` picks by typed ID — added 2026-10-10.** 🟡 **CODE `26698b8` + CONTRACT `332c739` DEPLOYED AND UPSERTED 2026-10-10** (live `human_gate` row verified equal to the seed). **`/m list` confirmed working from Slack by Javear 2026-10-15**; the two-table drill-down and wrong/empty-ID cases not yet reported separately. Replaces the table-plus-dropdown pick with the table and an ID **text box** into which the user types the row's **database ID**, already the table's first column — decided by Javear 2026-10-10 over a renumbered `#` column. (`number_input` was decided and then withdrawn the same day: Slack renders it only in modals, and a list gate is a message.) For every consumer, **including `list_entity`'s drill-down**. **A level spanning two tables gets one box and Select button per table** (decided by Javear), so an ID present in both is told apart by the box it is typed in. Resolved by `matchListSelection` (`run-workflow.mjs`); an empty, unknown or non-selectable ID re-renders the gate saying which. No paging: the table is one markdown block, bounded by Slack's 12,000-character markdown total (~120–150 rows); past that, narrow. Execution domain — `callback.mjs` rendering, `run-workflow.mjs` matching — no new `gate_type`. **Contract half:** the `human_gate` row's `list_selection` text, and the decision tree gains the grid threshold — measured per-field costs from run 875: text ~235, date ~190, 4-option select ~545, 22-option select ~1,760 characters; budget ≤12,000 until item 11 measures it; grid only for ≤10 rows × ≤3 editable columns with no row dropdown past ~5 options, or one column up to ~30 rows |
+| **13** | **A `number` form field — added 2026-10-10.** ✅ **DONE 2026-10-18 — `12,50` saved as 12.5 from Slack (Javear, runs 905/908).** **CODE `26698b8` + CONTRACT `332c739` DEPLOYED AND UPSERTED 2026-10-10** (live `human_gate` row verified equal to the seed). **Default flipped to decimals 2026-10-16 (`3549ae6`, `cfc044e`)** after run 888 refused an amount; `decimal: false` for whole numbers. **First live use run 888 — the refusal path works; `12,50` saved 2026-10-18.** **Built in the experience layer, by Javear's decision:** `/proc` declares a number and receives a number; how it is typed and checked is the display's job, and a web page gets it from `<input type="number">`. In Slack (no `number_input` in a message) the field is a text box whose `action_id` carries its rule; `interactive.mjs` converts it, and an invalid entry gets an ephemeral message and **never resumes the run**, leaving the gate and what was typed intact. Original scope text: The `human_gate` contract's field types stop at `text … datetime`; there is no `number`, and `buildInputElement` has no case for one, so every numeric field in a generated form is a text box (workflow 360 v3: the period form's Year, the grid's Amount — the cause of `12,50` saving as 12). Execution domain, extend-the-harness: `{ type: "number", decimal?, min?, max? }` renders as Slack's `number_input`; resume returns a JS number, and — since Slack validates only on modal submit — a non-numeric or out-of-range entry re-renders the gate saying so. **A decimal comma is accepted: `12,50` reads as 12.50** (decided by Javear 2026-10-10). Contract: `number` joins the field-type list with *a numeric value is a number field, never text*; L0 follows from the contract. Shares the `number_input` rendering with item 12 — built together, separate commits |
+
+## Out of scope
+
+| Item | Why |
+|---|---|
+| A `table_edit` gate type | Decided against above |
+| The data table block for the read side | A rendering change worth having, but it is a separate decision from making bulk edit work at all |
+| A web experience layer | The only option that delivers real spreadsheet editing, and the only one that needs its own authentication. Design it when ~45 vertical cells has been used enough to say whether it is painful or merely inelegant |
+| Release readiness | `docs/ops-release-readiness.md` |
+
+---
+
+## Acceptance Criteria
+
+**Final, 2026-10-18 (sprint closed).** ⬜ not started · 🟡 in progress · ✅ met · ~~struck~~ withdrawn or moved.
+**This table is updated when a criterion's state changes, not at close** — it is how the sprint's
+position is read at a glance.
+
+| # | Status | Criterion | Scope | Threshold |
+|---|---|---|---|---|
+| **AC1** | ~~⬜~~ | ~~A single gate edits several records and one click saves them all; only changed rows are written~~ **Moved to Sprint 14 (Javear, 2026-10-18).** The single gate works — `edit_budget` 357 v7, runs 914/915 — but every save writes all 21 rows, so *only changed rows are written* is unmet | [1](#scope) | Binary, from Slack |
+| **AC2** | ~~⬜~~ | ~~`manage_budget` uses it~~ **Moved to Sprint 14 by Javear 2026-10-18, with a clarification:** `manage_budget` is one editable field (amount) per category, ~21 rows — inside the contract's small-grid route (*one editable column of up to about 30 rows*), so it stays a single form, **not** `manage_expenses`' pick-one. Its one gap is grouping: income / discretionary / non-discretionary are label prefixes because a form field cannot carry a sub-title — a field `group` rendering a heading where it changes (Execution) | [4](#scope) | Binary, from Slack |
+| **AC3** | ~~🟡~~ | ~~Novia selects the pattern unprompted when a design calls for it~~ **Moved to Sprint 14 (Javear, 2026-10-18), not evidenced:** she read the contract only when prompted, and twice built against a rule she had read (runs 887, 911). Her first cold design on `claude-opus-5-5` is the test | [2](#scope), [3](#scope) | Binary, from a cold `/novia` session |
+| **AC4** | ~~🟡~~ | ~~A gate that would exceed the ceiling fails in a way that names the cause and the remedy~~ **Moved to Sprint 14 (Javear, 2026-10-18)** with items 10 (`preview_step`) and 11 (measure Slack's size threshold). The contract half landed (decision tree, grid threshold, G1–G5); runtime `msg_blocks_too_long` is reported, not retried (`1335f2b`) | [3](#scope), [5](#scope), [10](#scope), [11](#scope), [12](#scope) | Binary |
+| **AC5** | ~~⬜~~ | ~~`edit_budget` uses the pattern and runs end to end from Slack~~ **Folded into AC2 and moved to Sprint 14 (Javear, 2026-10-18): `edit_budget` (357) *is* `manage_budget`.** v7 already is the bulk-edit pattern — templated `fields` → one form → one upsert — and runs 914/915 completed from Slack | [6](#scope) | Binary, from Slack |
+| **AC6** | ~~⬜~~ | ~~One correction workflow performs rename, merge, recategorise and alias-fix; aliases **81**, **60** and **59** are corrected through it~~ **Moved to Sprint 14 (Javear, 2026-10-18), not started** | [7](#scope), [Track C](#track-c-moved-from-sprint-12--the-inventory-correction-workflow) | Binary, from Slack, no raw SQL |
+| **AC7** | ✅ | `manage_expenses` is built by Novia and runs end to end — add, delete and edit — with the two data-destroying corrections applied and the delete semantics decided. **Add and edit confirmed from Slack 2026-10-18 (runs 905/908); delete decided as soft delete (`deleted_at`); v8's run 911 failed (Generation), v9's run 913 deleted end to end. Met 2026-10-18, accepted by Javear with one known gap (Delete on the Add form fails without writing)** | [8](#scope), [12](#scope), [13](#scope) | Binary, from Slack |
+
+---
+
+## Track C (moved from Sprint 12) — the inventory correction workflow
+
+**Carried from Sprint 11 AC2, unstarted.** Four verbs over the same two tables, designed as **one**
+workflow rather than four:
+
+1. **Rename** an item. **The original specimen is already corrected** — `PGD_Inventory` 25 reads
+   *"Cheap Wine (tinto de verano)"* as of 2026-09-13, not *"Ink Cartridge"*, and item 69 is gone.
+   **Confirm whether those went through `review_inventory` from Slack**: AC6 requires no raw SQL,
+   so if they did, two verbs are already evidenced and need only writing down. If they did not,
+   a fresh specimen is needed
+2. **Merge** a duplicate into another item, moving quantities and aliases with it — inventory 69
+   *Bread Loaf* duplicates 39 *Baguette*, and alias 86 points at the duplicate, so it is
+   self-reinforcing
+3. **Recategorise** an item, and **aggregate** two `PGD_InventoryCategory` rows meaning the same
+   thing
+4. **Fix an alias** — repoint or delete one resolving to the wrong product. **Three live
+   specimens, moved here from Track D 2026-09-22** — these are the test data, not invented cases:
+   **81** `PAN MOLD INT ALTEZ` → 17 *Rustic Sliced Bread*, which should be 36 *Whole Wheat
+   Sandwich Bread* (aliases 41 and 89 already resolve there correctly, which is what proves 81
+   wrong by the system's own standard); **60** `PANU BOL MIN SELEX` → 17; **59**
+   `ARANDANOS DESH ALT` (*deshidratados*, dried) → 6 *Blueberries 300g*, which is fresh
+
+**This is containment, not cleanup.** An alias hit is precisely the path that avoids human review,
+so a wrong alias applies itself silently on every future shop.
+
+**Where it has already reached the user — read live 2026-09-22.** Item 17 *Rustic Sliced Bread*
+stands at **2 bags**, item 36 *Whole Wheat Sandwich Bread* at **1**; both are category 15 with
+`consumption_rate_per_day` 0.2. Every shop carrying that bread as `PAN MOLD INT ALTEZ` increments
+the wrong one, and `review_inventory` computes the shopping list from those quantities — **so the
+shopping list has been naming the wrong bread.** Small enough to go unnoticed, which is why it went
+unnoticed rather than why it was not happening. It also compounds: alias 81 now matches at
+**0.9978**, so it wins every future comparison and arrives at the gate labelled HIGH.
+
+**Non-negotiable:** aliases are keyed on the **raw receipt string**, never the English rendering.
+Keying the wine's correction on "Ink Cartridge" would make a real ink purchase increment the wine.
+
+**Built by Novia**, and now through the patch loop. This is the sprint's second data point on
+whether she handles maintenance work as well as greenfield.
+
+**Acceptance:** AC6 below.
+
+---
+
+## What Sprint 12 left, and where it went
+
+**Nothing is carried loose.** Every inherited item is a scope row above with an AC against it:
+Track C → item 7 / AC6, Track E's `edit_budget` → item 6 / AC5, Track F's `manage_expenses` →
+item 8 / AC7. **Track D is closed, not carried** — its premise inverted and its alias work now
+rides with Track C. **Release readiness is not carried either** — it is a standing workstream at
+`docs/ops-release-readiness.md`, reviewed at this sprint's boundary.
+
+**`manage_expenses` is sequenced last for a reason**: its edit branch is a consumer of this
+sprint's pattern, so building it before the pattern exists means building it twice. Its two
+corrections must still be sent to Novia before any build starts.
+
+**Standing observations — record when they happen, do not schedule:** AC9 (per-receipt cost falls
+with use, protocol pre-registered in `sprint-10.md`), AC13 (the friend), workflow 358's v6/v7 fixes
+which have still never executed, and **pooled candidate attribution** — whose trigger is *wrong
+merges persisting after aliases 81, 60 and 59 are corrected*.
+
+---
+
+## Session Notes
+
+### Session 1 — 2026-09-22 — Sprint 12 closed, Sprint 13 opened
+
+**No code. Nothing deployed, nothing upserted** — main still reflects what is running in prod.
+
+**Sprint 12 closed and merged** (`4307657`). 19 sessions, 1044 → **1177** tests. Two ACs met, two
+withdrawn because the work was wrong rather than late, two moved here, one carried. Outcome and
+retro in `docs/sprints/sprint-12.md` — **read its retro before adding anything to this sprint.**
+
+**This sprint was scoped from a research question, not a backlog row.** *Can Slack do a
+spreadsheet-style edit, and if not, can we build our own widget?* Answer: **no to both.** Block Kit
+is the entire vocabulary available to an app — no custom HTML, JS or iframe; the only escape is a
+button opening an external page. The **data table block** (20 May 2026) is a real grid at 201 rows
+× 20 columns but takes only `raw_text` / `raw_number` / `rich_text`, holds **no inputs, selects,
+buttons or checkboxes**, and is unsupported in modals. **Canvases** hold editable markdown tables
+but round-trip as unschema'd markdown with no submit event bound to a record set.
+
+**The finding that set the scope: the mechanism already exists and has never been used.** A bulk
+edit is the `form` gate with a templated `fields` array — `resolveFormFields`
+(`step-executor.mjs:386-392`) takes `step.fields` as a `{{template}}`, `collectFormValues`
+(`form-fields.mjs:58-76`) returns every field on one click. And the live `human_gate` contract
+**already** tells Novia to reach for it, frames it per record, and states the ceiling with the
+fields-by-rows multiplication. **Scope item 2 was written before that was checked and is struck
+through.** The one real gap is item 3: the contract's only remedy past the ceiling is *filter or
+narrow* — it never says **page**, and `nav_state` appears in no seed, though `review_inventory`
+359 v8 proved the pattern works.
+
+**Three decisions taken, all on the record:** no `table_edit` gate type (now an invariant in
+`architecture.md` §1.5); release readiness leaves the sprint container for
+`docs/ops-release-readiness.md`; and `template.yaml` cannot stand up a second environment — R1,
+which blocks R2. **Aurora was reopened as an option** after being written into four places as
+decided by the analyst rather than the decider.
+
+**Process change, from the user:** the AC table is a live status board — status column, a link to
+the delivering scope item, updated when state changes rather than at close. On the lifecycle and
+the enforcement list in `CLAUDE.md`, and merged to main separately (`083f942`) so the retro is
+visible there.
+
+**Next session starts here:** draft the paging remedy for the `human_gate` `PGC_StepType` contract
+(scope item 3 → AC4), since it is the only real gap and it is what makes a Novia session test
+something complete. Then the two `manage_expenses` corrections. **Before AC6, confirm whether
+`PGD_Inventory` 25's rename and 69's merge went through `review_inventory` from Slack** — both are
+already done in the data, and AC6 requires no raw SQL.
+
+### Session 2 — 2026-09-26 — the gate-type decision tree, and paging
+
+**Seed + upsert only. No code, nothing deployed** — `PGC_StepType.human_gate` upserted, live row
+verified byte-equal to the seed. 1177 tests pass.
+
+**The session's real finding was structural, and it came from a challenge to the plan.** The paging
+text was first drafted as an appendix to the `fields` description. Asked where a gate-type *decision
+tree* actually lives, the answer turned out to be: **nowhere clean.** The `human_gate` row described
+its seven types **twice** — once in the row `description`, once in `gate_type` — neither pass shaped
+as a decision, with the constraints in a third place.
+
+**`PGC_StepType` is the tree, by design.** `workflow_convention_bridge` carries no gate-type
+guidance deliberately and delegates twice: *"Which gate types write, and what value they write, is
+declared on the human_gate row in PGC_StepType"*, and in its index, *"PGC_StepType — step fields,
+gate types, routing options — query_table"*. Novia reads this row. So the row had to become the
+tree rather than gain an appendix.
+
+**Landed:** `gate_type` opens with seven ordered questions on what the gate must DO, first yes wins,
+each naming what it writes — and question 7 answers *then it is not a gate at all: use a notify
+step, which does not suspend*. The row `description` stops re-describing the types and states only
+what all gates share, including that **local_state survives the suspension**, which is what makes a
+re-entered gate possible. `fields` gains the four routes past the ceiling — narrow, page, pick one,
+refuse, *"silence is not a fifth route"* — and the paging mechanism as engine facts: a **derived**
+page size (ceiling ÷ fields per row), a unique-column tie-break, first/last-page flags as truthy
+strings because `condition` routes on truthiness, `condition` on Previous/Next, one fold step
+reading `action_key`, and a back edge to the slice step. All read out of `review_inventory` 359 v8,
+which proved it live.
+
+**The one clause 359 does not cover** is the editable page: 359's pager carries a *selection*, a bulk
+edit carries *typed values*. A page turn that neither saves nor re-applies them lets the form's own
+untouched-field-submits-its-default rule **revert the user's pending edits** from the stored row.
+
+**`create_workflow` is out of scope as dead path — confirmed, not assumed.** `design_workflow_dialogs`
+v19 has three live defects (its "Common Gate Patterns" table omits `form`, `list_selection` and
+`followup_prompt`; the table, `{{human_gate_dialog_rules}}` and the closing line are each duplicated
+verbatim; and an orphaned JS fragment is spliced onto a mid-prompt terminator). All real, all
+unfixed: workflow 2 last ran **2026-07-25** and `fix_workflow` 316 last ran 2026-09-10 and failed.
+Novia took both over, so no user is affected and there is no warrant.
+
+**One suspicion raised and disproved in-session.** `PGC_SystemContext.step_type_contracts` holds a
+second copy of the whole `human_gate` contract, **10 fields stale** — no `fields`, no `on_cancel`, no
+`item_action`. It is **shadowed, not live**: `llm-harness.mjs:274` re-fetches fresh from
+`PGC_StepType` and `assembleInstructions` spreads `resolvedInput` last. Verified against the real
+assembled prompt in session **1118**, which carries `fields`, `on_cancel` and `action_key`. Dead
+weight; a backlog row at most.
+
+**Next session starts here:** Novia's feedback against the new contract — does she reach for the
+pattern unprompted (AC3), and does she page when a set will not fit? **Scope item 9 is deliberately
+held** until that answer, because her behaviour says whether the contract text alone suffices or the
+L1 check has to say it too.
+
+**Incidental, for AC6:** `review_inventory` 359 v8 already carries merge (steps 14–15f, including
+alias re-pointing) and edit/delete (8–11f). Two of Track C's four verbs may already be built, which
+reframes item 7 from *write it* to *test and extend it*. Run history not yet checked — a lead, not
+the confirmation this sprint asks for.
+
+### Session 3 — 2026-10-06 — off-sprint: the Home Brain proposal and the cleanup inventory
+
+**No sprint work. No code, nothing deployed, nothing upserted. No AC changed state.** The session
+went to two pieces of work outside this sprint, each on its own branch so this one stays clean:
+
+- **`design/home-brain`** — `docs/arch-home-brain.md`, from Javear's proposal deck
+  (`docs/evolving-ai-home-brain-proposal-v1.pptx`, not yet presented). The system stays single-user;
+  a web console is designed as a second experience provider beside Slack: navigation and domain
+  drill-down over REST, workflow execution pushed by the backend exactly as for Slack, direct record
+  edits under a field-level edit policy in `PGC_Schema`, and Novia creating domains. Multi-tenancy is
+  a direction (flexible JSON records in SERV), not a plan. **One link back to this sprint:** the
+  bulk-edit pattern's procedure-layer half carries over unchanged — a web renderer shows the same
+  `fields` array as an editable grid — so nothing in scope here is wasted by that direction.
+- **`cleanup/dead-creation-path`** — `docs/cleanup-creation-path-inventory.md`, a read-only inventory
+  of the workflow- and domain-creation paths Novia supersedes. Nothing deleted. **Decision D1 blocks
+  Pass A:** the `TROUBLESHOOT_WORKFLOW` → `FIX_WORKFLOW` chain fires automatically on every workflow
+  failure, so `fix_workflow` cannot simply be removed.
+
+A commit of the design doc landed here by mistake and was reverted (`8325091`); the net diff of this
+branch is unchanged.
+
+**Next session starts here — the bulk-record edit, with a Novia-session decision first.** Session
+**1218** is the only open Novia session: the `manage_expenses` design (scope item 8 / AC7), 8 turns,
+~100K characters, last touched 2026-09-20 and parked until she has bulk-edit instructions. **A fresh
+session is advisable:** 1218 predates the `human_gate` contract rewrite of 2026-09-26, so the
+contract text in her context is the old one, and the transcript is large enough to crowd the new
+work. **Recommended:** ask Novia in 1218 to write her `manage_expenses` design and its open
+corrections to memory, then open a new session that starts from that memory plus the two
+data-destroying corrections (`payment_method` vocabulary, hard delete). The raw transcript is the
+fallback if her summary loses something. **Sequencing still holds:** the bulk-edit pattern (AC1,
+`edit_budget` / inventory edit) comes before `manage_expenses`, which consumes it.
+
+### Session 4 — 2026-10-10 — `manage_expenses` built, four engine fixes, G1–G5
+
+**Three engine fixes deployed, plus one classification fix; contract seed upserted.** 1177 → **1181**
+tests. Commits `3c20162`, `87145ef`, `1335f2b` deployed with `sam deploy`; `PGC_StepType.human_gate`
+upserted and verified equal to the seed.
+
+**Novia built `manage_expenses` in a fresh session, 1236** (session 1218 retired: it predated the
+2026-09-26 contract). Workflow **360**, now **v2**. Javear briefed her as a non-technical user would
+— no engine terms — and she:
+- **read the data unprompted** — distinct `payment_method` values, the month's row count. That is
+  Track F's second question answered yes;
+- designed the bulk edit as a templated-`fields` form with paging, per-page save, two blank rows for
+  new records, stored payment values preserved, the default currency read from a record at runtime;
+- **opened the `human_gate` contract only when Javear's message asked her to check the screen
+  limit** (turn 12's stated reason quotes it). So this session is **not AC3 evidence** — the pattern
+  was asked for in user terms, and the decision tree was read on prompting;
+- then **registered 54 fields while knowing the ceiling was ~40**, recording it as "marginal; monitor".
+  The simulator passed it, because a data-built `fields` array has no static length (item 9 → 10).
+
+**Four engine defects surfaced, all Execution, all fixed:**
+1. An inline form field's `default`/`placeholder` were not template-resolved while `label` was —
+   `{{default_year}}` rendered literally (`3c20162`). Her v1 was right; v2 is a workaround that also
+   works.
+2. An option valued `''` (HTML's standard *none*) made Slack reject the message (run 870). Rendered
+   as `EMPTY_OPTION_VALUE`, read back as null (`3c20162`).
+3. An empty reveal-table cell made Slack reject the message (run 871 — the Payment column, blank on
+   88 rows). Rendered as an em dash (`87145ef`).
+4. `msg_blocks_too_long` was retried silently every 30s instead of reported (run 872) — added to
+   `PERMANENT_SLACK_ERRORS` (`1335f2b`).
+
+**Run 872's real finding: a gate has a size limit as well as a count limit.** 45 blocks — under 50 —
+but ~35,800 characters of block JSON: 14 per-row dropdowns 16,100 (each repeating all 22
+categories), the collapsed "Show all" reveal 12,400. Slack documents 40,000; reports put it near
+13,000 and content-dependent. Measured by rebuilding the gate from run 872's saved `local_state`
+through the real `buildDialog` → `dialogToBlocks` — which is item 10's tool, by hand.
+
+**G1–G5 approved and upserted into the `human_gate` contract**, generic wording: G1 the two-limit
+ceiling (choice fields cost options × rows; reveals cost in full collapsed; no published threshold);
+G2 a reveal must not repeat what a form's fields show; G3 row identity is never a field; G4 an edit
+field's options must cover every stored value, and an empty/optional choice only on a nullable
+column; G5 a save returns to the page saved.
+
+**Still open on workflow 360 v2 — Novia's to fix (Generation):** the editable ID field (54→42 fields
+with it, and a typed ID overwrites another record), `(no category)` on a NOT NULL column, Previous/
+Next dropping unsaved edits, Save returning to page 1, `12,50` parsing as 12, and the size — drop the
+reveal, fewer rows with Category in the grid. Runs **870, 871, 872** are parked; not touched.
+
+**Backlog candidate, not yet written:** `local_state` is `jsonb`, which reorders object keys
+(shortest first), so a reveal table built from records loses the column order the workflow wrote.
+
+**Next session starts here:**
+1. **Brief Novia in session 1236** with the open list above. G1–G5 are now in the contract she reads
+   — ask her to re-read the `human_gate` row before revising, and see whether she does it unprompted.
+2. **Item 11** — get a test channel from Javear, measure the size threshold.
+3. **Item 10** — spec `preview_step` (headless + size) in `openapi.yaml` / `arch-minds-eye.md` before
+   any code.
+
+### Session 5 — 2026-10-10 — run 875, and pick-one replaces the paged grid
+
+**Docs only so far. Nothing deployed, nothing upserted.**
+
+**Run 875 (`manage_expenses` 360 v3) failed `msg_blocks_too_long` — Generation, Novia's.** Rebuilt
+from the run's saved state through the real `buildDialog` → `dialogToBlocks`: **44 blocks, 23,377
+characters** — under both documented limits, and still rejected. The 14 per-row dropdowns are
+16,127 of it (each Category select repeats 22 options, ~1,760 characters). v3 dropped the reveal
+(G2) but kept the editable ID field (G3) and `(no category)` on a NOT NULL column (G4). The engine
+reported the refusal at once, as `1335f2b` intended. The system's share is the blind spot items
+10 and 11 exist for: she had no way to measure before registering. Run 875 is parked, untouched.
+
+**Decided by Javear: an editable grid only for small sets; past that, pick one record from a
+numbered list and edit it in its own form; no paging of an editable grid; a true spreadsheet edit
+waits for the web experience layer.** Item 5 closed by that decision; item 12 added for the
+numbered `list_selection`, applied to every consumer including `list_entity`. Per-row buttons were
+rejected on the record — Sprint 7 Track D measured them failing above ~8 rows, which forces paging —
+and radio is capped at 10 options, which forces it too.
+
+**Open design question for `docs/arch-home-brain.md`:** a workflow that chooses pick-one *because
+Slack cannot fit a grid* is shaped by one experience provider, and the web console inherits that
+shape rather than a spreadsheet. Whether a workflow declares *edit this set* and each provider
+chooses grid or pick-one is undecided.
+
+**Item 12 then went through three decisions in one session**, all Javear's: the row is picked by
+its **database ID**, not a renumbered `#`; a level showing two tables gets **one ID box per table**;
+and the box was to be a `number_input` — **withdrawn** when Slack's reference showed it renders only
+in modals. My recommendation of it was made without checking, against a note in
+`docs/workflow-schema.json` that already said so. **Item 13 added**: there was no `number` form
+field at all, so every numeric field Novia built was a text box (360 v3's Year and Amount). **Put
+in the experience layer by Javear's decision** — a web page would do it natively, so the parsing
+is Slack's compensation, not procedure logic. The same argument applies to the required-field
+check; backlogged, not moved.
+
+**Landed `26698b8`** (code, 1181 → 1197 tests) and `332c739` (contract seed, docs, backlog row).
+**Deployed (`sam deploy`) and `PGC_StepType` upserted the same day**; the live `human_gate` row is
+byte-equal to the seed.
+
+**`docs/workflow-schema.json` evaluated** at Javear's request: only a unit test reads it, no
+Novia-built workflow is ever validated against it, and per-step validation of every live workflow
+found it stale rather than the workflows wrong. Backlogged (`109574b`): closed vocabularies and
+unknown-key warnings in L0, composed from `PGC_StepType`; the file generated from it or retired.
+
+**Contract changes (`PGC_StepType.human_gate`, seed only):** `list_selection` described as an ID
+box per table; `number` joins the field types; the routes past the ceiling become **small grid →
+pick one → narrow → refuse** — an editable grid only up to ~10 rows × 3 columns with short row
+dropdowns, or one column up to ~30 rows; **paging is for selection only, never an editable grid**;
+after an edit, return to the list the record was picked from.
+
+**Open design question, for `docs/arch-home-brain.md` (on branch `design/home-brain`, not here):**
+whether a workflow declares *edit this set* and each experience provider chooses grid or pick-one.
+
+**Next session starts here:**
+1. **Javear's Slack test of items 12/13** — `/m list` on a single-table domain (one table, one ID
+   box, one Select); a two-table drill-down level such as a recipe's ingredients and steps (one box
+   per table — try an ID present in both); a wrong ID and an empty box (each re-renders with its
+   own message).
+2. **Brief Novia in session 1236** to rebuild 360's edit branch as list → form: Year and Amount as
+   `number` fields, Currency as a select of the stored values, no ID field, no `(no category)` on
+   the NOT NULL column, and return to the list after a save. Then the number field gets its first
+   live test. Watch whether she re-reads the `human_gate` row unprompted (AC3).
+3. **Item 10** — spec `preview_step` (headless + gate size) in `openapi.yaml` / `arch-minds-eye.md`
+   before any code. **Item 11** (Slack's size threshold) is lower priority now that grids stay small.
+
+### Session 6 — 2026-10-15 — item 12 confirmed, 360 rebuild under way
+
+**No code, nothing deployed.** Javear confirmed `/m list` works from Slack with the ID-box pick
+(item 12). He is briefing Novia on the `manage_expenses` 360 list → form rebuild (item 13's first
+live test, AC3 and AC7 evidence), and will finish later.
+
+**Next session starts here:** the outcome of the 360 rebuild — does the `number` field convert
+`12,50`, does a save return to the list, and did Novia re-read the `human_gate` row unprompted
+(AC3). Then item 10's spec.
+
+### Session 7 — 2026-10-15 — run 886: Novia's 360 v5, and a contract gap
+
+Run 886 ran **360 v5** (registered by Novia in session 1236 at 06:17, 11 s before the run). Two
+defects, neither in the engine:
+
+1. **The list showed IDs only — Generation.** Step 7 built flat rows `{ id, Date, Title, … }`;
+   only `fields` renders as columns (`step-executor.mjs:490`, `callback.mjs:1159`). The contract
+   already stated `{id, fields?, …}`.
+2. **The edit form opened empty — Instruction.** A list selection writes the row's **bare id** to
+   `output_key` (or the item's `responseData`, if it carries one — `run-workflow.mjs:748`, `:886`).
+   Step 9 read `sel.id` off a number, took the "add new" branch, and every `edit_*` came back blank.
+   The contract described `output_key` for `form`, `confirm` and `choice` only, and never named
+   `responseData`.
+
+**Contract fixed and upserted** (`human_gate` row verified live): `output_key` now says what
+`list_selection` writes, and the item shape gains `responseData?` with *only fields renders as
+columns*. Also unapplied from the brief: `(no category)` still offered on the NOT NULL column.
+`12,50` and return-to-list remain untested — the form never populated. AC3 stays 🟡.
+
+**Next session starts here:** Javear is briefing Novia in 1236 with both findings (pointing her at
+run 886's step 7 and step 9 snapshots rather than handing her the fix) plus: *keep Category as a
+dropdown of category names saving the ID; drop the `(no category)` entry, because `category_id`
+is NOT NULL and picking it fails the save.* Ask for the outcome: did she read the run unprompted,
+did she re-read the contract (AC3), and — once the form populates — does `12,50` save as 12.5 and
+does a save return to the list (item 13, AC7). Then item 10's spec.
+
+### Session 8 — 2026-10-16 — runs 887/888: the form populates; two engine gaps closed
+
+**Run 887 (360 v6): the edit form still opened empty — Generation.** Step 8 wrote
+`selected_expense = 277` (proc log); step 9 still read `sel.id`, i.e. `277.id`. Novia had read
+the corrected contract in session 1236 and written the opposite into memory **441** (*"the gate
+writes the full selected item object"*), with an invented cause (`edit_amount` a string).
+Asked about it (#68), she diagnosed it correctly from run 887 and built **v7**: bare id read
+directly, `action_key: list_action` on step 8 to tell Add from Edit. **She claimed 441 was
+corrected; it was not** — she wrote **443** (p2) beside it; 441 still states the wrong rule.
+
+**Run 888 (360 v7): the form populated** — first time on this workflow. Saving an amount was
+refused *"must be a whole number"*: Amount was `type: number` without `decimal: true`.
+
+**Landed, deployed (`sam deploy`), `PGC_StepType` upserted, live row verified equal to seed:**
+- `3549ae6` — **Execution.** `action_key` now records a `list_selection` row's `item_action`
+  (`gateActionValue`, `run-workflow.mjs`). It matched only options and special buttons, so an Edit
+  after an Add New would have read `confirm` and opened a blank add form — v7 depends on this.
+  **The `number` default flipped to decimals** (Javear's decision): JSON Schema's `number` is any
+  number and an LLM writes an amount that way; `decimal: false` opts into whole numbers.
+  1197 → **1201** tests.
+- `cfc044e` — **Instruction.** `output_key` (list_selection): written by a row selection only —
+  unset before the first pick, every other button leaves it as it was; use `action_key` to tell
+  Add from Edit (Novia's "unset on first entry" wording adopted). `arch-step-types.md`'s field
+  table gains `number` — it still said number was absent.
+
+**Run 888 is parked at its form** — rendered under the old whole-number rule; untouched.
+
+**Next session starts here:** a fresh run of `manage_expenses` (v7, no workflow change needed for
+either fix): edit an amount to `12,50` (→ 12.5), Save returns to the list, then **Add New → Save →
+Edit** a row (opens that row, not a blank form). Memory **441** still needs correcting — ask
+Novia to fix the row itself, not write beside it. Then item 10's spec.
+
+### Session 9 — 2026-10-17 — a read with no limit means every row
+
+**Run 892 (`help`) failed at step 1c: 105 `PGC_IntentMap` rows matched, SERV's unstated default
+cut it at 100.** Not a one-off — Javear reported the same error recurring in legacy workflows.
+`PGC_WorkflowRunStep` shows the truncation check (`c9d0f12`) has failed four workflows whose
+tables outgrew 100: runs **807** (`review_inventory`, 132), **827** (`budget_vs_expense_report`,
+102), **857** (`edit_budget`, 104), **892** (`help`, 105). A sweep of live workflows found **24
+`serv_query` reads stating no limit across 10 workflows**, nearly all meaning "every row".
+
+**Execution, unscoped — extend the harness (`5f1fa97`, deployed, `PGC_StepType` upserted).** A
+read with no LIMIT means every matching row, as in SQL; 100 was a convention no author wrote
+against. `DEFAULT_READ_LIMIT` = `MAX_READ_LIMIT` = 1000, still reported as `default`, so a cut at
+the ceiling still fails loudly. The `serv_query` contract states it. Probed live: step 1c's read
+now returns 105, `limit_applied: default`. Also fixes Novia's own `PGC_IntentMap` read
+(`minds-eye.mjs:1727`), silently capped at 100 with no check. 1201 → **1202** tests.
+
+**Seen, not touched:** `fix_workflow` (dead path) step 11 reads `PGC_WorkflowRun` unprojected —
+already an Internal server error at 100 rows (6MB Lambda response, the `stack` column). The
+`help` seed row says v3 while live is v10 — check for drift before its next upsert.
+
+**Then: `fix_workflow` and the automatic repair chain retired (`ff76115`, deployed, Novia's
+system prompt v37 upserted) — Javear's decision on cleanup D1, option 3.** Looking into
+`fix_workflow` step 11 found it had never run: all **five** `fix_workflow` runs (467, 468, 640,
+808, 858) failed at step 4's repair `llm_call`, and 808/858 were auto-started ~2s after 807/857 —
+every non-LLM failure was adding a failing LLM call. Step 11 would also have cancelled `failed`
+and `awaiting_human_gate` runs unasked. Now a failed step reaches the user as `WORKFLOW_ERROR`
+only; repair is Novia's `propose_workflow_fix`. `troubleshoot-workflow` stays as a diagnostic on
+request; `DIAGNOSE_PROMPT_SCHEMA` unchanged (D2 open). Removed: `fix-workflow.mjs`, its SQS/HTTP
+dispatch, openapi entry, seed row and tests (1202 → **1174**; the rest of the file kept as
+`troubleshoot-workflow.test.mjs`). `arch-workflow-patterns.md` §6.12 rewritten.
+**Still live:** the `PGC_WorkflowRun`-bearing row 316 — nothing reaches it; deleting it via
+`/delete-workflow` would take its five failed runs with it. Its prompts (`fix_workflow_steps`)
+and `inject_for` entries are left for the cleanup inventory's Pass A. The `help` seed was checked
+against live: all 11 seeded workflows match on every fingerprinted field.
+
+**AC7 — Javear tested 360 v7 from Slack 2026-10-17: the edit path works.** Still to test:
+**Add New → Save → Edit** (opens that row, not a blank add form — the `action_key` path from
+`3549ae6`). AC7 stays 🟡; delete semantics (`deleted_at` vs hard delete) also still open.
+
+**Next session starts here:** (1) Javear's Add New test on 360; (2) Novia corrects memory 441 in
+place; (3) confirm AC1/AC2 wording against the 2026-10-10 small-grid decision; (4) item 10 spec.
+Row 316 (`fix_workflow`) left in the DB for cleanup Pass A unless Javear says otherwise.
+
+### Session 10 — 2026-10-18 — Add New on 360: an upsert with an empty key
+
+**Run 904 (`manage_expenses` v7, Add New → Save) failed at step 11:** `upsertRows failed: invalid
+input syntax for type integer: ""`. Step 9 gives a new record `edit_id: ''`; step 11 is one
+`serv_upsert` serving both Add and Edit, matching on `id`. `upsertRows` looked it up as
+`WHERE id = ''` and Postgres refused the cast; the INSERT would have failed the same way on the
+`serial` column. Rolled back — nothing written.
+
+**Execution — extend the harness (`3ce72e9`, deployed, `PGC_StepType` upserted).** An empty key
+on a new record is the standard form of a single save step, and the contract already steers
+Novia to one upsert over a lookup-plus-branch. `unkeyedInsertRow` (`table.mjs`, pure): a row whose
+`matchColumns` are all `null`/`''`/absent skips the lookup and is inserted without them, so the
+database assigns them. Contract states it and its exception (a stored `''` in a text match
+column cannot be matched). No workflow change. 1174 → **1179** tests. Run 904 left as is.
+
+**Javear confirmed from Slack (runs 905, 908):** Add New → Save shows the new row; Edit opens it
+filled in; `12,50` saves as 12.5. Item 13 ✅. AC7 stays 🟡 — delete and its semantics remain.
+
+**But the 10/17 expenses did not show — Execution, experience layer (`770e55c`, deployed).** All 50
+October rows reached the gate (step 6 and step 7 both `array[50]`). `markdownProseToBlocks` cut
+every paragraph at 2800 chars with `...`, and the list table is one paragraph: run 908's was
+3,425, so it stopped mid-row at ~41 and every 10/17 row vanished silently. Slack sets **no
+per-block limit** on a markdown block — only 12,000 across the payload (docs.slack.dev, checked
+2026-10-18); 2800 was inherited from the section block. A paragraph holding a table and longer
+than 2800 now goes out whole as one block up to 12,000; past that it is cut between lines with
+a count of withheld rows. Under 2800 nothing changes. The real `markdownToBlocks` is exported and
+the test copies of it are gone. Replayed run 908's 50 items through `dialogToBlocks`: all shown.
+1179 → **1184** tests.
+
+**Seen, not touched:** rows **301** and **302** (created 2026-10-18) duplicate **287** and **284**
+(2026-10-17) — likely re-entered because the list hid them; Javear's to delete. A list whose rows
+carry no `responseData.table` renders an empty `# ` heading line above its table.
+
+**Confirmed from Slack by Javear 2026-10-18:** October renders as one table, all 50 rows, ending
+at 302 — Slack opens a long table in its own scrolling viewer on click.
+
+**Delete semantics decided by Javear: soft delete** (`deleted_at`). Novia built it as 360 **v8**
+(session 1236, seq 91) and deleted memory **441** (443 remains — session 9's item closed).
+
+**Run 911 (v8, Delete) failed at step 9b** — `updateRows failed: invalid input syntax for type
+integer: ""`, and the confirm gate rendered `**** ()`. **Generation.** v8 put Delete on the list
+as a *special button*; only the group's Select button reads the ID box, and a special button
+never writes `output_key`, so `selected_expense_id` was `null`, 8a built an empty
+`delete_state`, and 9b filtered `id = ''`. She quoted that very contract sentence ("any special
+button leaves it holding whatever it held") in the same reply — the 887/441 pattern again: the
+rule read, the opposite built. Sound otherwise: `deleted_at` = now, step 6's `deleted_at IS NULL`
+already hides it, confirm and go-back route correctly. **Remedy for her (findings, not the fix):**
+Delete belongs on the edit form (step 10) beside Save, routed to 8a and hidden for a new record
+by an option `condition`; "Delete Selected" leaves step 8.
+
+**Her suggested rule declined** ("never pass the id through a form field…") — it restates *row
+identity is never a field* and is unrelated to the failure. **Instruction, added instead (Javear's
+call):** the `list_selection` `output_key` text gains *a special button never carries the typed
+ID, so a second action on a row is an option on the gate the row selection leads to*. Seed +
+`arch-step-types.md`, `PGC_StepType` upserted (1 updated). Whether it changes her behaviour is
+the open question — she had read the sentence it extends.
+
+**Run 913 (360 v9) — delete works end to end.** Novia moved Delete onto the edit form (step 10)
+as *Delete this expense*, routed to 8a; "Delete Selected" is gone from step 8. In one run: Edit →
+Delete on **302** and **287** (the duplicates — `deleted_at` set, both gone from the reload; 284
+and 301 kept), Add New → **303**, Edit **260**. Every step completed.
+
+**One gap left — Generation, accepted.** Delete is a `special_button`, and special buttons take no
+`condition` (only `options` do — `resolveGateOptions`), so it also shows on the **Add New** form.
+v9's 8a reads `edit_state.edit_id`, which is `''` for a new record — so a Delete there renders
+`**** ()` and fails at 9b as run 911 did, **writing nothing**. (I first read 8a as using
+`selected_expense_id` and told Javear it could target the last-edited row; it cannot.) Remedy
+whenever 360 is next touched: Delete as an `option` with a condition on `edit_state.is_new`.
+
+**Novia's contract feedback (seq 99):** she judges the new `list_selection` sentence right and
+proposes adding *"place it after the record is confirmed — e.g. as a button on a form or confirm
+gate the item_action leads to."* **Not adopted** — the sentence already names *an option on the
+gate the row selection leads to*; hers restates it and says "button", which is what led her to
+`special_buttons`, the one form that cannot be conditioned.
+
+**AC7 ✅ — closed by Javear 2026-10-18** ("happy with manage expenses for now"); scope item 8 ✅.
+
+**Novia moved to `anthropic/claude-opus-5-5`** (`ccb6158`; `minds_eye_preferences` v7 upserted; she cost
+$1.23 over 30 days on sonnet-4-6). `docs/perplexityLLMs.json` refreshed from the gateway's live list.
+
+**AC2 moved to Sprint 14 (Javear).** Checked first: the live `human_gate` decision tree does **not**
+send a one-column set to pick-one — *"or one editable column of up to about 30 rows"* is the grid
+route, and pick-one is only *"for any editable set larger than a small grid"*. `manage_budget`'s
+grouping gap is real and Execution: form fields are inputs only (`step-executor.mjs` `case 'form'`),
+so there is nothing to render a sub-title between them.
+
+**`edit_budget` = `manage_budget` (Javear) — runs 914, 915 on 357 v7.** Already the bulk-edit
+pattern and working: month picker → one form of 21 amounts with subtotals → one `serv_upsert`;
+run 914 also used the save-and-refresh loop. AC5 folded into AC2; both to Sprint 14 with four
+findings, three Generation and one Execution: (1) **every save writes all 21 rows** — step 15
+builds one per category, changed or not, so AC1's *only changed rows are written* is unmet;
+(2) amounts are `text` fields read with `parseFloat`, so `12,50` saves as 12 silently — use
+`number` (item 13); (3) **step 15 hardcodes `currency: 'USD'` on every row**, in a euro
+household — the summary prints `$`; (4) grouping is a label prefix — needs a field `group`
+(Execution, above).
+
+**Next:** sprint close — dispositions for AC1, AC3, AC4, AC6 awaiting Javear.
+
+---
+
+## Outcome — closed 2026-10-18
+
+**10 sessions, branch `sprint/13-bulk-record-edit`. 1177 → 1184 unit tests** (with `fix_workflow`'s
+28 removed in session 9). **One AC met, five moved, one folded** — and as in Sprints 11 and 12, the
+engine work that shipped was mostly unscoped.
+
+**AC7 met.** `manage_expenses` (360 v9), built by Novia: add, edit and soft delete (`deleted_at`)
+confirmed from Slack (runs 905, 908, 913), both data-destroying corrections applied. Accepted with one
+known gap: Delete is a `special_button`, which takes no `condition`, so it also shows on the Add form,
+where it fails without writing.
+
+**Moved to Sprint 14 (Javear):** AC1 (one gate, one save works — `edit_budget` 357 v7, runs 914/915 —
+but every save writes all 21 rows), AC2 with AC5 folded in (`edit_budget` *is* `manage_budget`; it is
+a one-column small grid, not a pick-one), AC3 (not evidenced), AC4 (with items 10 and 11), AC6 (not
+started).
+
+**Shipped, unscoped — Execution, each extending the harness to a standard form:**
+`list_selection` picks by typed ID, one box per table group (`26698b8`); a `number` form field
+validated in the UI layer, decimal comma accepted (`26698b8`, `3549ae6`); `action_key` records a row
+click (`3549ae6`); templated field defaults and an empty "none" option (`3c20162`);
+`msg_blocks_too_long` reported, not retried (`1335f2b`); a read with no limit returns every row up to
+1000 (`5f1fa97`); an upsert row with empty match columns is inserted with its key left to the database
+(`3ce72e9`); a markdown table past 2800 characters goes out whole up to Slack's 12,000 (`770e55c`).
+**Retired:** `fix_workflow` and the automatic repair chain on every failure (`ff76115`) — all five of
+its runs had failed. **Contract:** the `human_gate` decision tree, paging, the grid threshold, G1–G5,
+and *a special button never carries the typed ID*. **Novia moved to `anthropic/claude-opus-5-5`**
+(`ccb6158`) — $1.23 over 30 days on sonnet-4-6, so price was not the constraint.
+
+**Decided:** no `table_edit` gate type (2026-09-22); pick-one past a small grid, no paged editable
+grid, a spreadsheet waits for the web layer (2026-10-10); soft delete for expenses (2026-10-18).
+
+## Retro
+
+**What went right.**
+
+*Live runs found what tests could not, and each fix was in the right layer.* Runs 904 and 908 were
+two Execution defects a unit suite could not have seen — Postgres refusing `''` as an integer, and a
+2800-character cut nobody had measured against a real 50-row list. Both were diagnosed from
+`PGC_WorkflowRunStep` and the run's `local_state` before a line was written, and both fixed by
+extending the harness to the form an LLM naturally writes rather than by a prompt rule.
+
+*Reading Slack's documentation beat the inherited constant.* The 2800 cap came from the section block
+and had been applied to markdown blocks, which have no per-block limit. One fetch of the reference
+page changed the fix from "split the table" to "send it whole". *Check the platform's own limit before
+designing around a number in the code.*
+
+*The user's domain knowledge corrected the record twice in one session.* That `manage_budget` is a
+one-column grid, not an expenses-style pick-one, and that `edit_budget` and `manage_budget` are one
+workflow, both came from Javear — and both reshaped the AC dispositions, which had been about to
+withdraw AC1 and AC5 as obsolete.
+
+**What went wrong, and what it says.**
+
+*Novia read the rule and built the opposite — three times.* Run 887 (`sel.id` after writing the
+reverse rule into memory 441), run 911 (Delete as a special button, in the same reply that quoted
+*"any special button leaves it holding whatever it held"*), and v9's Delete on the Add form. Contract
+wording was not the gap: each time the sentence was in front of her. This is the case for the model
+change, and Sprint 14's AC3 is where it is tested — **do not answer it with more contract text.**
+
+*I asserted two things I had not checked.* That Delete on the Add form could target the last-edited
+row (v9's 8a reads `edit_state.edit_id`, so it cannot), and that changing Novia's model would break
+replay recordings (her calls never pass the replay seam). Both were corrected before anything acted on
+them, but both were stated as fact. **Read the code path before naming a consequence of it.**
+
+*The model list was a six-month-old snapshot nobody refreshed.* `docs/perplexityLLMs.json` hid the
+whole Claude 5 family, and Novia ran two generations behind with nothing to flag it. The gateway's
+`/models` endpoint is the source; the file is a cache of it.
+
+*The AC count held at the ceiling the retro set, and still most work was unscoped.* Seven ACs, one met.
+The unscoped work was real and user-driven — every engine fix above came from a run Javear made —
+which says the ACs were scoped around artifacts (workflows) while the work landed in the engine those
+artifacts exposed. Sprint 14 should scope the engine gaps already known (field grouping, conditioned
+special buttons, `preview_step`) as items, not leave them to surface.
+
+**Retro → Sprint 14 scope.** AC1/AC2 through `manage_budget` with its four findings (all-rows write,
+`text` amounts, hardcoded USD, grouping); the form-field `group` heading (Execution); AC3 as the first
+cold Novia design on Opus 5.5; AC4 with `preview_step` spec-first; AC6 with aliases 81/60/59.

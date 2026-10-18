@@ -63,6 +63,7 @@ const FIELD_TYPES = declaredFieldTypes(fieldsClaim);
 const SAMPLE = {
   text:         { initial: 'Rustic Sliced Bread', expect: e => e.initial_value === 'Rustic Sliced Bread' },
   textarea:     { initial: 'a longer note',       expect: e => e.initial_value === 'a longer note' && e.multiline === true },
+  number:       { initial: '12.5', decimal: true, expect: e => e.initial_value === '12.5' && e.type === 'plain_text_input' },
   select:       { options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }], initial: 'b', expect: e => e.initial_option?.value === 'b' },
   multi_select: { options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }], initial: ['a', 'b'], expect: e => e.initial_options?.map(o => o.value).join() === 'a,b' },
   radio:        { options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }], initial: 'a', expect: e => e.initial_option?.value === 'a' },

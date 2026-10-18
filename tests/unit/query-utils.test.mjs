@@ -173,6 +173,12 @@ test('resolveReadLimit: no stated limit takes the default', () => {
     { limit: DEFAULT_READ_LIMIT, chosenBy: 'default' });
 });
 
+test('resolveReadLimit: no stated limit means every matching row, up to the ceiling', () => {
+  // A default below the ceiling failed every workflow whose table outgrew it (runs 807, 827,
+  // 857, 892) — reads written as "all of them" in SQL's sense, never as "the first 100".
+  assert.equal(DEFAULT_READ_LIMIT, MAX_READ_LIMIT);
+});
+
 test('resolveReadLimit: an explicit limit is the caller\'s choice', () => {
   assert.deepEqual(resolveReadLimit({ limit: 10 }), { limit: 10, chosenBy: 'caller' });
   assert.deepEqual(resolveReadLimit({ limit: '10' }), { limit: 10, chosenBy: 'caller' });

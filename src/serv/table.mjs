@@ -774,6 +774,30 @@ async function deleteRows(req) {
 // to native ON CONFLICT for tables that have one.
 // ---------------------------------------------------------------------------
 
+/**
+ * The row to insert when every matchColumns value is empty (null, undefined or ''), else null.
+ *
+ * A row with no key value is a new record — the standard form of "insert or update" in one
+ * save step, where a new record has no id yet. It cannot match an existing row, and its empty
+ * key cannot be written either: '' is not a valid integer or serial. So the lookup is skipped
+ * and the empty match columns are left out, letting the database assign them.
+ *
+ * The exception: a text match column whose stored value really is '' can never be matched.
+ *
+ * Pure — exported for test.
+ *
+ * @param {object}   row           one upsert row
+ * @param {string[]} matchColumns  non-empty array of column names
+ * @returns {object|null} the row without its empty match columns, or null when it carries a key
+ */
+export function unkeyedInsertRow(row, matchColumns) {
+  const isEmpty = v => v === null || v === undefined || v === '';
+  if (!matchColumns.every(col => isEmpty(row[col]))) return null;
+  const insertRow = { ...row };
+  for (const col of matchColumns) delete insertRow[col];
+  return insertRow;
+}
+
 async function upsertRows(req) {
   const { tableName, matchColumns, rows } = req.body;
 
@@ -839,16 +863,20 @@ async function upsertRows(req) {
       await dbClient.query('BEGIN');
 
       for (const rawRow of rows) {
-        // --- Find an existing row matching matchColumns ---
-        const matchFilters = matchColumns.map(col => ({ column: col, op: 'eq', value: rawRow[col] }));
-        const { whereClause, values: matchVals } = buildWhereClause(matchFilters);
-        const existing = await dbClient.query(
-          `SELECT id FROM "${tableName}" ${whereClause} LIMIT 1`,
-          matchVals
-        );
+        // --- Find an existing row matching matchColumns — an unkeyed row is new by definition ---
+        const unkeyed = unkeyedInsertRow(rawRow, matchColumns);
+        let existing = { rows: [] };
+        if (!unkeyed) {
+          const matchFilters = matchColumns.map(col => ({ column: col, op: 'eq', value: rawRow[col] }));
+          const { whereClause, values: matchVals } = buildWhereClause(matchFilters);
+          existing = await dbClient.query(
+            `SELECT id FROM "${tableName}" ${whereClause} LIMIT 1`,
+            matchVals
+          );
+        }
 
         // --- Compute embeddings (same pattern as insertRow/updateRows) ---
-        const effectiveRow = { ...rawRow };
+        const effectiveRow = { ...(unkeyed ?? rawRow) };
         for (const vc of embedCols) {
           const vec = await resolveEmbedding(vc, effectiveRow, req.correlationId);
           if (vec !== null) effectiveRow[vc.name] = vec;
