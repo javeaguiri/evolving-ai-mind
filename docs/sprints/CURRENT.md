@@ -1,19 +1,25 @@
-# Sprint 14 — The budget grid, and seeing a gate before it is built
+# Sprint 14 — A web front end, Phase 0
 
-**Status: PROPOSED 2026-10-18, at Sprint 13's close — scope is agreed at "start sprint".**
-Read `docs/sprints/sprint-13.md` §Retro first.
+**Status: PROPOSED 2026-10-18 — scope is confirmed at "start sprint".**
+Read `docs/sprints/sprint-13.md` §Retro and `docs/arch-home-brain.md` (§3, §4.4, §4.6, §4.7, §4.10) first.
 
-**Branch (proposed):** `sprint/14-budget-grid-and-preview`
+**Branch:** `sprint/14-web-phase-0`
 
-> Every AC below was carried from Sprint 13 by Javear's decision on 2026-10-18. The retro's point
-> stands: the engine gaps already known are scoped as items here, not left to surface.
+> **Decided 2026-10-18 by Javear.** Slack is not cutting it as the main interface — editing a
+> spreadsheet of data is what proved it — and it stays a good accessory. The front end is a
+> **web site** (responsive, one codebase for phone and desktop). The goal is **general
+> acceptability, not multi-tenancy**: tenancy waits until the construction-company partner has
+> firmly committed. Build for one household, keep the habits in `arch-home-brain.md` §3.3.
 
 ---
 
 ## Sprint Goal
 
-**Make `manage_budget` the reference small-grid edit — one form, grouped, saving only what
-changed — and give Novia a way to see a gate before she builds it.**
+**Prove that a second experience layer works end to end: a web site that shows a waiting gate,
+takes the answer, and resumes the run — with a `form` gate rendered as a real editable grid.**
+
+This is the Home Brain design's Phase 0 (§4.10). It proves the seam in §3.1 holds for a second
+provider, and that a grid answers the bulk-edit ceiling Slack cannot.
 
 ---
 
@@ -21,12 +27,11 @@ changed — and give Novia a way to see a gate before she builds it.**
 
 | # | Item |
 |---|---|
-| **1** | **`manage_budget` (`edit_budget`, workflow 357 v7) — four findings from runs 914/915**, sent to Novia as findings, not fixes: (a) every save writes all 21 rows — step 15 builds one per category, changed or not; (b) amounts are `text` fields read with `parseFloat`, so `12,50` saves as 12 silently — the `number` field exists; (c) step 15 hardcodes `currency: 'USD'` on every row in a euro household, and the summary prints `$`; (d) grouping is a `[Income]` label prefix. It is a one-column small grid (~21 rows) — **not** `manage_expenses`' pick-one |
-| **2** | **A form field `group` that renders a heading where it changes — Execution.** Form fields are inputs only (`step-executor.mjs` `case 'form'`), so nothing can render a sub-title between them. The standard form is HTML's `<fieldset>`/`<legend>`: a `group` on each field, a header block in `dialogToBlocks` where it changes, and the `human_gate` contract says so. ~3 headings + 21 fields is well under 50 blocks |
-| **3** | **`preview_step`, headless — spec first.** Carried from Sprint 13 item 10 (`docs/backlog.md`, "Step preview"): one step against a chosen state through the real `buildDialog` → `dialogToBlocks`, returning a gate's block count and payload size. `openapi.yaml`, a `minds_eye_tool_schemas` row and `docs/arch-minds-eye.md` before code |
-| **4** | **Measure Slack's message-size threshold** — Sprint 13 item 11. Outward posts to a test channel Javear names, each with his go-ahead |
-| **5** | **The inventory correction workflow** — rename, merge, recategorise, alias-fix; specimens aliases **81**, **60**, **59**, keyed on the raw receipt string. Sprint 13 Track C, unchanged |
-| **6** | *Candidate:* a `condition` on `special_buttons`, as `options` already take — the asymmetry behind `manage_expenses`' Delete-on-Add gap. Decide at scoping whether it is needed or whether options suffice |
+| **1** | **The web provider, end to end — Phase 0.** Spec first in `docs/openapi.yaml`: `GET /gates`, `POST /gates/{runId}/responses`, `GET /inbox` (§4.7). `provider: 'web'` routed by `callback.provider` (§4.6). A site shell that lists waiting gates and answers them. Results reach the site rather than Slack for a web-started run |
+| **2** | **A `form` gate as an editable grid** — the shape Slack could not render. Open question §6.4 (the grid hint: row key and column label on the `human_gate` contract) is settled here, and Sprint 13's field `group` heading folds into it |
+| **3** | **`manage_budget` (= `edit_budget`, 357 v7) as the Phase 0 workflow** — one column, ~21 rows, the grid's natural first consumer. Its four Sprint 13 findings go to Novia as findings: every save writes all 21 rows; amounts are `text`; `currency: 'USD'` hardcoded in a euro household; grouping by label prefix |
+| **4** | **Sign-in for one user.** The site is public-facing, so it needs a real identity even with one user: the browser never holds the internal API key, and identity comes from the token, never the request body (§3.3). Mechanism decided at "start sprint" |
+| **5** | **Release readiness R1–R3, moved forward (Javear, 2026-10-18)** — `docs/ops-release-readiness.md`, on `ops/<slug>` branches alongside this sprint. **R1 first**: a web site should not be built against prod, and today there is no other environment |
 
 ## Acceptance Criteria
 
@@ -35,20 +40,33 @@ state changes, not at close.**
 
 | # | Status | Criterion | Scope | Threshold |
 |---|---|---|---|---|
-| **AC1** | ⬜ | A single gate edits several records and one click saves them all; **only changed rows are written** | [1](#scope) | Binary, from Slack |
-| **AC2** | ⬜ | `manage_budget` uses it: amounts are numbers, currency is the household's, and income / non-discretionary / discretionary render under their own headings | [1](#scope), [2](#scope) | Binary, from Slack |
-| **AC3** | ⬜ | Novia selects the pattern unprompted when a design calls for it — first cold design on `claude-opus-5-5` | [1](#scope) | Binary, from a cold `/novia` session |
-| **AC4** | ⬜ | A gate that would exceed the ceiling fails in a way that names the cause and the remedy — measured before it is registered | [3](#scope), [4](#scope) | Binary |
-| **AC6** | ⬜ | One correction workflow performs rename, merge, recategorise and alias-fix; aliases 81, 60 and 59 are corrected through it | [5](#scope) | Binary, from Slack, no raw SQL |
+| **AC1** | ⬜ | A run started from the web site suspends at a gate, the gate appears on the site, and answering it there resumes the run to completion — no Slack involved | [1](#scope) | Binary, live |
+| **AC2** | ⬜ | `manage_budget` edits all its amounts in one editable grid on the site, grouped by budget type, and one save writes **only the changed rows**, as numbers, in the household's currency | [2](#scope), [3](#scope) | Binary, live |
+| **AC3** | ⬜ | The site requires sign-in, and no request from the browser carries the internal API key | [4](#scope) | Binary |
+| **AC4** | ⬜ | Slack still works unchanged for a run started from Slack | [1](#scope) | Binary, from Slack |
+| **AC5** | ⬜ | R1 lands: `template.yaml` takes an environment name, and a second stack would not collide with prod or read prod's parameters | [5](#scope) | Demonstrated on one real change |
 
-(AC5 was folded into AC2 at Sprint 13's close: `edit_budget` is `manage_budget`.)
+## Carried from Sprint 13, not scoped here
+
+| Item | Where it goes |
+|---|---|
+| Sprint 13 AC3 — Novia selects the pattern unprompted, on Opus 5.5 | Observed when she next designs cold; not a sprint target |
+| Sprint 13 AC4 — oversized-gate failure, `preview_step`, measuring Slack's size limit | `docs/backlog.md` (Step preview). The Slack ceiling stops being the binding limit once the grid is on the web |
+| Sprint 13 AC6 — the inventory correction workflow, aliases 81 / 60 / 59 | Deferred; next sprint that has room |
+
+## Open at "start sprint"
+
+1. **Hosting** for the site, and how it reaches PROC without exposing the internal API key.
+2. **Sign-in mechanism** for one user.
+3. **Framework** — React is the design's recommendation (§6.7).
+4. **How results reach the site** — polling `GET /inbox` for Phase 0, or the WebSocket push §4.6 plans for Phase 1.
 
 ## Out of scope
 
 | Item | Why |
 |---|---|
-| A web experience layer | `docs/arch-home-brain.md` — an unpresented proposal |
-| Release readiness | `docs/ops-release-readiness.md`, reviewed at the sprint boundary |
-| A rendered (Slack-posting) `preview_step` | Headless first; the inert-button contract must be settled before a preview posts |
+| Multi-tenancy, several household members | Waits for the partner's commitment (Javear, 2026-10-18) |
+| Phase 1's full console — navigator, command bar, Novia panel, direct edits | Phase 0 proves the seam first |
+| Removing the Slack leaks in `arch-home-brain.md` §3.2 | Phase 1, except where Phase 0 needs one gone |
 
 ## Session Notes

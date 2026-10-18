@@ -4,7 +4,7 @@
 <!-- See LICENSE file in the project root for full license terms. -->
 
 Version: 0.1
-Status: Proposed — not scheduled into any sprint
+Status: Phase 0 scheduled — Sprint 14 (2026-10-18). Front end decided as a web site; multi-tenancy (§5) deferred until a partner commits
 Last updated: 2026-10-06
 
 Source: `docs/evolving-ai-home-brain-proposal-v1.pptx` (proposal draft v1, not yet presented).

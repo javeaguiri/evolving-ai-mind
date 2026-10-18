@@ -255,14 +255,15 @@ Sprints 7–13: see `docs/sprints/sprint-07.md` through `docs/sprints/sprint-13.
 
 Read `docs/sprints/sprint-13.md` (outcome, retro) before adding anything to Sprint 14.
 
-### Open Work (Sprint 14 — `docs/sprints/CURRENT.md`, PROPOSED)
+### Open Work (Sprint 14 — `docs/sprints/CURRENT.md`, PROPOSED, branch `sprint/14-web-phase-0`)
 
-1. **`manage_budget`** (= `edit_budget`, workflow 357 v7) — already one form, one save; four findings for Novia: every save writes all 21 rows, amounts are `text` (so `12,50` saves as 12), `currency: 'USD'` hardcoded in a euro household, grouping by label prefix. AC1, AC2.
-2. **A form field `group` rendering a heading where it changes** — Execution; the standard `<fieldset>`/`<legend>` form.
-3. **`preview_step`, headless, spec first** — and measuring Slack's message-size threshold. AC4.
-4. **AC3** — Novia's first cold design on Opus 5.5. Do not answer her rule-reversals with more contract text.
-5. **The inventory correction workflow** — aliases **81**, **60**, **59**, keyed on the raw receipt string. AC6.
-6. **Release readiness** is *not* sprint work — `docs/ops-release-readiness.md`, reviewed at the boundary.
+**Decided 2026-10-18 (Javear): a web site becomes the main front end; Slack stays an accessory.** Editing a spreadsheet of data is what proved Slack was not cutting it. The goal is general acceptability, **not** multi-tenancy, which waits until the construction-company partner commits. Design: `docs/arch-home-brain.md`, Phase 0.
+
+1. **The web provider end to end** — `GET /gates`, `POST /gates/{runId}/responses`, `GET /inbox` spec-first; `provider: 'web'`; a gate shown, answered and resumed on the site.
+2. **A `form` gate as a real editable grid**, with `manage_budget` (357) as the first workflow — plus its four data findings (all-rows write, `text` amounts, hardcoded USD, label-prefix grouping).
+3. **Sign-in for one user** — the browser never holds the internal API key.
+4. **Release readiness R1–R3 move forward** on `ops/` branches, R1 first (`template.yaml` cannot stand up a second environment). R4, R5 held.
+5. Carried, not scoped: Novia's unprompted pattern choice on Opus 5.5 (observe), `preview_step` (backlog), the inventory correction workflow (deferred).
 
 ### Deferred
 
@@ -295,7 +296,7 @@ Read `docs/sprints/sprint-13.md` (outcome, retro) before adding anything to Spri
 | `docs/arch-memory.md` | Memory layer design — PGC_Memory schema, write paths, retrieval, scope, provenance |
 | `docs/arch-session.md` | Session and chat design — PGC_Session/PGC_SessionEntry, `/chat`, `/explain`, diagnostics |
 | `docs/arch-minds-eye.md` | Minds-eye agent — tool catalog, use cases, agentic loop, implementation sequence (Sprint 5) |
-| `docs/arch-home-brain.md` | Home Brain — proposed single-page app: navigation and domain drill-down over REST, workflow execution pushed by the backend as for Slack (console layout, panels, `provider: 'web'` flows, REST resources, phasing) and the multi-tenant flexible-records direction. Proposed, not scheduled |
+| `docs/arch-home-brain.md` | Home Brain — proposed single-page app: navigation and domain drill-down over REST, workflow execution pushed by the backend as for Slack (console layout, panels, `provider: 'web'` flows, REST resources, phasing) and the multi-tenant flexible-records direction. **Phase 0 is Sprint 14**; tenancy deferred |
 
 ### Process and reference
 
