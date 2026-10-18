@@ -115,7 +115,7 @@ position is read at a glance.
 | # | Status | Criterion | Scope | Threshold |
 |---|---|---|---|---|
 | **AC1** | ⬜ | A single gate edits several records and one click saves them all; only changed rows are written | [1](#scope) | Binary, from Slack |
-| **AC2** | ⬜ | `manage_budget` uses it | [4](#scope) | Binary, from Slack |
+| **AC2** | ~~⬜~~ | ~~`manage_budget` uses it~~ **Moved to Sprint 14 by Javear 2026-10-18, with a clarification:** `manage_budget` is one editable field (amount) per category, ~21 rows — inside the contract's small-grid route (*one editable column of up to about 30 rows*), so it stays a single form, **not** `manage_expenses`' pick-one. Its one gap is grouping: income / discretionary / non-discretionary are label prefixes because a form field cannot carry a sub-title — a field `group` rendering a heading where it changes (Execution) | [4](#scope) | Binary, from Slack |
 | **AC3** | 🟡 | Novia selects the pattern unprompted when a design calls for it | [2](#scope), [3](#scope) | Binary, from a cold `/novia` session |
 | **AC4** | 🟡 | A gate that would exceed the ceiling fails in a way that names the cause and the remedy | [3](#scope), [5](#scope), [10](#scope), [11](#scope), [12](#scope) | Binary |
 | **AC5** | ⬜ | `edit_budget` uses the pattern and runs end to end from Slack | [6](#scope) | Binary, from Slack |
@@ -628,4 +628,13 @@ gate the row selection leads to*; hers restates it and says "button", which is w
 
 **AC7 ✅ — closed by Javear 2026-10-18** ("happy with manage expenses for now"); scope item 8 ✅.
 
-**Next:** AC1/AC2 wording against the small-grid decision; item 10 (`preview_step`) spec. (Memory 441 is deleted — done.)
+**Novia moved to `anthropic/claude-opus-5-5`** (`ccb6158`; `minds_eye_preferences` v7 upserted; she cost
+$1.23 over 30 days on sonnet-4-6). `docs/perplexityLLMs.json` refreshed from the gateway's live list.
+
+**AC2 moved to Sprint 14 (Javear).** Checked first: the live `human_gate` decision tree does **not**
+send a one-column set to pick-one — *"or one editable column of up to about 30 rows"* is the grid
+route, and pick-one is only *"for any editable set larger than a small grid"*. `manage_budget`'s
+grouping gap is real and Execution: form fields are inputs only (`step-executor.mjs` `case 'form'`),
+so there is nothing to render a sub-title between them.
+
+**Next:** sprint close — dispositions for AC1, AC3, AC4, AC5, AC6 awaiting Javear.
