@@ -295,6 +295,7 @@ Read `docs/sprints/sprint-13.md` (outcome, retro) before adding anything to Spri
 | `docs/arch-memory.md` | Memory layer design — PGC_Memory schema, write paths, retrieval, scope, provenance |
 | `docs/arch-session.md` | Session and chat design — PGC_Session/PGC_SessionEntry, `/chat`, `/explain`, diagnostics |
 | `docs/arch-minds-eye.md` | Minds-eye agent — tool catalog, use cases, agentic loop, implementation sequence (Sprint 5) |
+| `docs/arch-home-brain.md` | Home Brain — proposed single-page app: navigation and domain drill-down over REST, workflow execution pushed by the backend as for Slack (console layout, panels, `provider: 'web'` flows, REST resources, phasing) and the multi-tenant flexible-records direction. Proposed, not scheduled |
 
 ### Process and reference
 
