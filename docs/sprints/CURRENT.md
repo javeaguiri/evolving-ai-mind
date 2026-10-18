@@ -584,5 +584,8 @@ the test copies of it are gone. Replayed run 908's 50 items through `dialogToBlo
 (2026-10-17) — likely re-entered because the list hid them; Javear's to delete. A list whose rows
 carry no `responseData.table` renders an empty `# ` heading line above its table.
 
-**Next:** Javear checks October shows all 50 rows; the delete path and its semantics (AC7); then
+**Confirmed from Slack by Javear 2026-10-18:** October renders as one table, all 50 rows, ending
+at 302 — Slack opens a long table in its own scrolling viewer on click.
+
+**Next:** the delete path and its semantics (AC7); then
 the session 9 list — Novia corrects memory 441, AC1/AC2 wording, item 10 spec.
