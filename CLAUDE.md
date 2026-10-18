@@ -259,6 +259,7 @@ Read `docs/sprints/sprint-13.md` (outcome, retro) before adding anything to Spri
 
 **Decided 2026-10-18 (Javear): a web site becomes the main front end; Slack stays an accessory.** Editing a spreadsheet of data is what proved Slack was not cutting it. The goal is general acceptability, **not** multi-tenancy, which waits until the construction-company partner commits. Design: `docs/arch-home-brain.md`, Phase 0.
 
+0. **A detailed design of the web app first** — `docs/arch-web-app.md`, approved before any build: hosting, sign-in, framework, result delivery, pages, every gate type's web rendering incl. the editable grid, API surface, states, wireframes.
 1. **The web provider end to end** — `GET /gates`, `POST /gates/{runId}/responses`, `GET /inbox` spec-first; `provider: 'web'`; a gate shown, answered and resumed on the site.
 2. **A `form` gate as a real editable grid**, with `manage_budget` (357) as the first workflow — plus its four data findings (all-rows write, `text` amounts, hardcoded USD, label-prefix grouping).
 3. **Sign-in for one user** — the browser never holds the internal API key.
