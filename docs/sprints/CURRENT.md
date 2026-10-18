@@ -87,7 +87,7 @@ proprietary syntax the harness has to learn.
 | **5** | ~~Decide whether the >40-cell case pages, narrows, or refuses — and make the refusal say which~~ **DECIDED 2026-10-10 by Javear:** an editable grid is kept only for small sets; past that the route is **pick one** — a numbered list, type the row number, then a form for that one record (item 12). Paging an editable grid is dropped. Past what one list can show, **narrow**. A real spreadsheet edit is deferred to the planned web experience layer (`docs/arch-home-brain.md`). The grid threshold lands in the contract under item 12 |
 | **6** | **`edit_budget` (357 v6), moved from Sprint 12 Track E.** Novia converts its edit flow to the bulk-edit pattern, **then** it is retested end to end from Slack — once, against the design that will survive. Carried from Sprint 9 and Sprint 11 |
 | **7** | **The inventory correction workflow, moved whole from Sprint 12 Track C — see the section below.** Three of its four verbs are record edits over the same two tables, so it is the bulk-edit pattern's third consumer and its hardest test |
-| **8** | **`manage_expenses`, carried from Sprint 12 Track F.** Designed and evaluated, not built. **Two corrections must be sent before the build** — the `payment_method` vocabulary mismatch and the hard delete both destroy data during the troubleshooting session itself |
+| **8** | ✅ **DONE 2026-10-18 — 360 v9: add, edit and soft delete confirmed from Slack (runs 905, 908, 913); accepted by Javear.** **`manage_expenses`, carried from Sprint 12 Track F.** Designed and evaluated, not built. **Two corrections must be sent before the build** — the `payment_method` vocabulary mismatch and the hard delete both destroy data during the troubleshooting session itself |
 | **9** | ~~**`gate_too_many_fields` cannot see the case it exists for.**~~ **FOLDED INTO ITEM 10, 2026-10-10.** The simulator is pure — it fetches no data — and a `fields` array built by a `js_transform` loop has no length until it runs on real rows, so a static check can only say *unknowable*. Workflow 360 v1 registered 54 fields past exactly this blind spot. Counting against real data through the real renderer is item 10. Original text: **`gate_too_many_fields` cannot see the case it exists for.** It guards `Array.isArray(s.fields)`, so a `"{{template}}"` fields reference is skipped — and that is the only shape whose length is a row count. `gate_option_set_unbounded` already solved the identical problem one field apart (walk back to every writer of the key, refuse an unbounded `serv_*`, warn where the length is unknowable); reuse it against `MAX_GATE_FIELDS`. Its current remedy text also prescribes one-record-at-a-time editing, which is the design this sprint replaces. **Held until Novia's feedback** — her behaviour against the new contract says whether the text alone suffices |
 
 | **10** | **`preview_step`, headless, with gate size measured — added 2026-10-10.** The tool adopted in Sprint 12 (`docs/backlog.md`, "Step preview") and never built: one step evaluated against a chosen state — hand-written or lifted from a run — through the real `buildDialog` → `dialogToBlocks`, returning for a `human_gate` the **block count and the payload size** alongside the resolved fields and options. Slack does not publish its size limit, so measuring before registering is the only dependable guard; run 872 was diagnosed by doing exactly this by hand. Spec-first: `openapi.yaml`, a tool row in `minds_eye_tool_schemas`, `docs/arch-minds-eye.md`. Headless only — the rendered form stays in the backlog |
@@ -120,7 +120,7 @@ position is read at a glance.
 | **AC4** | 🟡 | A gate that would exceed the ceiling fails in a way that names the cause and the remedy | [3](#scope), [5](#scope), [10](#scope), [11](#scope), [12](#scope) | Binary |
 | **AC5** | ⬜ | `edit_budget` uses the pattern and runs end to end from Slack | [6](#scope) | Binary, from Slack |
 | **AC6** | ⬜ | One correction workflow performs rename, merge, recategorise and alias-fix; aliases **81**, **60** and **59** are corrected through it | [7](#scope), [Track C](#track-c-moved-from-sprint-12--the-inventory-correction-workflow) | Binary, from Slack, no raw SQL |
-| **AC7** | 🟡 | `manage_expenses` is built by Novia and runs end to end — add, delete and edit — with the two data-destroying corrections applied and the delete semantics decided. **Add and edit confirmed from Slack 2026-10-18 (runs 905/908); delete decided as soft delete (`deleted_at`), v8 built it, run 911 failed (Generation) — retest pending** | [8](#scope), [12](#scope), [13](#scope) | Binary, from Slack |
+| **AC7** | ✅ | `manage_expenses` is built by Novia and runs end to end — add, delete and edit — with the two data-destroying corrections applied and the delete semantics decided. **Add and edit confirmed from Slack 2026-10-18 (runs 905/908); delete decided as soft delete (`deleted_at`); v8's run 911 failed (Generation), v9's run 913 deleted end to end. Met 2026-10-18, accepted by Javear with one known gap (Delete on the Add form fails without writing)** | [8](#scope), [12](#scope), [13](#scope) | Binary, from Slack |
 
 ---
 
@@ -613,12 +613,19 @@ as *Delete this expense*, routed to 8a; "Delete Selected" is gone from step 8. I
 Delete on **302** and **287** (the duplicates — `deleted_at` set, both gone from the reload; 284
 and 301 kept), Add New → **303**, Edit **260**. Every step completed.
 
-**One hazard left — Generation.** Delete is a `special_button`, and special buttons take no
+**One gap left — Generation, accepted.** Delete is a `special_button`, and special buttons take no
 `condition` (only `options` do — `resolveGateOptions`), so it also shows on the **Add New** form.
-There `selected_expense_id` still holds the last row picked: after an Edit it offers to delete
-*that* row (the confirm shows its title, so not silent), and on a fresh run's first Add it is
-`null` — run 911 again. Remedy for her: Delete as an `option` with a condition on
-`edit_state.is_new`. No engine change.
+v9's 8a reads `edit_state.edit_id`, which is `''` for a new record — so a Delete there renders
+`**** ()` and fails at 9b as run 911 did, **writing nothing**. (I first read 8a as using
+`selected_expense_id` and told Javear it could target the last-edited row; it cannot.) Remedy
+whenever 360 is next touched: Delete as an `option` with a condition on `edit_state.is_new`.
 
-**Next:** Javear decides whether AC7 waits for that; then
-the session 9 list — Novia corrects memory 441, AC1/AC2 wording, item 10 spec.
+**Novia's contract feedback (seq 99):** she judges the new `list_selection` sentence right and
+proposes adding *"place it after the record is confirmed — e.g. as a button on a form or confirm
+gate the item_action leads to."* **Not adopted** — the sentence already names *an option on the
+gate the row selection leads to*; hers restates it and says "button", which is what led her to
+`special_buttons`, the one form that cannot be conditioned.
+
+**AC7 ✅ — closed by Javear 2026-10-18** ("happy with manage expenses for now"); scope item 8 ✅.
+
+**Next:** AC1/AC2 wording against the small-grid decision; item 10 (`preview_step`) spec. (Memory 441 is deleted — done.)
