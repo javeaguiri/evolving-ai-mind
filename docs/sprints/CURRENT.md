@@ -87,5 +87,5 @@ retrospective lists second: diagnosing without reading the later runs.
 
 **Run 916 (v10) — completed, every step:** edit (258 Car Insurance → €0, via 11b), add (304
 "Delete me", via 11a, category 17, debit, EUR), delete (304 `deleted_at` set). Delete-on-Add is
-hidden by construction (`edit_id` is `''` on Add). Her request to delete stale memories 422 and the
+hidden — **confirmed from Slack by Javear** (`edit_id` is `''` on Add). Her request to delete stale memories 422 and the
 v1 build memory awaits Javear.
