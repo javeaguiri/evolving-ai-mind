@@ -71,3 +71,21 @@ and these ACs are right.
 | Removing the Slack leaks in `arch-home-brain.md` §3.2 | Phase 1, except where Phase 0 needs one gone |
 
 ## Session Notes
+
+### Session 1 — 2026-10-18 — before scoping: `manage_expenses` v10, and Novia on Opus 5.5
+
+**Novia's model verified from the proc logs:** every `callLlmWithTools` call before the 13:10 switch
+was `anthropic/claude-sonnet-4-6`; every call since — session 1236, 14:27–14:30 — is
+`anthropic/claude-opus-5-5`.
+
+**360 v10 (her first work on Opus):** Delete is an `option` with `condition:
+local_state.edit_state.edit_id`, hidden for a new record — closing Sprint 13 AC7's one accepted gap.
+She also split step 11 into `serv_insert` (11a) / `serv_update` (11b) on a **false diagnosis** —
+*"saving a new expense has never worked"*, from runs 903/904, which predate `3ce72e9`; runs 905/913
+had inserted rows 289–303 through the upsert. Sound and harmless, but it repeated the habit her own
+retrospective lists second: diagnosing without reading the later runs.
+
+**Run 916 (v10) — completed, every step:** edit (258 Car Insurance → €0, via 11b), add (304
+"Delete me", via 11a, category 17, debit, EUR), delete (304 `deleted_at` set). Delete-on-Add is
+hidden by construction (`edit_id` is `''` on Add). Her request to delete stale memories 422 and the
+v1 build memory awaits Javear.
