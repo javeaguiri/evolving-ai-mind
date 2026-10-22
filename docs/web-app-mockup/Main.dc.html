@@ -1,0 +1,719 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Home Brain console</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F4F5F7}
+a{color:#0D6A6A}a:hover{color:#094F4F}
+button{font:inherit;cursor:pointer}
+input,select,textarea{font:inherit;color:#15191E}
+.btn{display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:0 16px;border-radius:8px;border:1px solid #C9CFD6;background:#FFFFFF;color:#15191E;font-weight:500;font-size:14px}
+.btn:hover{background:#EEF1F4}
+.btn-primary{background:#0D6A6A;border-color:#0D6A6A;color:#FFFFFF}
+.btn-primary:hover{background:#094F4F}
+.btn-danger{background:#FFFFFF;border-color:#B42318;color:#B42318}
+.btn-quiet{border-color:transparent;background:transparent}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
+.nav-item{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:40px;padding:0 12px;border:0;border-radius:8px;background:transparent;color:#2B323B;font-size:14px;text-align:left}
+.nav-item:hover{background:#E8EBEF}
+.nav-on{background:#E2F0EF;color:#0A5555;font-weight:600}
+.cell{width:100%;box-sizing:border-box;min-height:36px;padding:6px 8px;border:1px solid transparent;border-radius:6px;background:transparent;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:14px}
+.cell-text{text-align:left;font-family:'IBM Plex Sans',sans-serif}
+.cell:hover{border-color:#C9CFD6;background:#FFFFFF}
+.cell:focus{outline:2px solid #0D6A6A;outline-offset:-1px;background:#FFFFFF}
+.cell-changed{background:#FFF3C4}
+.cell-bad{background:#FDECEA;border-color:#B42318}
+.row-deleted td{color:#8A929C;text-decoration:line-through}
+.row-new td{background:#F2F8F7}
+.field{width:100%;box-sizing:border-box;min-height:40px;padding:8px 10px;border:1px solid #C9CFD6;border-radius:8px;background:#FFFFFF;font-size:14px}
+.field:focus{outline:2px solid #0D6A6A;outline-offset:-1px}
+.grid{width:100%;border-collapse:separate;border-spacing:0;font-size:14px}
+.grid th{font-weight:600;text-align:left;color:#3A424C;padding:8px 10px;border-bottom:1px solid #DCE0E5;background:#F8F9FA;position:sticky;top:0}
+.grid td{padding:2px 4px;border-bottom:1px solid #EDF0F2;vertical-align:middle}
+.grid .rowhead{padding:8px 10px;color:#15191E}
+.grid .group td{background:#F4F5F7;font-weight:600;color:#3A424C;padding:10px;border-bottom:1px solid #DCE0E5}
+.grid tfoot td{padding:10px;font-weight:600;border-top:2px solid #C9CFD6;border-bottom:0}
+.num{text-align:right;font-family:'IBM Plex Mono',monospace}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:500}
+.chip-web{background:#E2F0EF;color:#0A5555}
+.chip-slack{background:#F1E9F8;color:#5B2A86}
+.chip-phase{background:#FFF0CC;color:#6A4A00}
+.lang{min-height:32px;padding:0 10px;border:1px solid #C9CFD6;background:#FFFFFF;font-size:13px;font-weight:600;color:#3A424C}
+.lang-on{background:#15191E;color:#FFFFFF;border-color:#15191E}
+</style>
+</helmet>
+<div style="min-height: 100vh; background: #F4F5F7; color: #15191E; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 15px; line-height: 1.5">
+
+<header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 12px 20px; background: #FFFFFF; border-bottom: 1px solid #DCE0E5">
+<div style="display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; letter-spacing: -0.01em">
+<svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true" fill="none" stroke="#0D6A6A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13 14 5l10 8"></path><path d="M7 11v12h14V11"></path><circle cx="14" cy="17" r="2.5"></circle></svg>
+<span>{{t.brand}}</span>
+</div>
+<form onSubmit="{{ sendCommand }}" style="flex: 1 1 320px; display: flex; gap: 8px; min-width: 0">
+<label for="cmd" style="position: absolute; left: -9999px">{{t.askLabel}}</label>
+<input id="cmd" class="field" value="{{ cmd }}" onChange="{{ onCmd }}" placeholder="{{ t.askPlaceholder }}" style="flex: 1 1 auto; min-width: 0">
+<button class="btn btn-primary" type="submit">{{t.send}}</button>
+</form>
+<div style="display: flex; align-items: center; gap: 12px">
+<div role="group" aria-label="Language" style="display: flex">
+<button class="{{ langEnCls }}" onClick="{{ setEn }}" style="border-radius: 8px 0 0 8px">EN</button>
+<button class="{{ langEsCls }}" onClick="{{ setEs }}" style="border-radius: 0 8px 8px 0; margin-left: -1px">ES</button>
+</div>
+<button class="btn btn-quiet" aria-label="Account" style="padding: 0; min-height: 40px; width: 40px; justify-content: center; border-radius: 999px; background: #15191E; color: #FFFFFF; font-weight: 600">J</button>
+</div>
+</header>
+
+<div style="display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0">
+
+<nav aria-label="Main" style="flex: 1 1 200px; max-width: 280px; box-sizing: border-box; padding: 16px 12px; display: flex; flex-direction: column; gap: 2px">
+<sc-for list="{{ navMain }}" as="n" hint-placeholder-count="2">
+<button class="{{ n.cls }}" onClick="{{ n.go }}"><span>{{n.label}}</span><sc-if value="{{ n.hasCount }}" hint-placeholder-val="{{ true }}"><span class="chip chip-web">{{n.count}}</span></sc-if></button>
+</sc-for>
+<div style="margin: 16px 12px 6px; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #586170">{{t.phase1}}</div>
+<sc-for list="{{ navPhase1 }}" as="n" hint-placeholder-count="4">
+<button class="{{ n.cls }}" onClick="{{ n.go }}"><span>{{n.label}}</span><span class="chip chip-phase">P1</span></button>
+</sc-for>
+</nav>
+
+<main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 20px 24px 48px">
+
+<sc-if value="{{ isHome }}" hint-placeholder-val="{{ true }}">
+<div style="max-width: 920px; display: flex; flex-direction: column; gap: 28px">
+<section aria-labelledby="needs-h">
+<h1 id="needs-h" style="margin: 0 0 12px; font-size: 22px; font-weight: 600">{{t.needsYou}} <span style="color: #586170; font-weight: 500">({{needsCount}})</span></h1>
+<sc-if value="{{ hasNeeds }}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; flex-direction: column; gap: 10px">
+<sc-for list="{{ needs }}" as="g" hint-placeholder-count="2">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 16px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px">
+<div style="flex: 1 1 280px; min-width: 0">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 4px">
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #586170">{{g.workflow}}</span>
+<span class="{{ g.chipCls }}">{{g.provider}}</span>
+</div>
+<div style="font-weight: 600">{{g.title}}</div>
+<div style="font-size: 13px; color: #586170">{{g.waiting}}</div>
+</div>
+<button class="btn btn-primary" onClick="{{ g.open }}">{{t.open}}</button>
+</div>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{ noNeeds }}" hint-placeholder-val="{{ false }}">
+<div style="padding: 24px; background: #FFFFFF; border: 1px dashed #C9CFD6; border-radius: 12px; color: #586170">{{t.nothingWaiting}}</div>
+</sc-if>
+</section>
+<section aria-labelledby="threads-h">
+<h2 id="threads-h" style="margin: 0 0 12px; font-size: 18px; font-weight: 600">{{t.recentThreads}}</h2>
+<div style="background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px">
+<sc-for list="{{ threads }}" as="th" hint-placeholder-count="3">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; padding: 12px 16px; border-bottom: 1px solid #EDF0F2">
+<span>“{{th.text}}”</span>
+<span style="font-size: 13px; color: #586170">{{th.status}} · {{th.when}}</span>
+</div>
+</sc-for>
+</div>
+</section>
+</div>
+</sc-if>
+
+<sc-if value="{{ isBudget }}" hint-placeholder-val="{{ false }}">
+<div style="max-width: 920px; display: flex; flex-direction: column; gap: 16px">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px">
+<button class="btn btn-quiet" onClick="{{ goHome }}" style="padding: 0 8px">← {{t.back}}</button>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #586170">manage_budget · run 931</span>
+<span class="chip chip-web">{{t.web}}</span>
+</div>
+
+<sc-if value="{{ b.showCommand }}" hint-placeholder-val="{{ false }}">
+<div style="align-self: flex-end; max-width: 70%; padding: 10px 14px; border-radius: 12px; background: #15191E; color: #FFFFFF">{{b.commandText}}</div>
+</sc-if>
+
+<sc-if value="{{ b.monthOpen }}" hint-placeholder-val="{{ false }}">
+<div style="padding: 20px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 14px">
+<div style="font-weight: 600">{{wf.monthQuestion}}</div>
+<div style="max-width: 360px">
+<label for="month" style="display: block; font-size: 13px; font-weight: 500; color: #3A424C; margin-bottom: 4px">{{wf.month}}</label>
+<select id="month" class="field" value="{{ b.month }}" onChange="{{ onMonth }}">
+<sc-for list="{{ months }}" as="m" hint-placeholder-count="3"><option value="{{ m.value }}">{{m.label}}</option></sc-for>
+</select>
+</div>
+<div style="display: flex; gap: 8px; flex-wrap: wrap">
+<button class="btn btn-primary" onClick="{{ monthContinue }}">{{wf.continue}}</button>
+<button class="btn" onClick="{{ goHome }}">{{wf.cancel}}</button>
+</div>
+</div>
+</sc-if>
+<sc-if value="{{ b.monthAnswered }}" hint-placeholder-val="{{ false }}">
+<div style="font-size: 14px; color: #586170; padding: 0 4px">✓ {{t.youChose}} {{wf.continue}} · {{b.monthLabel}}</div>
+</sc-if>
+
+<sc-if value="{{ b.gridOpen }}" hint-placeholder-val="{{ true }}">
+<div style="background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; overflow: hidden">
+<div style="padding: 20px 20px 8px">
+<div style="font-size: 18px; font-weight: 600; margin-bottom: 8px">{{wf.editorTitle}} — {{b.monthLabel}}</div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px 20px; font-size: 14px; color: #3A424C">
+<sc-for list="{{ subtotals }}" as="s" hint-placeholder-count="4"><span><strong>{{s.label}}</strong> {{s.value}}</span></sc-for>
+</div>
+<div style="margin-top: 6px; font-size: 14px"><strong>{{wf.net}}</strong> {{netLoaded}}</div>
+</div>
+<div style="overflow-x: auto; padding: 8px 12px 0">
+<table class="grid" style="min-width: 420px">
+<thead><tr><th scope="col">{{wf.category}}</th><th scope="col" class="num" style="width: 180px; text-align: right">{{wf.amount}} (€)</th></tr></thead>
+<sc-for list="{{ groups }}" as="grp" hint-placeholder-count="3">
+<tbody>
+<tr class="group"><td colspan="2">{{grp.label}}</td></tr>
+<sc-for list="{{ grp.rows }}" as="r" hint-placeholder-count="3">
+<tr>
+<td class="rowhead">{{r.name}}<sc-if value="{{ r.bad }}" hint-placeholder-val="{{ false }}"><div style="font-size: 12px; color: #B42318">{{t.notANumber}}</div></sc-if></td>
+<td><input class="{{ r.cls }}" inputmode="decimal" aria-label="{{ r.aria }}" value="{{ r.text }}" onChange="{{ r.onInput }}"></td>
+</tr>
+</sc-for>
+</tbody>
+</sc-for>
+</table>
+</div>
+<div style="position: sticky; bottom: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; background: #FFFFFF; border-top: 1px solid #DCE0E5">
+<span style="font-size: 14px; color: #3A424C">{{changesLabel}}</span>
+<div style="display: flex; gap: 8px; flex-wrap: wrap">
+<button class="btn" onClick="{{ discardBudget }}">{{t.discard}}</button>
+<button class="btn" onClick="{{ goHome }}">{{wf.cancel}}</button>
+<button class="btn btn-primary" onClick="{{ saveBudget }}">{{wf.save}}</button>
+</div>
+</div>
+<sc-if value="{{ b.showErrors }}" hint-placeholder-val="{{ false }}">
+<div role="alert" style="margin: 0 20px 16px; padding: 10px 14px; border-radius: 8px; background: #FDECEA; color: #8C1D13; font-size: 14px">{{t.fixCells}}</div>
+</sc-if>
+</div>
+</sc-if>
+<sc-if value="{{ b.gridAnswered }}" hint-placeholder-val="{{ false }}">
+<div style="font-size: 14px; color: #586170; padding: 0 4px">✓ {{t.youChose}} {{wf.save}} · {{b.sentChanges}}</div>
+</sc-if>
+
+<sc-if value="{{ b.working }}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; align-items: center; gap: 10px; font-size: 14px; color: #586170; padding: 0 4px">
+<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" fill="none" stroke="#0D6A6A" stroke-width="2"><circle cx="9" cy="9" r="7" stroke-opacity=".25"></circle><path d="M16 9a7 7 0 0 0-7-7" stroke-linecap="round"></path></svg>
+{{t.working}}
+</div>
+</sc-if>
+
+<sc-if value="{{ b.done }}" hint-placeholder-val="{{ false }}">
+<div style="padding: 20px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 12px">
+<div style="font-weight: 600">✓ {{wf.savedFor}} {{b.monthLabel}}</div>
+<div style="font-size: 14px; color: #3A424C">{{resultLine}}</div>
+<div style="overflow-x: auto">
+<table class="grid" style="max-width: 560px">
+<thead><tr><th scope="col">{{wf.category}}</th><th scope="col" class="num" style="text-align: right">{{t.before}}</th><th scope="col" class="num" style="text-align: right">{{t.after}}</th></tr></thead>
+<tbody>
+<sc-for list="{{ savedRows }}" as="sr" hint-placeholder-count="2"><tr><td class="rowhead">{{sr.name}}</td><td class="num rowhead">{{sr.before}}</td><td class="num rowhead">{{sr.after}}</td></tr></sc-for>
+</tbody>
+</table>
+</div>
+<div style="font-size: 14px"><strong>{{wf.net}}</strong> {{netNow}}</div>
+</div>
+</sc-if>
+</div>
+</sc-if>
+
+<sc-if value="{{ isSlackGate }}" hint-placeholder-val="{{ false }}">
+<div style="max-width: 920px; display: flex; flex-direction: column; gap: 16px">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px">
+<button class="btn btn-quiet" onClick="{{ goHome }}" style="padding: 0 8px">← {{t.back}}</button>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #586170">review_inventory · run 928</span>
+<span class="chip chip-slack">{{t.startedInSlack}}</span>
+</div>
+<div style="padding: 20px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 14px">
+<div style="font-weight: 600; font-size: 17px">{{wf.mergeTitle}}</div>
+<div style="overflow-x: auto">
+<table class="grid" style="max-width: 640px">
+<thead><tr><th scope="col">{{wf.item}}</th><th scope="col">{{wf.keep}}</th><th scope="col" class="num" style="text-align: right">{{wf.qty}}</th></tr></thead>
+<tbody>
+<tr><td class="rowhead">Whole milk 1 L</td><td class="rowhead">✓</td><td class="num rowhead">4</td></tr>
+<tr><td class="rowhead">Milk, whole, 1 litre</td><td class="rowhead">—</td><td class="num rowhead">2</td></tr>
+</tbody>
+</table>
+</div>
+<details style="font-size: 14px"><summary style="cursor: pointer; color: #0D6A6A; font-weight: 500">{{wf.whyMerge}}</summary><p style="margin: 8px 0 0; color: #3A424C">{{wf.whyMergeText}}</p></details>
+<sc-if value="{{ slackOpen }}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; gap: 8px; flex-wrap: wrap">
+<button class="btn btn-primary" onClick="{{ approveSlack }}">{{wf.approve}}</button>
+<button class="btn" onClick="{{ goHome }}">{{wf.cancel}}</button>
+</div>
+</sc-if>
+</div>
+<sc-if value="{{ slackDone }}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column; gap: 8px">
+<div style="font-size: 14px; color: #586170; padding: 0 4px">✓ {{t.youChose}} {{wf.approve}}</div>
+<div style="padding: 14px 16px; border-radius: 10px; background: #F1E9F8; color: #3F1D5E; font-size: 14px">{{t.slackNote}}</div>
+</div>
+</sc-if>
+</div>
+</sc-if>
+
+<sc-if value="{{ isThreads }}" hint-placeholder-val="{{ false }}">
+<div style="max-width: 920px">
+<h1 style="margin: 0 0 12px; font-size: 22px; font-weight: 600">{{t.threads}}</h1>
+<div style="background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px">
+<sc-for list="{{ threads }}" as="th" hint-placeholder-count="3">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; padding: 14px 16px; border-bottom: 1px solid #EDF0F2">
+<span>“{{th.text}}”</span>
+<span style="font-size: 13px; color: #586170">{{th.status}} · {{th.when}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isExpenses }}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px">
+<div>
+<div style="font-size: 13px; color: #586170">{{t.domains}} › {{reg.budgetDomain}}</div>
+<h1 style="margin: 2px 0 0; font-size: 22px; font-weight: 600">{{reg.expenses}} <span class="chip chip-phase" style="vertical-align: middle">{{t.phase1}}</span></h1>
+</div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+<label for="expmonth" style="font-size: 13px; color: #3A424C">{{reg.month}}</label>
+<select id="expmonth" class="field" style="width: auto"><option>{{b.monthLabel}}</option></select>
+<button class="btn" onClick="{{ addExpense }}">+ {{t.addRow}}</button>
+</div>
+</div>
+<div style="background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; overflow: hidden">
+<div style="overflow-x: auto">
+<table class="grid" style="min-width: 820px">
+<thead><tr>
+<th scope="col" style="width: 150px">{{reg.date}}</th>
+<th scope="col">{{reg.title}}</th>
+<th scope="col" style="width: 170px">{{reg.category}}</th>
+<th scope="col" style="width: 140px">{{reg.payment}}</th>
+<th scope="col" style="width: 130px; text-align: right">{{reg.amount}} (€)</th>
+<th scope="col" style="width: 56px"><span style="position: absolute; left: -9999px">{{t.actions}}</span></th>
+</tr></thead>
+<tbody>
+<sc-for list="{{ expRows }}" as="e" hint-placeholder-count="6">
+<tr class="{{ e.rowCls }}">
+<td><input type="date" class="{{ e.dateCls }}" aria-label="{{ reg.date }}" value="{{ e.date }}" onChange="{{ e.onDate }}" disabled="{{ e.deleted }}"></td>
+<td><input class="{{ e.titleCls }}" aria-label="{{ reg.title }}" value="{{ e.title }}" onChange="{{ e.onTitle }}" disabled="{{ e.deleted }}"></td>
+<td><select class="{{ e.catCls }}" aria-label="{{ reg.category }}" value="{{ e.category }}" onChange="{{ e.onCat }}" disabled="{{ e.deleted }}"><sc-for list="{{ categories }}" as="c" hint-placeholder-count="4"><option value="{{ c.id }}">{{c.name}}</option></sc-for></select></td>
+<td><select class="{{ e.payCls }}" aria-label="{{ reg.payment }}" value="{{ e.payment }}" onChange="{{ e.onPay }}" disabled="{{ e.deleted }}"><sc-for list="{{ payments }}" as="p" hint-placeholder-count="3"><option value="{{ p.value }}">{{p.label}}</option></sc-for></select></td>
+<td><input class="{{ e.amtCls }}" inputmode="decimal" aria-label="{{ reg.amount }}" value="{{ e.amount }}" onChange="{{ e.onAmt }}" disabled="{{ e.deleted }}"></td>
+<td style="text-align: center"><button class="btn btn-quiet" aria-label="{{ e.delLabel }}" onClick="{{ e.toggleDel }}" style="padding: 0 10px; min-height: 36px">{{e.delGlyph}}</button></td>
+</tr>
+</sc-for>
+</tbody>
+<tfoot><tr><td colspan="4">{{t.total}} · {{expCountLabel}}</td><td class="num">{{expTotal}}</td><td></td></tr></tfoot>
+</table>
+</div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; border-top: 1px solid #DCE0E5">
+<span style="font-size: 14px; color: #3A424C">{{expChangesLabel}}</span>
+<div style="display: flex; gap: 8px; flex-wrap: wrap">
+<button class="btn" onClick="{{ discardExp }}">{{t.discard}}</button>
+<button class="btn btn-primary" onClick="{{ saveExp }}">{{t.saveChanges}}</button>
+</div>
+</div>
+</div>
+<sc-if value="{{ expBanner }}" hint-placeholder-val="{{ false }}">
+<div role="status" style="padding: 12px 16px; border-radius: 10px; background: #E2F0EF; color: #0A4545; font-size: 14px">{{expBannerText}}</div>
+</sc-if>
+</div>
+</sc-if>
+
+<sc-if value="{{ isRecipe }}" hint-placeholder-val="{{ false }}">
+<div style="max-width: 980px; display: flex; flex-direction: column; gap: 16px">
+<div>
+<div style="font-size: 13px; color: #586170">{{t.domains}} › {{reg.recipes}}</div>
+<h1 style="margin: 2px 0 0; font-size: 22px; font-weight: 600">{{rec.name}} <span class="chip chip-phase" style="vertical-align: middle">{{t.phase1}}</span></h1>
+</div>
+<section style="padding: 20px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px">
+<div style="grid-column: 1 / -1"><label for="rname" style="display: block; font-size: 13px; font-weight: 500; color: #3A424C; margin-bottom: 4px">{{reg.recipeName}}</label><input id="rname" class="field" value="{{ rec.name }}" onChange="{{ onRecName }}"></div>
+<div><label for="rserv" style="display: block; font-size: 13px; font-weight: 500; color: #3A424C; margin-bottom: 4px">{{reg.servings}}</label><input id="rserv" class="field" inputmode="numeric" value="{{ rec.servings }}" onChange="{{ onRecServ }}"></div>
+<div><label for="rprep" style="display: block; font-size: 13px; font-weight: 500; color: #3A424C; margin-bottom: 4px">{{reg.prep}}</label><input id="rprep" class="field" inputmode="numeric" value="{{ rec.prep }}" onChange="{{ onRecPrep }}"></div>
+<div><label for="rcook" style="display: block; font-size: 13px; font-weight: 500; color: #3A424C; margin-bottom: 4px">{{reg.cook}}</label><input id="rcook" class="field" inputmode="numeric" value="{{ rec.cook }}" onChange="{{ onRecCook }}"></div>
+</section>
+<section style="background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; overflow: hidden">
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 20px 6px">
+<h2 style="margin: 0; font-size: 16px; font-weight: 600">{{reg.ingredients}}</h2>
+<button class="btn" onClick="{{ addIng }}">+ {{t.addRow}}</button>
+</div>
+<div style="overflow-x: auto; padding: 0 12px">
+<table class="grid" style="min-width: 640px">
+<thead><tr><th scope="col">{{reg.ingredient}}</th><th scope="col" style="width: 110px; text-align: right">{{reg.quantity}}</th><th scope="col" style="width: 110px">{{reg.unit}}</th><th scope="col">{{reg.note}}</th><th scope="col" style="width: 56px"><span style="position: absolute; left: -9999px">{{t.actions}}</span></th></tr></thead>
+<tbody>
+<sc-for list="{{ ingRows }}" as="ir" hint-placeholder-count="4">
+<tr>
+<td><select class="cell cell-text" aria-label="{{ reg.ingredient }}" value="{{ ir.ingredient }}" onChange="{{ ir.onIng }}"><sc-for list="{{ ingredientOptions }}" as="io" hint-placeholder-count="4"><option value="{{ io }}">{{io}}</option></sc-for></select></td>
+<td><input class="cell" inputmode="decimal" aria-label="{{ reg.quantity }}" value="{{ ir.qty }}" onChange="{{ ir.onQty }}"></td>
+<td><select class="cell cell-text" aria-label="{{ reg.unit }}" value="{{ ir.unit }}" onChange="{{ ir.onUnit }}"><sc-for list="{{ units }}" as="u" hint-placeholder-count="4"><option value="{{ u }}">{{u}}</option></sc-for></select></td>
+<td><input class="cell cell-text" aria-label="{{ reg.note }}" value="{{ ir.note }}" onChange="{{ ir.onNote }}"></td>
+<td style="text-align: center"><button class="btn btn-quiet" aria-label="{{ t.remove }}" onClick="{{ ir.remove }}" style="padding: 0 10px; min-height: 36px">✕</button></td>
+</tr>
+</sc-for>
+</tbody>
+</table>
+</div>
+</section>
+<section style="background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; padding: 14px 20px 18px">
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px">
+<h2 style="margin: 0; font-size: 16px; font-weight: 600">{{reg.steps}}</h2>
+<button class="btn" onClick="{{ addStep }}">+ {{t.addStep}}</button>
+</div>
+<ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px">
+<sc-for list="{{ stepRows }}" as="st" hint-placeholder-count="4">
+<li style="display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px">
+<span style="flex: 0 0 32px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 999px; background: #E2F0EF; color: #0A5555; font-weight: 600; font-size: 14px">{{st.n}}</span>
+<textarea class="field" rows="2" aria-label="{{ st.aria }}" value="{{ st.text }}" onChange="{{ st.onText }}" style="flex: 1 1 320px; min-width: 0; resize: vertical"></textarea>
+<div style="display: flex; gap: 4px">
+<button class="btn btn-quiet" aria-label="{{ t.moveUp }}" onClick="{{ st.up }}" style="padding: 0 10px">↑</button>
+<button class="btn btn-quiet" aria-label="{{ t.moveDown }}" onClick="{{ st.down }}" style="padding: 0 10px">↓</button>
+<button class="btn btn-quiet" aria-label="{{ t.remove }}" onClick="{{ st.remove }}" style="padding: 0 10px">✕</button>
+</div>
+</li>
+</sc-for>
+</ol>
+</section>
+<div style="position: sticky; bottom: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px">
+<span style="font-size: 14px; color: #3A424C">{{recChangesLabel}}</span>
+<div style="display: flex; gap: 8px; flex-wrap: wrap">
+<button class="btn" onClick="{{ discardRec }}">{{t.discard}}</button>
+<button class="btn btn-primary" onClick="{{ saveRec }}">{{t.saveRecipe}}</button>
+</div>
+</div>
+<sc-if value="{{ recBanner }}" hint-placeholder-val="{{ false }}">
+<div role="status" style="padding: 12px 16px; border-radius: 10px; background: #E2F0EF; color: #0A4545; font-size: 14px">{{t.recSaved}}</div>
+</sc-if>
+</div>
+</sc-if>
+
+<sc-if value="{{ isNovia }}" hint-placeholder-val="{{ false }}">
+<div style="max-width: 760px; display: flex; flex-direction: column; gap: 14px">
+<h1 style="margin: 0; font-size: 22px; font-weight: 600">Novia <span class="chip chip-phase" style="vertical-align: middle">{{t.phase1}}</span></h1>
+<div style="align-self: flex-end; max-width: 75%; padding: 10px 14px; border-radius: 12px; background: #15191E; color: #FFFFFF">{{t.noviaAsk}}</div>
+<div style="max-width: 85%; padding: 14px 16px; border-radius: 12px; background: #FFFFFF; border: 1px solid #DCE0E5">{{t.noviaReply}}</div>
+<div style="padding: 18px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 10px">
+<div style="font-weight: 600">{{t.noviaGate}}</div>
+<pre style="margin: 0; padding: 12px; background: #F4F5F7; border-radius: 8px; font-family: 'IBM Plex Mono', monospace; font-size: 13px; white-space: pre-wrap">step 12 · fields[*]
++ row:    "&lt;category id&gt;"
++ column: "Amount"
++ group:  "&lt;budget type&gt;"</pre>
+<div style="display: flex; gap: 8px; flex-wrap: wrap"><button class="btn btn-primary">{{wf.approve}}</button><button class="btn">{{wf.cancel}}</button></div>
+</div>
+<label for="nmsg" style="position: absolute; left: -9999px">{{t.messageNovia}}</label>
+<input id="nmsg" class="field" placeholder="{{ t.messageNovia }}">
+</div>
+</sc-if>
+
+</main>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.cats = [
+      { id: 1, name: 'Salary', type: 'income', amount: 3800 },
+      { id: 2, name: 'Freelance work', type: 'income', amount: 600 },
+      { id: 3, name: 'Mortgage', type: 'non_discretionary', amount: 1150 },
+      { id: 4, name: 'Utilities', type: 'non_discretionary', amount: 180 },
+      { id: 5, name: 'Insurance', type: 'non_discretionary', amount: 95 },
+      { id: 6, name: 'Groceries', type: 'non_discretionary', amount: 520 },
+      { id: 7, name: 'Dining out', type: 'discretionary', amount: 160 },
+      { id: 8, name: 'Leisure', type: 'discretionary', amount: 120 },
+      { id: 9, name: 'Clothing', type: 'discretionary', amount: 80 },
+      { id: 10, name: 'Travel', type: 'discretionary', amount: 200 },
+      { id: 11, name: 'Savings', type: 'savings', amount: 400 }
+    ];
+    this.expSeed = [
+      { id: 301, date: '2026-10-02', title: 'Supermarket', category: '6', payment: 'debit', amount: 84.35 },
+      { id: 302, date: '2026-10-03', title: 'Electricity bill', category: '4', payment: 'debit', amount: 61.2 },
+      { id: 303, date: '2026-10-05', title: 'Pizza night', category: '7', payment: 'cash', amount: 32 },
+      { id: 304, date: '2026-10-08', title: 'Running shoes', category: '9', payment: 'credit', amount: 79.9 },
+      { id: 305, date: '2026-10-11', title: 'Bakery', category: '6', payment: 'cash', amount: 6.4 },
+      { id: 306, date: '2026-10-14', title: 'Cinema', category: '8', payment: 'debit', amount: 18 },
+      { id: 307, date: '2026-10-17', title: 'Market — fruit and vegetables', category: '6', payment: 'cash', amount: 27.75 }
+    ];
+    this.recSeed = {
+      name: 'Potato omelette', servings: '4', prep: '15', cook: '25',
+      ings: [
+        { ingredient: 'Potatoes', qty: '600', unit: 'g', note: 'peeled, thinly sliced' },
+        { ingredient: 'Eggs', qty: '6', unit: 'unit', note: '' },
+        { ingredient: 'Onion', qty: '1', unit: 'unit', note: 'optional' },
+        { ingredient: 'Olive oil', qty: '200', unit: 'ml', note: 'for frying' },
+        { ingredient: 'Salt', qty: '1', unit: 'tsp', note: '' }
+      ],
+      steps: [
+        'Fry the potatoes and onion slowly in the oil until soft, not browned.',
+        'Drain well, keeping the oil.',
+        'Beat the eggs with the salt and fold in the potatoes. Rest 5 minutes.',
+        'Cook in a little of the oil over medium heat until the base sets.',
+        'Turn with a plate, cook the other side, and serve warm.'
+      ]
+    };
+    this.state = {
+      lang: 'en', screen: 'home', cmd: '',
+      budgetFrom: 'needs', stage: 'grid', month: '2026-10', edits: {}, showErrors: false, sent: null,
+      budgetDone: false, slack: 'open',
+      exp: this.cloneExp(), expBanner: '',
+      rec: this.cloneRec(), recEdits: 0, recBanner: false
+    };
+  }
+  cloneExp() { return this.expSeed.map(r => Object.assign({}, r, { amount: null, deleted: false, isNew: false })); }
+  cloneRec() { const s = this.recSeed; return { name: s.name, servings: s.servings, prep: s.prep, cook: s.cook, ings: s.ings.map(i => Object.assign({}, i)), steps: s.steps.slice() }; }
+  locale() { return this.state.lang === 'es' ? 'es-ES' : 'en-IE'; }
+  money(n) { return new Intl.NumberFormat(this.locale(), { style: 'currency', currency: 'EUR' }).format(n); }
+  plain(n) { return new Intl.NumberFormat(this.locale(), { minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: false }).format(n); }
+  parse(text) {
+    const s = String(text).trim().replace(/\s/g, '');
+    if (s === '') return null;
+    if (!/^-?\d+([.,]\d+)?$/.test(s)) return NaN;
+    return Number(s.replace(',', '.'));
+  }
+  dict() {
+    const en = {
+      brand: 'Home brain', askLabel: 'Ask the home brain', askPlaceholder: 'Ask the home brain… e.g. “manage budget”', send: 'Send',
+      home: 'Home', threads: 'Threads', phase1: 'Phase 1', domains: 'Domains', expenses: 'Expenses', recipes: 'Recipes', activity: 'Activity', novia: 'Novia',
+      needsYou: 'Needs you', open: 'Open', nothingWaiting: 'Nothing is waiting for you.', recentThreads: 'Recent threads',
+      back: 'Back', web: 'Web', startedInSlack: 'Started in Slack', youChose: 'You chose', working: 'Working…',
+      notANumber: 'Not a number', fixCells: 'Some amounts are not numbers. Fix the marked cells — nothing was sent.',
+      discard: 'Discard', before: 'Before', after: 'After', total: 'Total', addRow: 'Add row', actions: 'Actions',
+      saveChanges: 'Save changes', saveRecipe: 'Save recipe', addStep: 'Add step', remove: 'Remove', moveUp: 'Move up', moveDown: 'Move down',
+      recSaved: 'Saved — the recipe, its ingredients and its steps were written in one transaction.',
+      slackNote: 'Answered on the web. The Slack message’s buttons now reply “Already answered elsewhere.” (Phase 1 updates the message itself.)',
+      noviaAsk: 'Can the budget form show as a grid on the web?',
+      noviaReply: 'Yes. I’ll add the layout hint to the fields step 12 already builds — Slack ignores it and keeps the stacked form.',
+      noviaGate: 'Approve change to manage_budget (v8)', messageNovia: 'Message Novia…',
+      noChanges: 'No changes', oneChange: '1 change', nChanges: ' changes', rows: ' rows', waiting: 'waiting ',
+      completed: 'completed', awaiting: 'awaiting you', running: 'running'
+    };
+    const es = {
+      brand: 'Cerebro de casa', askLabel: 'Pregunta al cerebro de casa', askPlaceholder: 'Pregunta… p. ej. “manage budget”', send: 'Enviar',
+      home: 'Inicio', threads: 'Conversaciones', phase1: 'Fase 1', domains: 'Dominios', expenses: 'Gastos', recipes: 'Recetas', activity: 'Actividad', novia: 'Novia',
+      needsYou: 'Te necesita', open: 'Abrir', nothingWaiting: 'No hay nada pendiente.', recentThreads: 'Conversaciones recientes',
+      back: 'Volver', web: 'Web', startedInSlack: 'Iniciado en Slack', youChose: 'Elegiste', working: 'Trabajando…',
+      notANumber: 'No es un número', fixCells: 'Algunos importes no son números. Corrige las celdas marcadas — no se ha enviado nada.',
+      discard: 'Descartar', before: 'Antes', after: 'Después', total: 'Total', addRow: 'Añadir fila', actions: 'Acciones',
+      saveChanges: 'Guardar cambios', saveRecipe: 'Guardar receta', addStep: 'Añadir paso', remove: 'Quitar', moveUp: 'Subir', moveDown: 'Bajar',
+      recSaved: 'Guardado — la receta, sus ingredientes y sus pasos se escribieron en una sola transacción.',
+      slackNote: 'Respondido en la web. Los botones del mensaje de Slack ahora responden «Ya se respondió en otro sitio». (La fase 1 actualiza el propio mensaje.)',
+      noviaAsk: '¿Puede el formulario del presupuesto verse como una cuadrícula en la web?',
+      noviaReply: 'Sí. Añadiré la indicación de diseño a los campos que ya construye el paso 12 — Slack la ignora y mantiene el formulario apilado.',
+      noviaGate: 'Aprobar cambio en manage_budget (v8)', messageNovia: 'Escribe a Novia…',
+      noChanges: 'Sin cambios', oneChange: '1 cambio', nChanges: ' cambios', rows: ' filas', waiting: 'esperando ',
+      completed: 'completada', awaiting: 'te espera', running: 'en curso'
+    };
+    return this.state.lang === 'es' ? es : en;
+  }
+  wfText() {
+    const en = { monthQuestion: 'Which month do you want to edit?', month: 'Month', continue: 'Continue', cancel: 'Cancel', save: 'Save',
+      editorTitle: 'Budget editor', net: 'Net cash flow:', category: 'Category', amount: 'Amount', savedFor: 'Budget saved for',
+      income: 'Income', non_discretionary: 'Non-discretionary', discretionary: 'Discretionary', savings: 'Savings',
+      mergeTitle: 'Merge these two inventory items?', item: 'Item', keep: 'Keep', qty: 'Quantity', approve: 'Approve',
+      whyMerge: 'Why these two?', whyMergeText: 'Same product, two receipt spellings. Quantities are added; the kept name stays.' };
+    const es = { monthQuestion: '¿Qué mes quieres editar?', month: 'Mes', continue: 'Continuar', cancel: 'Cancelar', save: 'Guardar',
+      editorTitle: 'Editor de presupuesto', net: 'Flujo neto:', category: 'Categoría', amount: 'Importe', savedFor: 'Presupuesto guardado para',
+      income: 'Ingresos', non_discretionary: 'No discrecional', discretionary: 'Discrecional', savings: 'Ahorro',
+      mergeTitle: '¿Unir estos dos artículos del inventario?', item: 'Artículo', keep: 'Conservar', qty: 'Cantidad', approve: 'Aprobar',
+      whyMerge: '¿Por qué estos dos?', whyMergeText: 'Mismo producto, dos grafías de ticket. Las cantidades se suman; se conserva el nombre marcado.' };
+    return this.state.lang === 'es' ? es : en;
+  }
+  regText() {
+    const en = { budgetDomain: 'Budgets and expenses', expenses: 'Expenses', month: 'Month', date: 'Date', title: 'Title', category: 'Category', payment: 'Payment', amount: 'Amount',
+      recipes: 'Recipes', recipeName: 'Name', servings: 'Servings', prep: 'Prep (min)', cook: 'Cook (min)', ingredients: 'Ingredients', ingredient: 'Ingredient', quantity: 'Quantity', unit: 'Unit', note: 'Note', steps: 'Steps' };
+    const es = { budgetDomain: 'Presupuestos y gastos', expenses: 'Gastos', month: 'Mes', date: 'Fecha', title: 'Concepto', category: 'Categoría', payment: 'Pago', amount: 'Importe',
+      recipes: 'Recetas', recipeName: 'Nombre', servings: 'Raciones', prep: 'Preparación (min)', cook: 'Cocción (min)', ingredients: 'Ingredientes', ingredient: 'Ingrediente', quantity: 'Cantidad', unit: 'Unidad', note: 'Nota', steps: 'Pasos' };
+    return this.state.lang === 'es' ? es : en;
+  }
+  monthLabel(key) {
+    const p = key.split('-');
+    const s = new Date(Number(p[0]), Number(p[1]) - 1, 1).toLocaleString(this.locale(), { month: 'long', year: 'numeric' });
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+  go(screen) { this.setState({ screen: screen }); }
+  budgetCells() {
+    const edits = this.state.edits;
+    return this.cats.map(c => {
+      const has = Object.prototype.hasOwnProperty.call(edits, c.id);
+      const text = has ? edits[c.id] : this.plain(c.amount);
+      const v = has ? this.parse(text) : c.amount;
+      const bad = has && (v === null || isNaN(v));
+      const changed = has && !bad && v !== c.amount;
+      return { c: c, text: text, value: bad ? c.amount : v, bad: bad, changed: changed };
+    });
+  }
+  renderVals() {
+    const t = this.dict(), wf = this.wfText(), reg = this.regText();
+    const st = this.state;
+    const self = this;
+    const cells = this.budgetCells();
+    const changedCells = cells.filter(x => x.changed);
+    const badCells = cells.filter(x => x.bad);
+    const countLabel = n => n === 0 ? t.noChanges : (n === 1 ? t.oneChange : n + t.nChanges);
+    const typeOrder = ['income', 'non_discretionary', 'discretionary', 'savings'];
+    const sum = (list, key) => list.reduce((a, x) => a + x[key], 0);
+    const subtotalsLoaded = typeOrder.map(ty => ({ label: wf[ty], value: this.money(sum(this.cats.filter(c => c.type === ty), 'amount')) }));
+    const netOf = vals => {
+      const by = ty => vals.filter(x => x.c.type === ty).reduce((a, x) => a + x.value, 0);
+      return by('income') - by('non_discretionary') - by('discretionary') - by('savings');
+    };
+    const loadedCells = this.cats.map(c => ({ c: c, value: c.amount }));
+    const groups = typeOrder.map(ty => ({
+      label: wf[ty],
+      rows: cells.filter(x => x.c.type === ty).map(x => ({
+        name: x.c.name, text: x.text, bad: x.bad && st.showErrors, aria: wf.amount + ' — ' + x.c.name,
+        cls: 'cell' + (x.changed ? ' cell-changed' : '') + (x.bad && st.showErrors ? ' cell-bad' : ''),
+        onInput: e => { const v = e.target.value; self.setState(s => { const ed = Object.assign({}, s.edits); ed[x.c.id] = v; return { edits: ed }; }); }
+      }))
+    }));
+    const stage = st.stage;
+    const fromCmd = st.budgetFrom === 'command';
+    const b = {
+      showCommand: fromCmd, commandText: 'manage budget',
+      monthOpen: stage === 'month', monthAnswered: fromCmd && stage !== 'month' && stage !== 'working0',
+      gridOpen: stage === 'grid', gridAnswered: stage === 'sending' || stage === 'done',
+      working: stage === 'working0' || stage === 'working1' || stage === 'sending', done: stage === 'done',
+      month: st.month, monthLabel: this.monthLabel(st.month), showErrors: st.showErrors && badCells.length > 0,
+      sentChanges: st.sent ? countLabel(st.sent.length) : ''
+    };
+    const months = ['2026-11', '2026-10', '2026-09', '2026-08'].map(k => ({ value: k, label: this.monthLabel(k) }));
+    const later = (stage2, ms, extra) => setTimeout(() => self.setState(Object.assign({ stage: stage2 }, extra || {})), ms);
+
+    const sent = st.sent || [];
+    const savedRows = sent.map(x => ({ name: x.name, before: this.money(x.before), after: this.money(x.after) }));
+    const afterCells = this.cats.map(c => { const s = sent.find(x => x.id === c.id); return { c: c, value: s ? s.after : c.amount }; });
+
+    const needs = [];
+    if (!st.budgetDone) needs.push({ workflow: 'manage_budget', provider: t.web, chipCls: 'chip chip-web', title: wf.editorTitle + ' — ' + this.monthLabel('2026-10'), waiting: t.waiting + '3 min',
+      open: () => self.setState({ screen: 'budget', budgetFrom: 'needs', stage: 'grid', month: '2026-10', edits: {}, showErrors: false, sent: null }) });
+    if (st.slack === 'open') needs.push({ workflow: 'review_inventory', provider: 'Slack', chipCls: 'chip chip-slack', title: wf.mergeTitle, waiting: t.waiting + '42 min',
+      open: () => self.setState({ screen: 'slack' }) });
+
+    const threads = [
+      { text: 'manage budget', status: st.budgetDone ? t.completed : t.awaiting, when: '09:12' },
+      { text: 'what did we spend on groceries in September?', status: t.completed, when: 'yesterday' },
+      { text: 'add milk and eggs to the shopping list', status: t.completed, when: 'Mon' }
+    ];
+
+    const navItem = (key, label, count) => ({ label: label, count: count || 0, hasCount: !!count, cls: 'nav-item' + (st.screen === key || (key === 'home' && (st.screen === 'budget' || st.screen === 'slack')) ? ' nav-on' : ''), go: () => self.go(key) });
+
+    // expenses grid
+    const cats = this.cats.filter(c => c.type !== 'income' && c.type !== 'savings').map(c => ({ id: String(c.id), name: c.name }));
+    const payments = [{ value: '', label: '—' }, { value: 'cash', label: st.lang === 'es' ? 'Efectivo' : 'Cash' }, { value: 'debit', label: st.lang === 'es' ? 'Débito' : 'Debit card' }, { value: 'credit', label: st.lang === 'es' ? 'Crédito' : 'Credit card' }];
+    const seedById = {}; this.expSeed.forEach(r => { seedById[r.id] = r; });
+    let added = 0, changed = 0, deleted = 0, total = 0, live = 0, anyBad = false;
+    const setRow = (id, patch) => self.setState(s => ({ expBanner: '', exp: s.exp.map(r => r.id === id ? Object.assign({}, r, patch) : r) }));
+    const expRows = st.exp.map(r => {
+      const o = seedById[r.id];
+      const amtText = r.amount === null ? (o ? this.plain(o.amount) : '') : r.amount;
+      const amtVal = r.amount === null ? (o ? o.amount : null) : this.parse(r.amount);
+      const amtBad = amtVal !== null && isNaN(amtVal);
+      const diff = f => o && !r.isNew && String(r[f]) !== String(o[f]);
+      const amtChanged = o && !r.isNew && r.amount !== null && !amtBad && amtVal !== o.amount;
+      const rowChanged = !r.isNew && !r.deleted && (diff('date') || diff('title') || diff('category') || diff('payment') || amtChanged);
+      if (r.isNew && !r.deleted) added++;
+      else if (r.deleted && !r.isNew) deleted++;
+      else if (rowChanged) changed++;
+      if (!r.deleted && amtVal !== null && !isNaN(amtVal)) { total += amtVal; live++; }
+      if (amtBad) anyBad = true;
+      const c = (f, ch) => 'cell' + (f === 'num' ? '' : ' cell-text') + (ch ? ' cell-changed' : '');
+      return {
+        date: r.date, title: r.title, category: r.category, payment: r.payment, amount: amtText, deleted: r.deleted,
+        rowCls: r.deleted ? 'row-deleted' : (r.isNew ? 'row-new' : ''),
+        dateCls: c('t', diff('date')), titleCls: c('t', diff('title')), catCls: c('t', diff('category')), payCls: c('t', diff('payment')),
+        amtCls: 'cell' + (amtChanged ? ' cell-changed' : '') + (amtBad ? ' cell-bad' : ''),
+        delGlyph: r.deleted ? '↺' : '✕', delLabel: r.deleted ? 'Undo delete' : 'Delete row',
+        onDate: e => setRow(r.id, { date: e.target.value }), onTitle: e => setRow(r.id, { title: e.target.value }),
+        onCat: e => setRow(r.id, { category: e.target.value }), onPay: e => setRow(r.id, { payment: e.target.value }),
+        onAmt: e => setRow(r.id, { amount: e.target.value }),
+        toggleDel: () => r.isNew ? self.setState(s => ({ exp: s.exp.filter(x => x.id !== r.id) })) : setRow(r.id, { deleted: !r.deleted })
+      };
+    });
+    const expParts = [];
+    if (added) expParts.push(added + (st.lang === 'es' ? ' nueva(s)' : ' added'));
+    if (changed) expParts.push(changed + (st.lang === 'es' ? ' cambiada(s)' : ' changed'));
+    if (deleted) expParts.push(deleted + (st.lang === 'es' ? ' borrada(s)' : ' deleted'));
+    const expChangesLabel = expParts.length ? expParts.join(' · ') + (anyBad ? ' — ' + t.notANumber : '') : t.noChanges;
+
+    // recipe
+    const rec = st.rec;
+    const recSet = patch => self.setState(s => ({ rec: Object.assign({}, s.rec, patch), recEdits: s.recEdits + 1, recBanner: false }));
+    const ingRows = rec.ings.map((ir, i) => {
+      const upd = (f, v) => { const ings = rec.ings.map((x, j) => j === i ? Object.assign({}, x, { [f]: v }) : x); recSet({ ings: ings }); };
+      return { ingredient: ir.ingredient, qty: ir.qty, unit: ir.unit, note: ir.note,
+        onIng: e => upd('ingredient', e.target.value), onQty: e => upd('qty', e.target.value), onUnit: e => upd('unit', e.target.value), onNote: e => upd('note', e.target.value),
+        remove: () => recSet({ ings: rec.ings.filter((x, j) => j !== i) }) };
+    });
+    const stepRows = rec.steps.map((text, i) => {
+      const move = d => { const a = rec.steps.slice(); const j = i + d; if (j < 0 || j >= a.length) return; const tmp = a[i]; a[i] = a[j]; a[j] = tmp; recSet({ steps: a }); };
+      return { n: i + 1, text: text, aria: reg.steps + ' ' + (i + 1),
+        onText: e => { const a = rec.steps.slice(); a[i] = e.target.value; recSet({ steps: a }); },
+        up: () => move(-1), down: () => move(1), remove: () => recSet({ steps: rec.steps.filter((x, j) => j !== i) }) };
+    });
+
+    return {
+      t: t, wf: wf, reg: reg, cmd: st.cmd,
+      langEnCls: 'lang' + (st.lang === 'en' ? ' lang-on' : ''), langEsCls: 'lang' + (st.lang === 'es' ? ' lang-on' : ''),
+      setEn: () => self.setState({ lang: 'en' }), setEs: () => self.setState({ lang: 'es' }),
+      onCmd: e => self.setState({ cmd: e.target.value }),
+      sendCommand: e => { e.preventDefault(); if (!st.cmd.trim()) return;
+        self.setState({ cmd: '', screen: 'budget', budgetFrom: 'command', stage: 'working0', edits: {}, showErrors: false, sent: null });
+        later('month', 900); },
+      navMain: [navItem('home', t.home, needs.length), navItem('threads', t.threads)],
+      navPhase1: [navItem('expenses', t.expenses), navItem('recipe', t.recipes), navItem('novia', t.novia)],
+      isHome: st.screen === 'home', isBudget: st.screen === 'budget', isSlackGate: st.screen === 'slack', isThreads: st.screen === 'threads',
+      isExpenses: st.screen === 'expenses', isRecipe: st.screen === 'recipe', isNovia: st.screen === 'novia',
+      goHome: () => self.go('home'),
+      needs: needs, needsCount: needs.length, hasNeeds: needs.length > 0, noNeeds: needs.length === 0, threads: threads,
+      b: b, months: months,
+      onMonth: e => self.setState({ month: e.target.value }),
+      monthContinue: () => { self.setState({ stage: 'working1' }); later('grid', 900); },
+      subtotals: subtotalsLoaded, netLoaded: this.money(netOf(loadedCells)), groups: groups,
+      changesLabel: countLabel(changedCells.length),
+      discardBudget: () => self.setState({ edits: {}, showErrors: false }),
+      saveBudget: () => {
+        if (badCells.length) { self.setState({ showErrors: true }); return; }
+        const sentRows = changedCells.map(x => ({ id: x.c.id, name: x.c.name, before: x.c.amount, after: x.value }));
+        self.setState({ stage: 'sending', sent: sentRows, showErrors: false });
+        later('done', 1200, { budgetDone: true });
+      },
+      savedRows: savedRows,
+      resultLine: sent.length === 0 ? (st.lang === 'es' ? 'Nada cambió; no se escribió ninguna fila.' : 'Nothing changed; no rows were written.')
+        : (st.lang === 'es' ? 'Solo se escribieron las filas cambiadas: ' + sent.length + '.' : 'Only the changed rows were written: ' + sent.length + '.'),
+      netNow: this.money(netOf(afterCells)),
+      slackOpen: st.slack === 'open', slackDone: st.slack === 'done',
+      approveSlack: () => self.setState({ slack: 'done' }),
+      categories: cats, payments: payments, expRows: expRows,
+      expTotal: this.money(total), expCountLabel: live + t.rows,
+      expChangesLabel: expChangesLabel,
+      addExpense: () => self.setState(s => ({ expBanner: '', exp: s.exp.concat([{ id: 'n' + Date.now(), date: '2026-10-22', title: '', category: '6', payment: '', amount: '', deleted: false, isNew: true }]) })),
+      discardExp: () => self.setState({ exp: self.cloneExp(), expBanner: '' }),
+      saveExp: () => { if (anyBad || !expParts.length) return;
+        self.expSeed = st.exp.filter(r => !r.deleted).map((r, i) => {
+          const o = seedById[r.id];
+          const v = r.amount === null ? o.amount : self.parse(r.amount);
+          return { id: r.isNew ? 400 + i : r.id, date: r.date, title: r.title, category: r.category, payment: r.payment, amount: v };
+        });
+        self.setState({ exp: self.cloneExp(), expBanner: expChangesLabel }); },
+      expBanner: !!st.expBanner, expBannerText: (st.lang === 'es' ? 'Guardado en una transacción: ' : 'Saved in one transaction: ') + st.expBanner,
+      rec: rec, ingRows: ingRows, stepRows: stepRows,
+      ingredientOptions: ['Potatoes', 'Eggs', 'Onion', 'Olive oil', 'Salt', 'Garlic', 'Tomatoes', 'Flour'],
+      units: ['g', 'kg', 'ml', 'l', 'unit', 'tsp', 'tbsp'],
+      onRecName: e => recSet({ name: e.target.value }), onRecServ: e => recSet({ servings: e.target.value }),
+      onRecPrep: e => recSet({ prep: e.target.value }), onRecCook: e => recSet({ cook: e.target.value }),
+      addIng: () => recSet({ ings: rec.ings.concat([{ ingredient: 'Garlic', qty: '', unit: 'unit', note: '' }]) }),
+      addStep: () => recSet({ steps: rec.steps.concat(['']) }),
+      recChangesLabel: st.recEdits > 0 ? (st.lang === 'es' ? 'Cambios sin guardar' : 'Unsaved changes') : t.noChanges,
+      discardRec: () => self.setState({ rec: self.cloneRec(), recEdits: 0, recBanner: false }),
+      saveRec: () => { if (!st.recEdits) return; self.recSeed = { name: rec.name, servings: rec.servings, prep: rec.prep, cook: rec.cook, ings: rec.ings.map(i => Object.assign({}, i)), steps: rec.steps.slice() }; self.setState({ recEdits: 0, recBanner: true }); },
+      recBanner: st.recBanner
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Phone home</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#0D6A6A}a:hover{color:#094F4F}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; display: flex; flex-direction: column; background: #F4F5F7; color: #15191E; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 15px; line-height: 1.5">
+<div style="padding: 16px 16px 12px; background: #FFFFFF; border-bottom: 1px solid #DCE0E5; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; align-items: center; justify-content: space-between">
+<div style="display: flex; align-items: center; gap: 8px; font-weight: 700">
+<svg width="24" height="24" viewBox="0 0 28 28" aria-hidden="true" fill="none" stroke="#0D6A6A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13 14 5l10 8"></path><path d="M7 11v12h14V11"></path><circle cx="14" cy="17" r="2.5"></circle></svg>
+Home brain
+</div>
+<button aria-label="Account" style="width: 40px; height: 40px; border-radius: 999px; border: 0; background: #15191E; color: #FFFFFF; font-weight: 600; font-family: inherit">J</button>
+</div>
+<div style="display: flex; gap: 8px">
+<label for="pcmd" style="position: absolute; left: -9999px">Ask the home brain</label>
+<input id="pcmd" placeholder="Ask the home brain…" style="flex: 1 1 auto; min-width: 0; min-height: 44px; box-sizing: border-box; padding: 0 12px; border: 1px solid #C9CFD6; border-radius: 10px; font: inherit">
+<button style="min-height: 44px; padding: 0 14px; border-radius: 10px; border: 0; background: #0D6A6A; color: #FFFFFF; font: inherit; font-weight: 500">Send</button>
+</div>
+</div>
+<div style="flex: 1 1 auto; overflow: hidden; padding: 16px; display: flex; flex-direction: column; gap: 12px">
+<h1 style="margin: 0; font-size: 20px; font-weight: 600">Needs you <span style="color: #586170; font-weight: 500">(2)</span></h1>
+<div style="padding: 14px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; align-items: center; gap: 8px"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #586170">manage_budget</span><span style="padding: 2px 8px; border-radius: 999px; background: #E2F0EF; color: #0A5555; font-size: 12px; font-weight: 500">Web</span></div>
+<div style="font-weight: 600">Budget editor — October 2026</div>
+<div style="display: flex; align-items: center; justify-content: space-between"><span style="font-size: 13px; color: #586170">waiting 3 min</span><button style="min-height: 44px; padding: 0 18px; border-radius: 10px; border: 0; background: #0D6A6A; color: #FFFFFF; font: inherit; font-weight: 500">Open</button></div>
+</div>
+<div style="padding: 14px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; align-items: center; gap: 8px"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #586170">review_inventory</span><span style="padding: 2px 8px; border-radius: 999px; background: #F1E9F8; color: #5B2A86; font-size: 12px; font-weight: 500">Slack</span></div>
+<div style="font-weight: 600">Merge these two inventory items?</div>
+<div style="display: flex; align-items: center; justify-content: space-between"><span style="font-size: 13px; color: #586170">waiting 42 min</span><button style="min-height: 44px; padding: 0 18px; border-radius: 10px; border: 0; background: #0D6A6A; color: #FFFFFF; font: inherit; font-weight: 500">Open</button></div>
+</div>
+<h2 style="margin: 8px 0 0; font-size: 17px; font-weight: 600">Recent threads</h2>
+<div style="background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px">
+<div style="padding: 12px 14px; border-bottom: 1px solid #EDF0F2"><div>“manage budget”</div><div style="font-size: 13px; color: #586170">awaiting you · 09:12</div></div>
+<div style="padding: 12px 14px; border-bottom: 1px solid #EDF0F2"><div>“what did we spend on groceries in September?”</div><div style="font-size: 13px; color: #586170">completed · yesterday</div></div>
+<div style="padding: 12px 14px"><div>“add milk and eggs to the shopping list”</div><div style="font-size: 13px; color: #586170">completed · Mon</div></div>
+</div>
+</div>
+<nav aria-label="Main" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); background: #FFFFFF; border-top: 1px solid #DCE0E5; padding-bottom: 12px">
+<a href="#" style="min-height: 56px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; text-decoration: none; color: #0A5555; font-size: 12px; font-weight: 600"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11 12 4l9 7"></path><path d="M6 10v10h12V10"></path></svg>Home · 2</a>
+<a href="#" style="min-height: 56px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; text-decoration: none; color: #586170; font-size: 12px"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4z"></path></svg>Threads</a>
+<a href="#" style="min-height: 56px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; text-decoration: none; color: #586170; font-size: 12px"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1"></rect><rect x="13" y="4" width="7" height="7" rx="1"></rect><rect x="4" y="13" width="7" height="7" rx="1"></rect><rect x="13" y="13" width="7" height="7" rx="1"></rect></svg>Domains</a>
+<a href="#" style="min-height: 56px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; text-decoration: none; color: #586170; font-size: 12px"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"></circle><path d="M9 10h.01M15 10h.01M9 15c1.5 1.2 4.5 1.2 6 0"></path></svg>Novia</a>
+</nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
