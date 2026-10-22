@@ -420,7 +420,65 @@ are application-wide, evolved rows belong to a tenant.
    `PGC_Schema`. Which display facts (label, format, currency, reveal threshold) the registry must
    carry for that, beyond types and enums.
 7. **Framework** — React is the recommendation; the choice is open until Phase 0.
-8. **Proposal deck v1 corrections before it is presented** — slide 21 says external API connections
+8. **Languages** (§7) — which languages first; whether a household has one language or each
+   member their own; who translates the existing artifacts, and when.
+9. **Proposal deck v1 corrections before it is presented** — slide 21 says external API connections
    are already built (they are not, §4.9); slides 2 and 18 quote the README's monthly cost rather
    than the measured steady state in `architecture.md` §16; slide 14 states schema-per-home
    isolation in the present tense; slide 17 places all `PGC_` tables in the shared layer (§5.3).
+
+---
+
+## 7. Multiple languages (analysis, 2026-10-22)
+
+Nothing in the system is translated today, and nothing yet stops it being. This section says where
+user-visible text comes from, how each source becomes multilingual, and which habits must start now
+so the feature is not locked out. The web app's share is in `docs/arch-web-app.md` §13.
+
+### 7.1 Where user-visible text comes from
+
+| Source | Example | Who writes it | Today |
+|---|---|---|---|
+| **App chrome** | *Needs you*, *Save*, *Nothing is waiting for you* | The experience layer's code | English literals (Slack: `callback.mjs`, `interactive.mjs`) |
+| **System messages** | *Workflow cancelled.*, a refusal, an error summary | System code — PROC and EXP | English literals in `run-workflow.mjs`, `callback.mjs` |
+| **Workflow text** | A `message_template`, a field `label`, an option `label`, a `notify` template | The workflow author — Novia, or a seed | One language per string |
+| **Workflow-computed text** | Markdown built in a `js_transform` — headings, totals, *Budget saved for …* | The workflow's code | One language, and **formatting baked in**: 1 of 18 workflows formats with `'en-US'`, 4 carry `USD` (measured 2026-10-22) |
+| **Registry names** | Domain, table, column and workflow names; `PGC_DomainHelp` descriptions | `create_domain`, Novia | Identifiers double as labels — `budgets_expenses`, `planned_amount` |
+| **LLM output** | Novia's replies, an `llm_call` summary | The model | Follows the language of the conversation, by accident rather than instruction |
+| **Intent matching** | `/mind gastos de octubre` | `PGC_IntentMap` (110 patterns), domain aliases, embeddings | Patterns are English; another language falls through to the LLM tiers |
+| **User data** | An expense title, a recipe step | The user | Stored as entered — the right behaviour |
+
+### 7.2 How each source becomes multilingual
+
+**The locale is part of the principal.** A user has a `locale` (and a `timezone`); a household has a
+default. The web reads it from the user's profile, Slack from the user's Slack locale. It travels
+with the run like the provider does — on `callback`, and seeded into `local_state` as `locale` — so
+every step can use it.
+
+| Source | Mechanism |
+|---|---|
+| **App chrome** | Message catalogs per experience layer, keyed, with ICU MessageFormat for plurals and parameters. Standard tooling (`react-i18next` or FormatJS on the web) |
+| **System messages** | PROC sends a **message key with parameters** beside today's English text — `{ messageKey: 'run.cancelled', params: {…}, message: 'Workflow cancelled.' }`. The experience layer renders the key from its catalog and falls back to `message`. The partition rule holds: PROC decides *what* is said, the experience layer *in which words* |
+| **Workflow text** | A display string may be a plain string **or a language map** — `{ "en": "Month", "es": "Mes" }`, the shape JSON-LD, ActivityPub and most headless CMSs use. The resolver (`resolveDisplayText`, `buildDialog`) picks the run's locale, then the household default, then the map's first entry. **Resolved in PROC**, so a `dialog` still carries plain strings and no renderer changes. A plain string keeps working — single-language households need nothing |
+| **Workflow-computed text** | Numbers, dates and currency through `Intl` with `local_state.locale` and the row's own currency — never a literal locale or symbol. Words a transform writes come from a language map on the step (its `strings`) rather than literals in the code. This is the source that locks the feature out if left alone: text inside code cannot be translated without rewriting the code |
+| **Registry names** | Identifiers stay identifiers. What a person reads comes from `display` labels — language maps — on the domain, table, column, entity and workflow (`arch-web-app.md` §6.3). A missing label falls back to a humanised identifier, as today |
+| **LLM output** | An injected system-context token stating the reply language from the run's locale, in both brains' prompts. Prompts themselves stay in English — they are written for the model |
+| **Intent matching** | Embedding and LLM tiers already accept any language if the embedding model is multilingual (to verify for `pplx-embed`). Patterns and aliases gain a `locale`; a pattern is matched only against input in its language |
+| **User data** | Not translated. Optional *translate this* through Novia, on request |
+
+**Translating existing artifacts.** Language maps are filled **once per change**, not per render: an
+LLM pass over a workflow's or registry row's display strings writes the other languages, reviewed
+like any other artifact change (Novia's gate, or a dev script for seeds). This keeps the system's
+cost principle — an LLM is never called twice for the same problem.
+
+### 7.3 Habits that keep the door open — start now
+
+1. **No literal locale or currency in workflow code.** `Intl` with `local_state.locale`; currency
+   from the data. Novia's `js_transform` contract says so.
+2. **No user-visible literals in experience-layer code** — the web app routes every string through
+   its catalog from the first component, even with only English in it.
+3. **New system messages carry a key** beside their English text.
+4. **Labels come from `display`, never from identifiers**, wherever a new view or gate needs one.
+5. **Dates stored as `timestamptz`**, shown in the user's timezone.
+
+Nothing in 7.2 needs a schema change before a second language is wanted; 7.3 is what keeps that true.
