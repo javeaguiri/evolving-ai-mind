@@ -414,7 +414,7 @@ language a matter of adding catalogs and language maps, not rewriting the app.
 
 | Rule | Detail |
 |---|---|
-| **Catalogs from day one** | No user-visible literal in a component. Every string is a catalog key; English is the only catalog in Phase 0. Plurals and parameters in ICU MessageFormat |
+| **Catalogs from day one** | No user-visible literal in a component. Every string is a catalog key; English is the only catalog in Phase 0. Plurals and parameters in ICU MessageFormat. App words in `src/ui/web/app/locales/<locale>.json`; system-message keys from the shared `src/ui/shared/messages/<locale>.json`. Files, not a database table — `arch-home-brain.md` §7.3 |
 | **Locale and timezone on the principal** | `GET /me` returns them; every `POST /commands` and gate response sends `locale` on the callback, so a run started on the web carries its user's language into `local_state` |
 | **Formatting through `Intl`** | Numbers, dates, currency and sorting (`Intl.NumberFormat`, `DateTimeFormat`, `Collator`) with the user's locale and timezone — never `toLocaleString()` without a locale, never a literal symbol. Number entry accepts the locale's decimal separator (the shared rule already accepts a comma) |
 | **The `dialog` stays plain strings** | PROC resolves language maps before a gate is sent (`arch-home-brain.md` §7.2), so §5's components never see one |
