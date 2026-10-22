@@ -42,7 +42,7 @@ state changes, not at close.**
 
 | # | Status | Criterion | Scope | Threshold |
 |---|---|---|---|---|
-| **AC0** | ⬜ | `docs/arch-web-app.md` covers every point in scope item 0, with wireframes, and Javear approves it before Phase 0 code starts | [0](#scope) | Approval |
+| **AC0** | 🟡 draft `docs/arch-web-app.md` v0.1, mock-up started | `docs/arch-web-app.md` covers every point in scope item 0, with wireframes, and Javear approves it before Phase 0 code starts | [0](#scope) | Approval |
 | **AC1** | ⬜ | A run started from the web site suspends at a gate, the gate appears on the site, and answering it there resumes the run to completion — no Slack involved | [1](#scope) | Binary, live |
 | **AC2** | ⬜ | `manage_budget` edits all its amounts in one editable grid on the site, grouped by budget type, and one save writes **only the changed rows**, as numbers, in the household's currency | [2](#scope), [3](#scope) | Binary, live |
 | **AC3** | ⬜ | The site requires sign-in, and no request from the browser carries the internal API key | [4](#scope) | Binary |
@@ -83,6 +83,9 @@ ASCII sketches.
 
 **Memory 424 is still live** (read 2026-10-22: the v1 build memory, "54 fields … within ~40-field
 ceiling", episodic, priority 3). Novia deleted **422**; 424 was not deleted along with it.
+
+**In parallel, unscoped (Javear):** fixing inventory-quantity adjustment with Novia in session 1261.
+Not touched from this session.
 
 ### Session 1 — 2026-10-18 — before scoping: `manage_expenses` v10, and Novia on Opus 5.5
 
