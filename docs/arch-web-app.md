@@ -123,6 +123,24 @@ for Slack; the summary function is shared, not copied.
 
 ### 3.2 Phase 1
 
+**Navigation is data.** `GET /domains` returns what the navigator and a domain page's action list
+draw, already resolved to the caller's locale (as a `dialog` is):
+
+```json
+{ "domains": [
+  { "domain": "budgets_expenses", "label": "Budgets and expenses", "icon": "wallet", "order": 20,
+    "workflows": [
+      { "name": "manage_budget", "label": "Edit the budget", "description": "One month's amounts in a grid" }
+    ] } ] }
+```
+
+`label`, `description`, `icon`, `order` and visibility come from the `display` metadata of
+`PGC_DomainHelp` and `PGC_Workflow` (§6.3). Listed: the domain's workflows with `display.menu` not
+`false`; system workflows (`domain: null`) never. Sorted by `order`, then by `label` with
+`Intl.Collator` in the user's locale. `?labels=all` returns the full language maps instead — for an
+editor of labels, never for drawing.
+
+
 Adds `arch-home-brain.md` §4.7's remaining resources — `GET /domains`, `/domains/{domain}/schema`,
 `/domains/{domain}/records[/{id}]`, `GET /runs[/{runId}]`, the Novia session resources,
 `POST /runs`, and the edit resources under the §4.8 edit policy — with the grid's batch save and the
@@ -284,6 +302,9 @@ registry fact.
 |---|---|---|
 | `view` | Table, entity | `grid`, `document`, `list`, or a specialised view type |
 | `label` | Domain, table, entity, workflow | What a person reads instead of the identifier — a string or a language map (§13) |
+| `description` | Domain, workflow | One line under the label in menus — a string or a language map |
+| `icon` | Domain, workflow | A name from the app's own icon set; an unknown name draws the default |
+| `order`, `menu` | Domain, workflow | Position in the navigator and action lists; `menu: false` keeps a workflow out of them |
 | `columns` | Table | Order, and per column: `label` (string or language map), `hidden`, `width` |
 | `format` | Column | `currency` with `currency_column` (the row's own currency column) or a fixed code; `percent`; `date` |
 | `total` | Column | `sum` — a totals row on a grid |
@@ -419,6 +440,8 @@ language a matter of adding catalogs and language maps, not rewriting the app.
 | **Formatting through `Intl`** | Numbers, dates, currency and sorting (`Intl.NumberFormat`, `DateTimeFormat`, `Collator`) with the user's locale and timezone — never `toLocaleString()` without a locale, never a literal symbol. Number entry accepts the locale's decimal separator (the shared rule already accepts a comma) |
 | **The `dialog` stays plain strings** | PROC resolves language maps before a gate is sent (`arch-home-brain.md` §7.2), so §5's components never see one |
 | **System messages by key** | A notification or error carrying `messageKey` and `params` is rendered from the catalog; its `message` text is the fallback |
-| **Registry labels** | `display.label` and column labels may be language maps; the app picks the user's locale, then the household's, then the first entry, then a humanised identifier |
+| **Fixed menu items** | Home, Threads, Domains, Activity, Novia, Settings — app words, catalog keys like any other |
+| **Data-driven menus** | Domains and their workflows come from `GET /domains` (§3.2) with `label` already in the user's language; the app draws them and never translates a name itself |
+| **Registry labels** | `display.label` and column labels may be language maps. PROC picks the user's locale, then the household's, then the first entry, then a humanised identifier (`budgets_expenses` → *Budgets expenses*); the fallback is marked in the response (`labelFallback: true`) so missing translations can be listed |
 | **Layout** | `lang` set on the document from the locale; CSS logical properties (`margin-inline`, `padding-inline-start`) so a right-to-left language is not ruled out; no text baked into images |
 | **User content** | Shown as entered, never machine-translated without being asked |
