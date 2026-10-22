@@ -25,7 +25,7 @@ This document takes `docs/arch-home-brain.md` §4 (product direction, v0.1) to b
 | **Hosting** | Static single-page app in a private S3 bucket behind **CloudFront** (origin access control). CloudFront has a second origin, the existing REST API, for the path `/api/v1/ui/web/*` — the site and its API share one origin, so the browser makes no cross-origin call and needs no CORS. All of it is declared in `template.yaml` |
 | **Reaching PROC** | A new Lambda, **`WebApiFunction`** (EXP), behind `/api/v1/ui/web/{proxy+}`. It is to the web what `SlackbotFunction` is to Slack: reads call PROC over HTTP with the internal API key; actions enqueue the same SQS messages Slack enqueues. **The browser never holds the internal key** |
 | **Sign-in** | An **Amazon Cognito user pool** with managed login: authorization code flow with PKCE, a public app client (no secret), self-sign-up off, users created by the administrator. A passkey or TOTP is the second factor. The web routes carry `ApiKeyRequired: false` and a **Cognito authorizer** on API Gateway; the user's identity is the token's `sub`, never a request field |
-| **Framework** | **React**, written as `.jsx` and bundled by **esbuild** — the bundler the Lambdas already use. Markdown from `/proc` is rendered by `react-markdown` with `remark-gfm` (tables). No component library; the editable grid is built from native inputs |
+| **Framework** | **React**, written as `.jsx` and bundled by **esbuild** — the bundler the Lambdas already use. Markdown from `/proc` is rendered by `react-markdown` with `remark-gfm` (tables). Every user-visible string goes through `react-i18next` message catalogs (ICU MessageFormat) from the first component (§13). No component library; the editable grid is built from native inputs |
 | **Result delivery** | **Polling** `GET /inbox?after=<cursor>`: a short interval while a run the user started or answered is in flight, a long one when idle, paused while the tab is hidden. A WebSocket is a Phase 1 option taken only if the delay is felt in use |
 
 Final decisions hold: ESM `.mjs` for every Lambda, esbuild, the shared `LambdaExecutionRole`,
@@ -115,8 +115,8 @@ before implementation. Errors are `{ error: { code, message, fields? } }`.
 | `GET /gates/{runId}` | — | `200` one gate as above, or `404 gate_not_waiting` | Same read, one run |
 | `POST /gates/{runId}/responses` | `{ gateId, action, formValues?, inputValue?, listGroup?, selectedValue? }` | `202 { runId }`; `409 gate_moved` when `gateId` is not the waiting gate; `422 invalid_fields` with `fields` when a `number` field fails the shared rule — the run is not resumed | Validates, then enqueues `WORKFLOW_STEP resume_gate` with the run's own callback — the answer never re-points a run at another provider |
 | `GET /inbox` | `?after=<id>&thread=<id>&limit=` | `200 { messages: [...], cursor }` | `GET /proc/inbox`: the user's web messages, plus every message of runs the user answered from the web |
-| `POST /commands` | `{ text, threadId }` | `202 { threadId }` | `CLASSIFY_INTENT` with `callback: { provider: 'web', channel: <sub>, threadId }` |
-| `GET /me` | — | `200 { name, email }` | The token's claims |
+| `POST /commands` | `{ text, threadId }` | `202 { threadId }` | `CLASSIFY_INTENT` with `callback: { provider: 'web', channel: <sub>, threadId, locale }` |
+| `GET /me` | — | `200 { name, email, locale, timezone }` | The token's claims; `locale` and `timezone` from the user's profile, defaulting to the household's (§13) |
 
 `WORKFLOW_ERROR` reaches the browser summarised by `WebApiFunction`, as `callback.mjs` summarises it
 for Slack; the summary function is shared, not copied.
@@ -283,7 +283,8 @@ registry fact.
 | Key | Level | Meaning |
 |---|---|---|
 | `view` | Table, entity | `grid`, `document`, `list`, or a specialised view type |
-| `columns` | Table | Order, and per column: `label`, `hidden`, `width` |
+| `label` | Domain, table, entity, workflow | What a person reads instead of the identifier — a string or a language map (§13) |
+| `columns` | Table | Order, and per column: `label` (string or language map), `hidden`, `width` |
 | `format` | Column | `currency` with `currency_column` (the row's own currency column) or a fixed code; `percent`; `date` |
 | `total` | Column | `sum` — a totals row on a grid |
 | `soft_delete` | Table | The column a delete sets (`deleted_at`); rows with it set are hidden |
@@ -403,3 +404,21 @@ The threat model is `docs/arch-security.md`; these are the site's own controls.
 4. **Gate-size validation** (`arch-home-brain.md` §6.3) — the L1 field-count check enforces Slack's
    ceiling; a workflow meant for the web grid can exceed it. Whether the check reads the run's
    provider or stays at the lowest ceiling is decided before `manage_budget` grows past it.
+
+---
+
+## 13. Languages
+
+The analysis is `arch-home-brain.md` §7. Phase 0 ships English only; these rules keep a second
+language a matter of adding catalogs and language maps, not rewriting the app.
+
+| Rule | Detail |
+|---|---|
+| **Catalogs from day one** | No user-visible literal in a component. Every string is a catalog key; English is the only catalog in Phase 0. Plurals and parameters in ICU MessageFormat |
+| **Locale and timezone on the principal** | `GET /me` returns them; every `POST /commands` and gate response sends `locale` on the callback, so a run started on the web carries its user's language into `local_state` |
+| **Formatting through `Intl`** | Numbers, dates, currency and sorting (`Intl.NumberFormat`, `DateTimeFormat`, `Collator`) with the user's locale and timezone — never `toLocaleString()` without a locale, never a literal symbol. Number entry accepts the locale's decimal separator (the shared rule already accepts a comma) |
+| **The `dialog` stays plain strings** | PROC resolves language maps before a gate is sent (`arch-home-brain.md` §7.2), so §5's components never see one |
+| **System messages by key** | A notification or error carrying `messageKey` and `params` is rendered from the catalog; its `message` text is the fallback |
+| **Registry labels** | `display.label` and column labels may be language maps; the app picks the user's locale, then the household's, then the first entry, then a humanised identifier |
+| **Layout** | `lang` set on the document from the locale; CSS logical properties (`margin-inline`, `padding-inline-start`) so a right-to-left language is not ruled out; no text baked into images |
+| **User content** | Shown as entered, never machine-translated without being asked |
