@@ -42,7 +42,7 @@ state changes, not at close.**
 
 | # | Status | Criterion | Scope | Threshold |
 |---|---|---|---|---|
-| **AC0** | 🟡 draft `docs/arch-web-app.md` v0.1, mock-up started | `docs/arch-web-app.md` covers every point in scope item 0, with wireframes, and Javear approves it before Phase 0 code starts | [0](#scope) | Approval |
+| **AC0** | 🟡 draft `docs/arch-web-app.md` v0.1 + mock-up complete — awaiting Javear's review | `docs/arch-web-app.md` covers every point in scope item 0, with wireframes, and Javear approves it before Phase 0 code starts | [0](#scope) | Approval |
 | **AC1** | ⬜ | A run started from the web site suspends at a gate, the gate appears on the site, and answering it there resumes the run to completion — no Slack involved | [1](#scope) | Binary, live |
 | **AC2** | ⬜ | `manage_budget` edits all its amounts in one editable grid on the site, grouped by budget type, and one save writes **only the changed rows**, as numbers, in the household's currency | [2](#scope), [3](#scope) | Binary, live |
 | **AC3** | ⬜ | The site requires sign-in, and no request from the browser carries the internal API key | [4](#scope) | Binary |
@@ -86,6 +86,19 @@ ceiling", episodic, priority 3). Novia deleted **422**; 424 was not deleted alon
 
 **In parallel, unscoped (Javear):** fixing inventory-quantity adjustment with Novia in session 1261.
 Not touched from this session.
+
+**Design work (scope item 0):** `docs/arch-web-app.md` v0.1 — platform tentative (CloudFront + S3,
+`WebApiFunction`, Cognito, React + esbuild, polling), `PGC_UiMessage` inbox, `gate_id` (a stale
+answer is applied to a later gate today), grid hints and where they are written, domain views (grid,
+document) from registry `display` metadata, what is shared with Slack, security §11, languages §13.
+**Javear's decisions:** the REST CRUD layer never depends on workflows; direct edits are Phase 1.
+Checked live: the registry's foreign keys match the database (an earlier "null" was my misread of
+`foreignKeys` for `foreign_keys`); SERV entity writes touch the root table only — no children, no
+transaction, no re-embed — recorded as Phase 1 SERV work (§6.4). `docs/arch-security.md` revised
+(agent threats, S1–S6, findings F1–F8) with seven backlog rows; `docs/arch-home-brain.md` §7 —
+multilingual analysis. **Mock-up:** https://claude.ai/artifact/CiBwcLPCVTH3YfKt85L1ro (private until
+shared) — clickable console, two phone frames, every gate type and state. **Next:** Javear reviews
+the design and mock-up offline; AC0 closes on approval.
 
 ### Session 1 — 2026-10-18 — before scoping: `manage_expenses` v10, and Novia on Opus 5.5
 
