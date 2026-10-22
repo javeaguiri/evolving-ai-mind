@@ -268,7 +268,23 @@ started its run.
 
 ---
 
-## 9. Open questions
+## 9. Security
+
+The threat model is `docs/arch-security.md`; these are the site's own controls.
+
+| Control | Design |
+|---|---|
+| **No internal key in the browser** | The browser holds only Cognito tokens; `WebApiFunction` holds the internal key |
+| **Identity** | The user is the token's `sub`, verified by the API Gateway authorizer. `WebApiFunction` passes it to PROC as the principal (`arch-security.md` S5); no request body field names a user |
+| **Markdown** | `/proc` markdown is LLM-written and may carry injected content. It is rendered **without raw HTML** and **without remote images** — an image URL can carry data out the moment it renders. Links open in a new tab with `rel="noopener noreferrer"` |
+| **Content Security Policy** | Sent by CloudFront: scripts and styles from the site's own origin only, `connect-src` the site's origin and the Cognito domain, `img-src` the site's origin and `data:`, `frame-ancestors 'none'` |
+| **Object-level checks** | Every resource taking an id — a gate, a thread, later a record — is checked against the principal in PROC, never trusted from the URL |
+| **Dependencies** | Lockfile committed; `npm audit` in `deploy-web.mjs` stops a deploy with a high-severity finding |
+| **No CSRF surface** | Requests authenticate with a bearer header, not a cookie |
+
+---
+
+## 10. Open questions
 
 1. **Token storage.** Tentative: access token in memory, refresh token in `localStorage`, with a
    strict Content Security Policy from CloudFront. The alternative is a cookie session held by
