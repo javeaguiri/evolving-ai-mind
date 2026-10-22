@@ -27,8 +27,8 @@ is an independent reason to track it where someone else can read it.
 
 | # | Item | State |
 |---|---|---|
-| **R1** | Multiple environments in `template.yaml` | **Moving 2026-10-18 — first, alongside Sprint 14's web site. Blocks R2** |
-| **R2** | A test environment parallel to prod | **Moving 2026-10-18**, after R1 |
+| **R1** | Multiple environments in `template.yaml` | **Moved to `docs/backlog.md` 2026-10-22 (Javear, Sprint 14 start).** Blocks R2 |
+| **R2** | A test environment parallel to prod | **Held 2026-10-22** — blocked by R1 |
 | **R3** | README bootstrap from a clean machine | **Moving 2026-10-18** — wide release means someone else can stand it up |
 | **R4** | Log hygiene | Open, carried since Sprint 7 |
 | **R5** | Aurora Serverless v2 — **an option, undecided** | Open decision |
@@ -36,6 +36,9 @@ is an independent reason to track it where someone else can read it.
 **Boundary reviews.** *Sprint 13 → 14 (2026-10-18):* no item moved during Sprint 13 and none was
 worked. **Javear's decision: R1–R3 move forward** alongside Sprint 14's web site, on `ops/<slug>` branches, R1 first — a public-facing site should not be built against prod; R4 and R5 **held**. Nothing in the sprint changed R1's analysis —
 `template.yaml` gained no environment parameter, and no new literal names or SSM paths were added.
+*Sprint 14 start (2026-10-22):* **R1 moved to `docs/backlog.md`** by Javear, R2 held behind it, so
+the web site is built against prod. Encryption at rest — R5's fourth prerequisite — was taken into
+Sprint 14 as scope item 6 on its own, no longer waiting for the Aurora decision.
 
 ---
 
