@@ -466,12 +466,29 @@ every step can use it.
 | **Intent matching** | Embedding and LLM tiers already accept any language if the embedding model is multilingual (to verify for `pplx-embed`). Patterns and aliases gain a `locale`; a pattern is matched only against input in its language |
 | **User data** | Not translated. Optional *translate this* through Novia, on request |
 
+### 7.3 Where translated text is stored — no translation table
+
+**Translated text lives with the thing it describes**: in the artifact for evolving text, in catalog
+files for system text. No PGC table holds translations.
+
+| Text | Stored in | Form |
+|---|---|---|
+| Workflow text | The `PGC_Workflow` row's own step JSON | A language map in place of a plain string |
+| Registry labels | `display` on `PGC_Schema`, `PGC_EntitySchema`, `PGC_DomainHelp`, `PGC_Workflow` | A language map per label |
+| System messages | A catalog **file** per language, shared by the experience layers — `src/ui/shared/messages/<locale>.json`, keyed by the `messageKey` PROC sends | Static system code, versioned and deployed with the code that emits the key |
+| App chrome | A catalog **file** per language in the app — `src/ui/web/app/locales/<locale>.json`; Slack's own words in `src/ui/slackbot/locales/` | Static system code |
+| A user's locale and timezone | The identity provider — Cognito's standard `locale` and `zoneinfo` attributes; Slack's user locale | Profile attributes |
+| The household default | A `PGC_SystemContext` preferences row | One value |
+
+**No schema change is needed until a second language is.** `display` (Phase 1 of the web app) is
+the first column to carry language maps; `docs/arch-data.md` records it when it is added.
+
 **Translating existing artifacts.** Language maps are filled **once per change**, not per render: an
 LLM pass over a workflow's or registry row's display strings writes the other languages, reviewed
 like any other artifact change (Novia's gate, or a dev script for seeds). This keeps the system's
 cost principle — an LLM is never called twice for the same problem.
 
-### 7.3 Habits that keep the door open — start now
+### 7.4 Habits that keep the door open — start now
 
 1. **No literal locale or currency in workflow code.** `Intl` with `local_state.locale`; currency
    from the data. Novia's `js_transform` contract says so.
@@ -481,4 +498,4 @@ cost principle — an LLM is never called twice for the same problem.
 4. **Labels come from `display`, never from identifiers**, wherever a new view or gate needs one.
 5. **Dates stored as `timestamptz`**, shown in the user's timezone.
 
-Nothing in 7.2 needs a schema change before a second language is wanted; 7.3 is what keeps that true.
+Nothing in 7.2 needs a schema change before a second language is wanted; 7.4 is what keeps that true.
