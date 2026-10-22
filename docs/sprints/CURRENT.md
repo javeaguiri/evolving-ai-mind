@@ -1,6 +1,6 @@
 # Sprint 14 — A web front end, Phase 0
 
-**Status: PROPOSED 2026-10-18 — scope is confirmed at "start sprint".**
+**Status: ACTIVE — started 2026-10-22 (Javear). Scope confirmed with two changes: R1 to the backlog, encryption at rest in.**
 Read `docs/sprints/sprint-13.md` §Retro and `docs/arch-home-brain.md` (§3, §4.4, §4.6, §4.7, §4.10) first.
 
 **Branch:** `sprint/14-web-phase-0`
@@ -32,7 +32,8 @@ provider, and that a grid answers the bulk-edit ceiling Slack cannot.
 | **2** | **A `form` gate as an editable grid** — the shape Slack could not render. Open question §6.4 (the grid hint: row key and column label on the `human_gate` contract) is settled here, and Sprint 13's field `group` heading folds into it |
 | **3** | **`manage_budget` (= `edit_budget`, 357 v7) as the Phase 0 workflow** — one column, ~21 rows, the grid's natural first consumer. Its four Sprint 13 findings go to Novia as findings: every save writes all 21 rows; amounts are `text`; `currency: 'USD'` hardcoded in a euro household; grouping by label prefix |
 | **4** | **Sign-in for one user.** The site is public-facing, so it needs a real identity even with one user: the browser never holds the internal API key, and identity comes from the token, never the request body (§3.3). Mechanism decided at "start sprint" |
-| **5** | **Release readiness R1–R3, moved forward (Javear, 2026-10-18)** — `docs/ops-release-readiness.md`, on `ops/<slug>` branches alongside this sprint. **R1 first**: a web site should not be built against prod, and today there is no other environment |
+| ~~**5**~~ | ~~Release readiness R1–R3, moved forward~~ — **R1 moved to `docs/backlog.md` at "start sprint" (Javear, 2026-10-22).** R2 is blocked by R1 and held with it. Consequence, accepted: the site is built against prod |
+| **6** | **Encryption at rest for PostgreSQL (Javear, 2026-10-22).** RDS `StorageEncrypted` is absent and cannot be switched on in place: snapshot → encrypted copy → restore. Two things make it more than a toggle: `EvoMindDB` is a CloudFormation resource with a custom `DBInstanceIdentifier`, so setting `StorageEncrypted: true` in `template.yaml` asks CloudFormation for a replacement it cannot perform under a custom name; and writes after the snapshot are lost unless the system is quiet during the cut. Plan (endpoint kept by renaming the restored instance to `SYSRDSEvoMind`, template brought back in line with the live instance, KMS key choice — AWS-managed free vs customer-managed ~$1/month) written and agreed before any AWS action. No longer waits for the Aurora decision (R5) |
 
 ## Acceptance Criteria
 
@@ -46,7 +47,8 @@ state changes, not at close.**
 | **AC2** | ⬜ | `manage_budget` edits all its amounts in one editable grid on the site, grouped by budget type, and one save writes **only the changed rows**, as numbers, in the household's currency | [2](#scope), [3](#scope) | Binary, live |
 | **AC3** | ⬜ | The site requires sign-in, and no request from the browser carries the internal API key | [4](#scope) | Binary |
 | **AC4** | ⬜ | Slack still works unchanged for a run started from Slack | [1](#scope) | Binary, from Slack |
-| **AC5** | ⬜ | R1 lands: `template.yaml` takes an environment name, and a second stack would not collide with prod or read prod's parameters | [5](#scope) | Demonstrated on one real change |
+| ~~**AC5**~~ | ~~⬜~~ | ~~R1 lands~~ — **moved to `docs/backlog.md` with R1 at "start sprint" (Javear, 2026-10-22)** | ~~5~~ | — |
+| **AC6** | ⬜ | The prod database is encrypted at rest: `StorageEncrypted: true` on the live instance, `template.yaml` matches the live instance, every table's row count unchanged across the cut, and the Lambdas reach it with no SSM change or with the change made through a version-pinned deploy | [6](#scope) | Binary, verified live |
 
 ## Carried from Sprint 13, not scoped here
 
@@ -71,6 +73,16 @@ and these ACs are right.
 | Removing the Slack leaks in `arch-home-brain.md` §3.2 | Phase 1, except where Phase 0 needs one gone |
 
 ## Session Notes
+
+### Session 2 — 2026-10-22 — "start sprint"; the design session
+
+**Sprint started (Javear).** Scope confirmed with two changes: R1 → backlog (AC5 struck), and
+encryption at rest → scope item 6 / AC6. This session works on **scope item 0 only**. The wireframes
+will be seen by the construction-company partner, so they are a **working mock-up** (a visual page), not
+ASCII sketches.
+
+**Memory 424 is still live** (read 2026-10-22: the v1 build memory, "54 fields … within ~40-field
+ceiling", episodic, priority 3). Novia deleted **422**; 424 was not deleted along with it.
 
 ### Session 1 — 2026-10-18 — before scoping: `manage_expenses` v10, and Novia on Opus 5.5
 
