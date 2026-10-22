@@ -125,7 +125,8 @@ for Slack; the summary function is shared, not copied.
 
 Adds `arch-home-brain.md` §4.7's remaining resources — `GET /domains`, `/domains/{domain}/schema`,
 `/domains/{domain}/records[/{id}]`, `GET /runs[/{runId}]`, the Novia session resources,
-`POST /runs`, and the edit resources under the §4.8 edit policy.
+`POST /runs`, and the edit resources under the §4.8 edit policy — with the grid's batch save and the
+document's entity save (§6.4).
 
 ---
 
@@ -203,6 +204,16 @@ Block Kit. **No domain vocabulary, no Slack ceilings**: a gate is as long as its
 | `column` | The column label this field sits under |
 | `group` | A heading for a run of rows (Sprint 13's form-field `group`, folded in) |
 
+**Where the hint is written.** In the workflow — on the fields of its `human_gate` step, usually by
+the `js_transform` that builds a templated `fields` array (for `manage_budget`, step 12 adds
+`row: <category id>`, `column: 'Amount'`, `group: <budget type label>` to each field it already
+builds). It is optional: a form without it renders as a stacked form on both providers and works
+unchanged. It describes the **structure** of the form — these fields are cells of one table — not a
+provider: no workflow ever says "on the web". Slack cannot draw a grid, so it ignores `row` and
+`column`; it uses `group` as a header. The contract text goes on the `human_gate` `PGC_StepType` so
+Novia emits the hint when she builds a bulk edit. Domain pages (§6) need nothing in any workflow —
+their layout comes from the registry.
+
 When **every** input field carries `row` and `column`, the web lays the form out as a grid: rows
 in first-appearance order, columns in first-appearance order, the field `label` of a row's first
 field as its row header, `group` as a heading row. A missing cell is blank. Slack ignores `row` and
@@ -226,7 +237,102 @@ is the workflow's, in the message.
 
 ---
 
-## 6. A gate answered on the other provider
+## 6. Domain views — records outside any workflow (Phase 1)
+
+The domain pages read and write records through the REST resources (§3.2) — `WebApiFunction` →
+PROC `records` → SERV — and **never through a workflow**. React decides the widgets. It decides
+them from the registry, **never from a domain name**: a new rendering behaviour is a new view type
+in the app (system code), and which domain uses it is registry data — the rule `step-executor.mjs`
+follows for step types.
+
+### 6.1 Cell editors — from column type
+
+| Registry fact (`PGC_Schema`) | Editor |
+|---|---|
+| `date`, `timestamptz` | Date picker |
+| `numeric`, `integer`, `real` | Number box — the shared rule, decimal comma accepted |
+| A `check` constraint of the form `col IN (…)` | Dropdown of those values |
+| An entry in `foreign_keys` | Dropdown showing the referenced table's label column (`pickLabelColumn`), saving the id |
+| `boolean` | Checkbox |
+| `varchar`, `text` | Text box; text area for `text` |
+| `id`, `created_at`, `updated_at`, `*_embedding`, the soft-delete column | Not shown |
+
+`nullable: false` makes a cell required. A foreign key declared `ON DELETE SET NULL` on a NOT NULL
+column (`PGD_Expenses.category_id` today) is a registry contradiction the renderer reports rather
+than guesses around.
+
+### 6.2 Views
+
+| View | For | Shape | Default for |
+|---|---|---|---|
+| **Grid** | A flat table — expenses, a stock portfolio, inventory, budgets | A spreadsheet: edit in place, add and delete rows, sort, filter, an optional totals row; changed cells marked; **one Save** sends every changed row | A table with no children |
+| **Document** | One entity — a recipe | The root record as a form; each child collection inline beneath it, as a sub-grid (ingredients) or an ordered list (steps, by `step_number`); **one Save** writes the whole entity | An entity in `PGC_EntitySchema` with joined children |
+| **List** | Browsing a large table read-mostly | Cards or rows, opening a record | — |
+
+A specialised need — a portfolio chart, a calendar — is a **new view type**, chosen by the registry.
+Computed values (market value = quantity × price) come from a database view registered like a
+table and shown read-only, never from arithmetic in the app.
+
+### 6.3 Display metadata — in the registry
+
+A `display` object, on the table (`PGC_Schema`) and on the entity (`PGC_EntitySchema`). Every key
+is optional; absent keys fall back to the defaults above. It is an evolving artifact: Novia proposes
+it with a domain's tables, the domain-confirming gate shows it, and it is changed like any other
+registry fact.
+
+| Key | Level | Meaning |
+|---|---|---|
+| `view` | Table, entity | `grid`, `document`, `list`, or a specialised view type |
+| `columns` | Table | Order, and per column: `label`, `hidden`, `width` |
+| `format` | Column | `currency` with `currency_column` (the row's own currency column) or a fixed code; `percent`; `date` |
+| `total` | Column | `sum` — a totals row on a grid |
+| `soft_delete` | Table | The column a delete sets (`deleted_at`); rows with it set are hidden |
+| `order_by` | Table, child collection | Default sort; a child list ordered by it can be reordered by dragging |
+| `default_filter` | Table | The filter a grid opens on — e.g. the current month |
+
+The edit policy (`arch-home-brain.md` §4.8) sits beside it: `editable` per column, add and delete
+per table.
+
+### 6.4 Saving — and what SERV needs first
+
+| Save | Request | SERV today | SERV needs |
+|---|---|---|---|
+| **Grid** | `PATCH /domains/{d}/records` — `[{ id, version, changes }]` plus new rows and deletions | `upsertRows` is one transaction; `updateRows` is not; no version check anywhere | A batch write in **one transaction**, each changed row conditioned on its version (`updated_at`), `409` naming the rows that moved |
+| **Document** | `PUT /domains/{d}/entities/{name}/{id}` — the whole entity with the root's version | `createEntity`, `updateEntity`, `upsertEntity` write the **root table only** — children are not written, there is no transaction, and embeddings are not maintained | An entity write that diffs each child collection (insert, update, delete), runs root and children in **one transaction**, conditions on the root's version, and re-embeds through `resolveEmbedding` as `table.mjs` does |
+
+These are SERV system changes (Execution), built in Phase 1 before the views that need them.
+
+---
+
+## 7. What the web shares with Slack
+
+**Below the experience layer everything is shared and unchanged; each provider writes its own
+renderer.** Nothing is copied.
+
+| Piece | Shared or per provider |
+|---|---|
+| Workflows, `buildDialog`, `run-workflow`, Novia (`minds-eye.mjs`) | **Shared.** Workflows never learn which provider serves them. Phase 1 removes the `arch-home-brain.md` §3.2 leaks |
+| The `dialog` contract | **Shared** — a JSON Schema in `docs/openapi.yaml` both renderers are tested against |
+| Experience-layer rules — the `number` rule, `EMPTY_OPTION_VALUE`, the error summariser | **Shared** from `src/ui/shared/` |
+| The renderer | **Per provider** — `callback.mjs` emits Block Kit, React components render the web. A copied renderer drifts |
+| Domain views (§6) | **Web only** — Slack keeps `list_entity` and the CRUD workflows |
+
+The web renders more from the same contract — a grid, no block ceiling, a row click instead of a
+typed id. When it needs a fact Slack has no use for, the fact is added to the contract as structure
+(`row`, `column`) that Slack ignores; a workflow never branches on its provider.
+
+**Novia on the web** sends the same `MINDS_EYE` / `MINDS_EYE_RESUME` messages; her gated actions
+render with the gate components of §5; her text is markdown. *Ask Novia about this* passes the
+current record, run or domain id into the opening message. New work for her: proposing a domain's
+`display` metadata and edit policy with its tables.
+
+**Later:** a gate that shows a registry view of records (review a batch before import) would reuse
+the Grid component — a genuinely new rendering, so a new `gate_type`, with pick-one as Slack's
+fallback.
+
+---
+
+## 8. A gate answered on the other provider
 
 | Case | Behaviour |
 |---|---|
@@ -236,7 +342,7 @@ is the workflow's, in the message.
 
 ---
 
-## 7. States
+## 9. States
 
 | State | What the user sees |
 |---|---|
@@ -252,7 +358,7 @@ is the workflow's, in the message.
 
 ---
 
-## 8. Phases
+## 10. Phases
 
 | | Phase 0 — prove the seam | Phase 1 — the console |
 |---|---|---|
@@ -261,6 +367,7 @@ is the workflow's, in the message.
 | **Contract** | `row`, `column`, `group` on the `human_gate` contract | — |
 | **Pages** | Sign-in, Home, Gate, Thread; every gate type of §5.2 | Navigator and domain pages, Activity, Novia panel, *Ask Novia about this* |
 | **Slack** | `gate_id` on buttons; the ephemeral "already answered" | `GATE_RESOLVED` message update |
+| **Domain views** | — | Grid and document views, cell editors, `display` metadata (§6); SERV batch and entity writes with version checks (§6.4) |
 | **First workflow** | `manage_budget` (357): month pick, then one grid grouped by budget type, after Novia's four corrections | — |
 
 Phase 0 builds every gate type because Needs you shows every waiting gate, whichever provider
@@ -268,7 +375,7 @@ started its run.
 
 ---
 
-## 9. Security
+## 11. Security
 
 The threat model is `docs/arch-security.md`; these are the site's own controls.
 
@@ -284,7 +391,7 @@ The threat model is `docs/arch-security.md`; these are the site's own controls.
 
 ---
 
-## 10. Open questions
+## 12. Open questions
 
 1. **Token storage.** Tentative: access token in memory, refresh token in `localStorage`, with a
    strict Content Security Policy from CloudFront. The alternative is a cookie session held by

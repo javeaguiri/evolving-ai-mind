@@ -116,7 +116,7 @@ The key is stored in `.env.test` (not committed) for local dev convenience.
 | **Excessive agency** | LLM06 | `register_workflow` creates code that runs (`js_transform`, conditions) | Human gate; L0/L1/L2 simulation | Template conditions run without an AST gate (§8, F1) |
 | **Sensitive data disclosure** | LLM02 | `run_sql`, `query_table` | Read-only regex on `runSql` | Reads every PGC and PGD table under one database login (§8, F2) |
 | **Memory poisoning** | LLM04, agentic | `PGC_Memory` rows written by Novia or `save_to_memory` | Provenance columns exist (`source_run_id`, `source_workflow`) | An injected memory is replayed into later sessions; nothing distinguishes memory derived from untrusted content |
-| **Exfiltration** | LLM02, LLM05 | Rendered markdown (a remote image URL carrying data), link unfurls, code with network access | Not verified for Slack's `markdown` block | The web site renders no remote images (§9); Slack's image and unfurl behaviour to be checked; an escaped sandbox has `fetch` |
+| **Exfiltration** | LLM02, LLM05 | Rendered markdown (a remote image URL carrying data), link unfurls, code with network access | Not verified for Slack's `markdown` block | The web site renders no remote images (`arch-web-app.md` §11); Slack's image and unfurl behaviour to be checked; an escaped sandbox has `fetch` |
 | **Unbounded consumption** | LLM10, API4 | Injected loops, `pg_sleep`, large reads | Novia turn and action limits; 1000-row read cap; step-count guards | `runSql` has no statement timeout |
 
 **The design rule for Novia.** She runs as the session's principal. Her tools call SERV carrying
@@ -162,7 +162,7 @@ F1 matters more because of the first.
 
 ## 9. The web site
 
-`docs/arch-web-app.md` §9 holds the site's own controls: Cognito tokens and the authorizer, no
+`docs/arch-web-app.md` §11 holds the site's own controls: Cognito tokens and the authorizer, no
 internal key in the browser, a strict Content Security Policy, markdown without raw HTML or remote
 images, and a pinned, audited dependency tree.
 
