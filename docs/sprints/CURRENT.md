@@ -100,6 +100,18 @@ multilingual analysis. **Mock-up:** https://claude.ai/artifact/CiBwcLPCVTH3YfKt8
 shared) — clickable console, two phone frames, every gate type and state. **Next:** Javear reviews
 the design and mock-up offline; AC0 closes on approval.
 
+Later in the session: the multilingual design gained §7.3 in `arch-home-brain.md` (translated text
+lives in the artifact as language maps, system text in catalog files — **no translation table**;
+`arch-data.md` unchanged until `display` is added), and `arch-web-app.md` §3.2 / §6.3 / §13 gained
+navigation as data (`GET /domains` shape, `display.label/description/icon/order/menu`, label
+fallback marked `labelFallback`). Mock-up source committed to `docs/web-app-mockup/`.
+
+**Next session starts here:** Javear's review of `docs/arch-web-app.md` v0.1 and the mock-up →
+approve (AC0 ✅) or revise. Then, before any Phase 0 code: scope item 1 spec-first in
+`docs/openapi.yaml` (`GET /gates`, `POST /gates/{runId}/responses`, `GET /inbox`, `POST /commands`,
+`GET /me`); and AC6's encryption-at-rest plan, written and agreed before any AWS action. Session
+1261 (Novia, inventory quantity) was Javear's parallel work — ask its outcome. Memory 424 still live.
+
 ### Session 1 — 2026-10-18 — before scoping: `manage_expenses` v10, and Novia on Opus 5.5
 
 **Novia's model verified from the proc logs:** every `callLlmWithTools` call before the 13:10 switch
