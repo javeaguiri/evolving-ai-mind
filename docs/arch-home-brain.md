@@ -71,6 +71,20 @@ Small and enumerable. Each becomes a provider-neutral name:
    exception.
 3. **The browser never holds the internal API key.** The app has a real user identity even with
    one user, and identity comes from the authenticated token, never the request body.
+4. **An LLM request is ordered from most shared to least shared.** The prompt cache is a prefix
+   match, so a change anywhere invalidates everything after it. Text that is identical for every
+   household (tool schemas, system prompt, standing instruction) comes first, then a household's
+   slow-changing context (its workflows, its memories), then the session transcript. Nothing that
+   changes within a session sits ahead of the transcript: a workflow version in Novia's Layer 1 is
+   exactly that, and was removed for it. A session's rebuilt transcript is byte-identical to what
+   the live round sent, so a resumed round appends rather than rewrites.
+5. **Cache isolation between households is decided, not inherited.** A cache hit needs an exact
+   prefix, so content cannot leak through it, but a fast response tells the sender that someone
+   sent that prefix before. Whether households share a cache namespace is set by how the LLM
+   provider scopes caches (per key, workspace or organisation), so before a second household joins:
+   one provider key or workspace per household, or the provider's own statement that caches are
+   isolated per key. Every logged LLM call carries the household, so cost is attributable per
+   tenant.
 
 ---
 
