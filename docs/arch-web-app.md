@@ -7,7 +7,7 @@ Version: 0.1
 Status: **DRAFT for approval — Sprint 14 AC0.** The four platform choices in §1 are **tentative**
 (Javear, 2026-10-22: "go tentatively with the suggestions"). No Phase 0 code starts before this
 document is approved.
-Last updated: 2026-10-22
+Last updated: 2026-10-24 (§7.1 how a gate reaches either provider, §7.2 code layout)
 
 **Working mock-up:** <https://claude.ai/artifact/CiBwcLPCVTH3YfKt85L1ro> — the wireframes for this
 document, clickable. Private until shared from its Share menu.
@@ -351,6 +351,92 @@ current record, run or domain id into the opening message. New work for her: pro
 **Later:** a gate that shows a registry view of records (review a batch before import) would reuse
 the Grid component — a genuinely new rendering, so a new `gate_type`, with pick-one as Slack's
 fallback.
+
+### 7.1 How a gate reaches either provider
+
+The workflow states the form's structure once. `buildDialog` carries it into the provider-neutral
+`dialog`, each renderer draws what its medium allows, and both send the answer back in the same
+shape.
+
+```
+ PROC (provider-neutral)                                   EXP (one renderer per provider)
+
+ workflow js_transform builds fields[]:
+   { name:'amt_17', type:'number', label:'Groceries',
+     default:400, row:'17', column:'Amount', group:'Monthly' }
+        │
+        ▼
+ human_gate step ─► buildDialog()  (step-executor.mjs)
+        │            copies each field into dialog.fields[],
+        │            row / column / group included
+        ▼
+   dialog { fields:[ { type:'input', name:'amt_17', input_type:'number',
+                       label:'Groceries', initial:400,
+                       row:'17', column:'Amount', group:'Monthly' }, … ] }
+        │
+        ├── provider 'slack' ──► callback.mjs dialogToBlocks()
+        │                         row/column ignored; group → a header block;
+        │                         inputs stacked, within Slack's block ceiling
+        │
+        └── provider 'web' ────► <Form>: every input carries row + column
+                                  → <Grid>: rows by row, columns by column,
+                                  group as a heading row; no block ceiling
+
+ Both answer the same way:
+   { action:'save', formValues:{ amt_17:'420', amt_18:'95', … } }
+        ▼
+   resume_gate (SQS) ─► run-workflow ─► the next step reads formValues, provider unknown
+```
+
+| Layer | Owns | Never |
+|---|---|---|
+| **Workflow** (`js_transform`) | Which fields exist — name, label, default — and the hints `row`, `column`, `group` | Names a provider |
+| **`buildDialog`** (PROC) | The step → the neutral `dialog`, every field property the contract defines carried through | Knows Block Kit or React |
+| **Renderer** (EXP) | Drawing the `dialog` with what the medium allows | Interprets what a field or value means |
+
+`buildDialog` copies a fixed set of field properties, so a hint reaches a renderer only once it is
+in that set. Adding `row`, `column` and `group` there, on the `human_gate` `PGC_StepType` contract,
+and as a `group` header in `dialogToBlocks`, is scope item 2's PROC and Slack half; the `<Grid>`
+is its web half.
+
+### 7.2 Code layout
+
+Slack **pushes** — the system posts into it. A browser **pulls** — it asks for what is new. So the
+two providers are not mirror images: the web has no outbound Lambda, and its renderer runs in the
+browser.
+
+```
+src/ui/
+├── slackbot/                          Slack
+│   ├── handler.mjs, mind.mjs, …       IN   Slack → SlackbotFunction (slash commands)
+│   ├── interactive.mjs                IN   a button click → resume_gate SQS
+│   ├── callback.mjs                   OUT  SlackResultsQueue → dialogToBlocks → Slack API
+│   └── form-fields.mjs                form values ↔ Block Kit block_ids
+│
+├── web/                               Web
+│   ├── api/                           WebApiFunction (Lambda)
+│   │   ├── handler.mjs                IN   browser → /api/v1/ui/web/*, Cognito token
+│   │   ├── gates.mjs                  IN   POST /gates/{runId}/responses → resume_gate SQS
+│   │   └── inbox.mjs                  OUT  GET /inbox → PGC_UiMessage, through PROC
+│   └── app/                           React SPA — runs in the browser, shipped from S3
+│       ├── Gate.jsx, Form.jsx         dialog → components: the web's dialogToBlocks
+│       └── Grid.jsx                   the editable grid
+│
+└── shared/                            both providers
+    └── form-rules.mjs                 the number rule, EMPTY_OPTION_VALUE
+```
+
+| Slack | Web | Why they differ |
+|---|---|---|
+| `handler.mjs` + `interactive.mjs` | `web/api/` | Same job — authenticate, enqueue the same SQS messages. Slack's proof is a request signature, the web's a Cognito token |
+| `callback.mjs`, a Lambda that pushes | No Lambda: PROC writes a `PGC_UiMessage` row and the browser polls `GET /inbox` | A browser cannot be posted into without a WebSocket (§1, Phase 1 option) |
+| `dialogToBlocks`, inside that Lambda | React components, in the browser | Rendering moves to the client |
+| `form-fields.mjs` | Read from the inputs by name | Block Kit carries a field's name in its `block_id`; an HTML input has a `name` |
+
+`src/ui/shared/` holds the rules both must apply identically — what a valid `number` is, how "none"
+travels — so a value typed in Slack and on the web means the same thing. `PGC_UiMessage` is written
+for every message, Slack's included; that is how a Slack-started run also appears on the site
+(§8).
 
 ---
 
