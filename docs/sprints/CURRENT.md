@@ -76,6 +76,33 @@ and these ACs are right.
 
 ## Session Notes
 
+### Session 3 — 2026-10-24 — Novia's cost spike; design docs filled in
+
+**The cost spike (scope item 7 / AC7, added in-sprint).** Perplexity billed $14.71 on Oct 24; the
+proc logs put **$14.67** on Novia's 50 Opus calls. Session 1261 (one Slack thread, Oct 21 → Oct 24,
+80 turns) had grown to 126K–234K tokens a call, and 20 calls rewrote the whole prefix at $5/M
+where a read is $0.20/M. Causes, all Execution: Layer 1 workflow versions in `instructions` (4,
+$4.11); prose replies rebuilt as assistant + user turn (every within-TTL round after one read back
+only 17,270 tokens, 4 of 4; $2.44); the 5-minute TTL across Javear's pauses (7, $5.35). **Fixed and
+deployed (`b6cba4c`):** versions dropped from Layer 1; a respond with no gateway call rebuilds as a
+respond call. 1185 tests. **The 1h TTL is not available on `/v1/agent`** — accepted, ignored
+(billed at the 5-minute rate, gone after 7 minutes). **Unexplained:** Javear's dashboard shows
+~$0.10–0.15 on Oct 18 and 22 where the logs record $6.10 and $1.38. Novia calling Anthropic
+directly is now the backlog's top priority (`7dad024`); it needs an Anthropic Console key, which
+Javear stores in SSM when it is built.
+
+**Docs:** `arch-home-brain.md` §3.3 habits 4–5 (request order for caching; cache isolation between
+households). `arch-web-app.md` §7.1 (how a gate reaches either provider — `buildDialog` must carry
+`row`/`column`/`group`, which it does not today; `group` is not rendered in Slack either) and §7.2
+(code layout — Slack pushes, the web pulls). `arch-data.md` §4.3.8 — `PGC_UiMessage`,
+`PGC_RecordEdit`, and the `display` / edit-policy / `gate_id` changes, marked designed, not built.
+
+**Next session starts here:** AC7's evidence — Javear's next Novia session; check the proc logs
+for a full `cacheRead` on the first call after an approved fix and after a prose reply (`17270` is
+the failure signature). Then Javear's AC0 review of `arch-web-app.md` (now with §7.1–7.2), then
+`openapi.yaml` spec-first, then the AC6 plan. Novia on the inventory consumption rates (sessions
+1261, 1270): `review_inventory` v12, `process_receipt` v13 — her work, not touched from here.
+
 ### Session 2 — 2026-10-22 — "start sprint"; the design session
 
 **Sprint started (Javear).** Scope confirmed with two changes: R1 → backlog (AC5 struck), and
