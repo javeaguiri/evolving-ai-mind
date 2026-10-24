@@ -755,7 +755,69 @@ rows are maintained through `dev_scripts/upsert-archetype.mjs` and
 
 ---
 
-#### 4.3.8 Updated PGC Table Count
+#### 4.3.8 PGC Experience Tables — the web app
+
+Designed for the web front end (`docs/arch-web-app.md`, Sprint 14). **Designed, not yet built:** no
+row below exists in the database until the phase that builds it, and each moves into its table's
+definition above when it does.
+
+##### PGC_UiMessage — Phase 0
+
+The inbox. Every message PROC sends a person is written here, for **every** provider: for Slack it
+is also enqueued to `SYSSQSSlackResults` as today; for the web the row **is** the delivery, read by
+the browser through `GET /inbox?after=<id>` (`arch-web-app.md` §2.1, §7.2).
+
+| Column | Type | Notes |
+|---|---|---|
+| id | bigserial PK | The inbox cursor — `GET /inbox?after=<id>` returns rows past it |
+| provider | text | `slack`, `web` |
+| channel | text | Slack channel, or the web user's Cognito `sub` |
+| thread_id | text | Slack thread ts, or the web thread id the app generated |
+| workflow_run_id | integer | Nullable, **no FK** — runs are purged independently of the inbox |
+| message_type | text | `HUMAN_GATE`, `HUMAN_NOTIFICATION`, `WORKFLOW_ERROR` |
+| payload | jsonb | The message exactly as enqueued — markdown text, or `gate_type` + `dialog` |
+| created_at | timestamptz | |
+
+**Written by** `enqueueCallback` (`sqs-callback.mjs`), through SERV, before it enqueues to Slack —
+the single delivery point for every provider. A run with no callback (a scheduled run) writes
+nothing; its gates reach the web's *Needs you* from `PGC_WorkflowRun`, not from here. **Read by**
+`src/proc/inbox.mjs` behind `WebApiFunction`. Retention is open (`arch-web-app.md` §12).
+
+##### PGC_RecordEdit — Phase 1
+
+The audit row for a **direct** edit — a change made from a domain page under the edit policy
+(`arch-home-brain.md` §4.8), not by a workflow. A workflow's writes are already traceable through
+`PGC_WorkflowRun` / `PGC_WorkflowRunStep`; this gives the direct path the same. One row per edit.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | bigserial PK | |
+| user_sub | text | Who — the Cognito `sub` from the token, never a request field |
+| domain | text | |
+| table_name | text | The `PGD_` table edited |
+| record_id | text | The record's primary key, as text |
+| operation | text | `update`, `insert`, `delete` |
+| changes | jsonb | Each field's old and new value — `{ "<column>": { "old": …, "new": … } }` |
+| created_at | timestamptz | When |
+
+The content (who, when, domain, record, each field's old and new value) is decided; the column names
+are proposed and settled at the Phase 1 build.
+
+##### Changes to existing tables
+
+| Table | Change | Phase | Design |
+|---|---|---|---|
+| `PGC_WorkflowRun` | No column. A `human_gate` frame in `stack` gains `gate_id` (UUID), set when the frame is pushed; `resumeGate` refuses an answer whose `gate_id` differs from the top frame's. An answer carrying none (a Slack button posted before the change) is accepted as today | 0 | `arch-web-app.md` §2.2 |
+| `PGC_Schema`, `PGC_EntitySchema` | `display` jsonb, nullable — how a table or entity is shown: `view`, `label`, `columns` (order, label, hidden, width), `format`, `total`, `soft_delete`, `order_by`, `default_filter`. Every key optional; absent means the default | 1 | `arch-web-app.md` §6.3 |
+| `PGC_DomainHelp`, `PGC_Workflow` | `display` jsonb, nullable — navigation: `label`, `description`, `icon`, `order`, `menu` (`false` keeps a workflow out of menus). `label` and `description` may be language maps | 1 | `arch-web-app.md` §3.2, §6.3, §13 |
+| `PGC_Schema.columns` | Each ColumnDefinition gains `editable` (boolean) for **direct** edits; absent means read-only. System-maintained columns (primary key, timestamps, embeddings, workflow-resolved foreign keys) are never editable | 1 | `arch-home-brain.md` §4.8 |
+| `PGC_Schema` | Whether direct add and direct delete are allowed, per table. Distinct from `PGC_TableMap.allow_insert` / `allow_delete`, which gate SERV for every caller including workflows; the edit policy governs the direct path only. Where on the row it lives is settled at the Phase 1 build | 1 | `arch-home-brain.md` §4.8 |
+
+**Domain tables (`PGD_*`).** A direct edit is conditioned on the row's version — an `ETag` from
+`updated_at`, which a per-table trigger maintains. A table without `updated_at` accepts no direct
+edits (`arch-home-brain.md` §4.8).
+
+#### 4.3.9 Updated PGC Table Count
 
 | # | Table | Status |
 |---|---|---|
@@ -777,15 +839,17 @@ rows are maintained through `dev_scripts/upsert-archetype.mjs` and
 | 16 | PGC_SessionEntry | v3.2 — per-turn messages array rows; `reasoning` column for diagnostic metadata |
 | 17 | PGC_Archetype | Design registry — workflow procedures; see §4.3.7. **Committed, not yet bootstrapped** |
 | 18 | PGC_DialogStrategy | Design registry — dialog strategies; see §4.3.7. **Committed, not yet bootstrapped** |
+| 19 | PGC_UiMessage | Web app inbox — every message to a person, all providers; see §4.3.8. **Designed (Sprint 14, Phase 0), not yet built** |
+| 20 | PGC_RecordEdit | Audit of direct edits from the web app; see §4.3.8. **Designed (Phase 1), not yet built** |
 | — | PGC_WorkflowStats | SQL view — not a physical table |
 
 **Total: 18 physical PGC tables (14 bootstrapped + 2 session added in v3.2 + 2 design registry
-awaiting bootstrap) + 1 view**
+awaiting bootstrap) + 1 view.** Two more are designed for the web app and not yet built (19–20).
 
 
 ---
 
-#### 4.3.9 Dev Scripts — PGC Data Management
+#### 4.3.10 Dev Scripts — PGC Data Management
 
 These scripts in `dev_scripts/` manage the authoritative data that drives the brain's
 intelligence at runtime. They are not part of the Lambda deployment — they run locally
