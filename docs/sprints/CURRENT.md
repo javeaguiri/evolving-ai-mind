@@ -76,6 +76,28 @@ and these ACs are right.
 
 ## Session Notes
 
+### Session 4 — 2026-10-24 — the 1h cache TTL, tried twice more; cheaper models priced
+
+**`/v1/agent` re-measured with `prompt_cache_key` added** (the session 3 probe sent only
+`prompt_cache_options: { ttl: '1h' }`). Same 19,251-token Opus 5.5 request twice, 8 minutes apart:
+both calls wrote 19,247 tokens at $0.0962 ($5.00/M = 1.25 × the $4 input, the 5-minute rate; 1h
+would be 2×) and the second read **0**. Ignored, with or without a cache key. **The
+`/orchestrator/v1/chat/completions` endpoint** from a Perplexity snippet (also takes the key and the
+TTL) returned **403 — limited preview, access by request to api@perplexity.ai**; untested, and it
+takes chat messages, not the items `callLlmWithTools` echoes for cache credit. Neither changes
+AC7 or the backlog's top item.
+
+**Cheaper models for Novia, priced only** (`docs/perplexity-agent-llm`): Sonnet 5.5, gpt-6.1-sol and
+gemini-4-argon are half Opus 5.5 on input, output and cache read ($2 / $10 / $0.10); DeepSeek v4 pro
+and GLM 5.3 about a third; grok-4.7's cache read is 2.5× dearer. Her bill is input-dominated, so
+Oct 24 would have roughly halved. Comparability is not evidenced — her failures on sonnet-4-6 were
+reasoning (runs 887, 911). Proposed, not done: Sonnet 5.5 first (same caching behaviour), trialled
+on a cold task with a known right answer, cost read from the proc logs; switching is a
+`minds_eye_preferences` seed change.
+
+**Next session starts here:** unchanged from session 3 — AC7 evidence, AC0 review, `openapi.yaml`,
+AC6 plan. Javear decides whether to trial Sonnet 5.5 for Novia.
+
 ### Session 3 — 2026-10-24 — Novia's cost spike; design docs filled in
 
 **The cost spike (scope item 7 / AC7, added in-sprint).** Perplexity billed $14.71 on Oct 24; the
