@@ -103,6 +103,12 @@ Memory; Settings); **ⓘ** on every widget and term, on hover and on tap. Ripple
 §13; `arch-data.md` §4.3.8 gains `PGC_Page`. Mock-up rebuilt as v0.2 (same link), with a P0/P1
 switch showing what Phase 0 builds: a seeded Home with Needs you and Conversations.
 
+**Close:** Javear on v0.2 — *"Much better… we are close"*; he is still considering it, so AC0
+stays 🟡. Open for his review: first-run Home (only Needs you and Conversations), page tabs plus ⚙
+as two navigation surfaces, and one Ask for both workflows and Novia. **Next:** AC0 approval, then
+`openapi.yaml` spec-first (incl. `GET /pages`); meanwhile, not blocked by AC0: AC7 evidence from
+the proc logs and the AC6 encryption plan.
+
 ### Session 4 — 2026-10-24 — the 1h cache TTL, tried twice more; cheaper models priced
 
 **`/v1/agent` re-measured with `prompt_cache_key` added** (the session 3 probe sent only
