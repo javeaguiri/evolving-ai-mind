@@ -35,7 +35,7 @@ provider, and that a grid answers the bulk-edit ceiling Slack cannot.
 | ~~**5**~~ | ~~Release readiness R1–R3, moved forward~~ — **R1 moved to `docs/backlog.md` at "start sprint" (Javear, 2026-10-22).** R2 is blocked by R1 and held with it. Consequence, accepted: the site is built against prod |
 | **6** | **Encryption at rest for PostgreSQL (Javear, 2026-10-22).** RDS `StorageEncrypted` is absent and cannot be switched on in place: snapshot → encrypted copy → restore. Two things make it more than a toggle: `EvoMindDB` is a CloudFormation resource with a custom `DBInstanceIdentifier`, so setting `StorageEncrypted: true` in `template.yaml` asks CloudFormation for a replacement it cannot perform under a custom name; and writes after the snapshot are lost unless the system is quiet during the cut. Plan (endpoint kept by renaming the restored instance to `SYSRDSEvoMind`, template brought back in line with the live instance, KMS key choice — AWS-managed free vs customer-managed ~$1/month) written and agreed before any AWS action. No longer waits for the Aurora decision (R5) |
 | **7** | **Novia's prompt cache holds across a session (Javear, 2026-10-24 — added in-sprint).** Oct 24 cost $14.67 for 50 Opus calls: session 1261 had grown to 234K tokens over three days, and 20 of its calls rewrote the whole prefix at $5/M where a read is $0.20/M. Three causes, all Execution: (a) Layer 1 lists every workflow's version inside `instructions`, so each approved `propose_workflow_fix` invalidates the prefix (4 misses, $4.11); (b) a prose reply rebuilds as an assistant message plus a user turn, not as the respond call it stands for, and every round started after one read back only tools + instructions (4 of 4, vs 1 of 1 hit after a respond call; $2.44 on Oct 24); (c) the 5-minute TTL expires between Javear's turns (7 misses, $5.35) — **not fixable on `/v1/agent` (measured 2026-10-24):** the gateway accepts `prompt_cache_options: { ttl: '1h' }` (an unknown field is a 400) but ignores it — the write is billed at the 5-minute rate (1.25×, not 2×) and the identical request 7 minutes later rewrote all 13,171 tokens with no read. (a) and (b) ✅ DONE, deployed (`b6cba4c`) |
-| **8** | **`read_workflow_run` — a Novia read tool for run data (Javear, 2026-10-25 — added in-sprint).** She reads runs through `run_sql` today, which carries a trap: `PGC_WorkflowRun.state` is written only at completion, and a live run's state is `stack[top].local_state`. The tool returns the run's status, current step, the waiting gate (with its `gate_id`) and per-step outputs — projected and bounded with provenance, like `read_workflow`'s outline/steps. It is also what a self-test reads after each step of a run she started |
+| ~~**8**~~ | ~~`read_workflow_run` — a Novia read tool for run data~~ — **moved to `docs/backlog.md` the day it was added (Javear, 2026-10-25)**, with the wake and the test-data policy |
 | **9** | **`answer_gate` — Novia answers a gate in a run she started (Javear, 2026-10-25 — added in-sprint).** The first step towards Novia testing her own builds, fixes and enhancements inside the cache TTL, keeping Javear out of the test-troubleshoot-repair loop. Built on scope item 1's provider-neutral `POST /gates/{runId}/responses` with `gate_id`, not a second resume path. Refused for any run she did not start (`triggered_by: 'minds_eye'` in her session) and always for the gates that guard her own gated writes — those remain Javear's. Not in scope: waking her when her run reaches a gate (a run outlives her round budget), and a policy for test data written to prod (she handled it by hand for the receipt test — see session 5) |
 
 ## Acceptance Criteria
@@ -53,7 +53,7 @@ state changes, not at close.**
 | ~~**AC5**~~ | ~~⬜~~ | ~~R1 lands~~ — **moved to `docs/backlog.md` with R1 at "start sprint" (Javear, 2026-10-22)** | ~~5~~ | — |
 | **AC6** | ⬜ | The prod database is encrypted at rest: `StorageEncrypted: true` on the live instance, `template.yaml` matches the live instance, every table's row count unchanged across the cut, and the Lambdas reach it with no SSM change or with the change made through a version-pinned deploy | [6](#scope) | Binary, verified live |
 | **AC7** | 🟡 (a) and (b) deployed 2026-10-24 — awaiting the proc logs from Javear's next Novia session; (c) measured, not fixable on the gateway | A Novia round that follows an approved workflow fix, or a prose reply, reads its prefix back from cache rather than rewriting it; the logged `cacheRead` on the round's first call covers the transcript, not only the 17,270-token tools + instructions block | [7](#scope) | Binary, from the proc logs on a live session |
-| **AC8** | ⬜ | Novia reads a live run's status, current step, waiting gate and step outputs with `read_workflow_run`, without `run_sql`; a run in progress shows its live `local_state`, not the completion-only `state` column; the result is bounded and says what it withheld | [8](#scope) | Binary, from a live Novia session |
+| ~~**AC8**~~ | ~~⬜~~ | ~~Novia reads a live run with `read_workflow_run`~~ — **moved to `docs/backlog.md` with scope item 8 (Javear, 2026-10-25)** | ~~8~~ | — |
 | **AC9** | ⬜ | Novia answers a gate in a run she started and the run resumes through the same `POST /gates/{runId}/responses` path the web uses; an answer to a run she did not start, or to a gate guarding her own gated write, is refused | [9](#scope), [1](#scope) | Binary, live |
 
 ## Carried from Sprint 13, not scoped here
@@ -88,10 +88,10 @@ code. She cleaned up after the test herself: she stored the before values in mem
 them, and deleted the test row from the test table. Her one cost was Oct 24's spike, part of it
 the 6–7 minutes Javear spent testing between her replies (the TTL misses, $5.35 of $14.67).
 
-**Added in-sprint (Javear): scope items 8 and 9, AC8 and AC9** — `read_workflow_run`, and
-`answer_gate` on scope item 1's gate-response endpoint: the first step towards Novia testing her
-own work inside the TTL. Not scoped: waking her when her run reaches a gate, and a test-data
-policy for prod.
+**Added in-sprint (Javear): scope item 9 / AC9** — `answer_gate` on scope item 1's gate-response
+endpoint, the first step towards Novia testing her own work inside the TTL. `read_workflow_run`
+(item 8 / AC8) was added and then moved to `docs/backlog.md` the same session, beside the wake and
+the test-data policy.
 
 ### Session 4 — 2026-10-24 — the 1h cache TTL, tried twice more; cheaper models priced
 
