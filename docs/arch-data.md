@@ -783,6 +783,25 @@ the single delivery point for every provider. A run with no callback (a schedule
 nothing; its gates reach the web's *Needs you* from `PGC_WorkflowRun`, not from here. **Read by**
 `src/proc/inbox.mjs` behind `WebApiFunction`. Retention is open (`arch-web-app.md` §12).
 
+##### PGC_Page — Phase 0
+
+The household's pages (`arch-web-app.md` §2.3, §4.2): one row per page version, the latest drawn.
+An evolving artifact — written from the widget menu or by Novia's gated `propose_page_change`, and
+seeded with a generic Home only (`needs_you`, `conversations`), never a domain-specific page.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| page_key | text | Stable across versions; `UNIQUE (page_key, version)` |
+| version | integer | |
+| title | jsonb | A string or a language map |
+| order | integer | Position in the page tabs; Home is `0` |
+| widgets | jsonb | Ordered `[{ id, type, width, title?, config }]`, each `config` validated against its widget type's schema on write |
+| created_by | text | `seed`, `user`, `novia` |
+| created_at | timestamptz | |
+
+**Read by** `GET /proc/pages`; Phase 0 builds the table, the seed and the read, Phase 1 the writes.
+
 ##### PGC_RecordEdit — Phase 1
 
 The audit row for a **direct** edit — a change made from a domain page under the edit policy
@@ -841,6 +860,7 @@ edits (`arch-home-brain.md` §4.8).
 | 18 | PGC_DialogStrategy | Design registry — dialog strategies; see §4.3.7. **Committed, not yet bootstrapped** |
 | 19 | PGC_UiMessage | Web app inbox — every message to a person, all providers; see §4.3.8. **Designed (Sprint 14, Phase 0), not yet built** |
 | 20 | PGC_RecordEdit | Audit of direct edits from the web app; see §4.3.8. **Designed (Phase 1), not yet built** |
+| 21 | PGC_Page | The household's pages of widgets — the web app's navigation; see §4.3.8. **Designed (Sprint 14, Phase 0), not yet built** |
 | — | PGC_WorkflowStats | SQL view — not a physical table |
 
 **Total: 18 physical PGC tables (14 bootstrapped + 2 session added in v3.2 + 2 design registry

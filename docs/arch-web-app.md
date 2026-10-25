@@ -7,7 +7,7 @@ Version: 0.1
 Status: **DRAFT for approval — Sprint 14 AC0.** The four platform choices in §1 are **tentative**
 (Javear, 2026-10-22: "go tentatively with the suggestions"). No Phase 0 code starts before this
 document is approved.
-Last updated: 2026-10-24 (§7.1 how a gate reaches either provider, §7.2 code layout)
+Last updated: 2026-10-25 (§4 rewritten — the household's own pages of widgets as the navigation, one Ask for workflows and Novia, ⚙ for the machinery, the system explained from data; §2.3 `PGC_Page`)
 
 **Working mock-up:** <https://claude.ai/artifact/CiBwcLPCVTH3YfKt85L1ro> — the wireframes for this
 document, clickable. Private until shared from its Share menu.
@@ -100,6 +100,26 @@ Slack message's buttons live.
 This is an Execution change in `run-workflow.mjs`, `step-executor.mjs`, `callback.mjs` and
 `interactive.mjs`.
 
+### 2.3 `PGC_Page` — the household's pages
+
+One row per page version, as `PGC_Workflow` keeps its versions. An evolving artifact (§4.2): written
+by the user from the widget menu or by Novia's gated `propose_page_change`, seeded only with a
+generic Home.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| page_key | text | Stable identity across versions; the `{pageId}` in `/p/{pageId}` |
+| version | integer | Unique with `page_key`; the latest is drawn |
+| title | jsonb | A string or a language map (§13) |
+| order | integer | Position in the page tabs; Home is `0` |
+| widgets | jsonb | Ordered `[{ id, type, width, title?, config }]`; `type` is a widget type of §4.2, `config` its schema |
+| created_by | text | `seed`, `user`, `novia` |
+| created_at | timestamptz | |
+
+A widget's `config` is validated against its type's schema on write, as L0 validates a step against
+its `PGC_StepType` contract; an unknown type or key is refused, not stored.
+
 ---
 
 ## 3. API surface
@@ -115,7 +135,8 @@ before implementation. Errors are `{ error: { code, message, fields? } }`.
 | `GET /gates/{runId}` | — | `200` one gate as above, or `404 gate_not_waiting` | Same read, one run |
 | `POST /gates/{runId}/responses` | `{ gateId, action, formValues?, inputValue?, listGroup?, selectedValue? }` | `202 { runId }`; `409 gate_moved` when `gateId` is not the waiting gate; `422 invalid_fields` with `fields` when a `number` field fails the shared rule — the run is not resumed | Validates, then enqueues `WORKFLOW_STEP resume_gate` with the run's own callback — the answer never re-points a run at another provider |
 | `GET /inbox` | `?after=<id>&thread=<id>&limit=` | `200 { messages: [...], cursor }` | `GET /proc/inbox`: the user's web messages, plus every message of runs the user answered from the web |
-| `POST /commands` | `{ text, threadId }` | `202 { threadId }` | `CLASSIFY_INTENT` with `callback: { provider: 'web', channel: <sub>, threadId, locale }` |
+| `POST /commands` | `{ text, threadId }` | `202 { threadId }` | `CLASSIFY_INTENT` with `callback: { provider: 'web', channel: <sub>, threadId, locale }`. `threadId` is the conversation of §4.4 |
+| `GET /pages` | — | `200 { pages: [{ pageKey, version, title, order, widgets }] }`, latest version of each, `title` resolved to the caller's locale | `GET /proc/pages`. Phase 0 returns the seeded Home only |
 | `GET /me` | — | `200 { name, email, locale, timezone }` | The token's claims; `locale` and `timezone` from the user's profile, defaulting to the household's (§13) |
 
 `WORKFLOW_ERROR` reaches the browser summarised by `WebApiFunction`, as `callback.mjs` summarises it
@@ -140,6 +161,12 @@ draw, already resolved to the caller's locale (as a `dialog` is):
 `Intl.Collator` in the user's locale. `?labels=all` returns the full language maps instead — for an
 editor of labels, never for drawing.
 
+**Pages and widget data.** `PUT /pages/{pageKey}` writes a new version from the widget menu (`409`
+when the base version moved, `422` naming the widget whose config fails its schema);
+`DELETE /pages/{pageKey}` (never Home). A data widget reads
+`GET /sources/{source}/rows?filter=&order_by=&columns=&limit=` — the same PROC `records` read as
+All data, through the registry's edit policy and `display` metadata, so a widget sees nothing a
+domain page could not.
 
 Adds `arch-home-brain.md` §4.7's remaining resources — `GET /domains`, `/domains/{domain}/schema`,
 `/domains/{domain}/records[/{id}]`, `GET /runs[/{runId}]`, the Novia session resources,
@@ -150,36 +177,125 @@ document's entity save (§6.4).
 
 ## 4. Pages and navigation
 
-Routes are client-side; every page has a deep link. The layout is one codebase: a three-region
-console from tablet width up, a single column with a bottom tab bar on a phone.
+**The user's own pages are the navigation.** A person opens the site to see their household — what
+is running low, how the month's spending stands — not the system's machinery. So the main menu is
+a row of pages the household makes, each a set of **widgets**; one **Ask** box reaches the brain
+from anywhere; and the machinery (all data, runs, workflows, memory) sits one level down, reachable
+but out of the way. The app is still a single-page app in the technical sense (§1); what this
+section decides is what the user sees.
+
+### 4.1 The shell
+
+```
+Desktop                                                       Phone
+┌────────────────────────────────────────────────────────┐   ┌──────────────────────┐
+│ ◉ Home brain   Home · Stocks · +    [ Ask… ]   ⚙   ◯  │   │ ◉ Home        ⚙   ◯ │
+├────────────────────────────────────────────────────────┤   ├──────────────────────┤
+│ ┌ Needs you (1) ─────────┐ ┌ Running low ───────── ⓘ ┐ │   │ Needs you (1)        │
+│ │ Budget · Edit amounts  │ │ Olive oil      1 left    │ │   │ Running low          │
+│ │ waiting 3 min [ Open ] │ │ Coffee beans   2 left    │ │   │ Budget vs spent      │
+│ └────────────────────────┘ └──────────────────────────┘ │   │  (one column)        │
+│ ┌ Budget vs spent · October ─────────────────────── ⓘ ┐ │   ├──────────────────────┤
+│ │ Groceries  ████████░░  €312 / €400                 │ │   │ Home  Stocks  Ask  ⋯ │
+│ └────────────────────────────────────────────────────┘ │   └──────────────────────┘
+└────────────────────────────────────────────────────────┘
+```
+
+| Region | Contents |
+|---|---|
+| **Page tabs** | The household's pages in their `order`, then **+** (new page). Home is the first page and cannot be deleted. On a phone: a bottom bar with the first pages, *Ask*, and *⋯* for the rest |
+| **Ask** | One box. Opens the conversation drawer (§4.4) on any page, without leaving it |
+| **⚙** | The machinery (§4.5) |
+| **◯** | The signed-in user: language, sign out |
+| **Page body** | The page's widgets in a responsive grid: each widget declares a width (`1/3`, `1/2`, `full`); a phone stacks them in order, full width |
+
+### 4.2 Pages and widgets
+
+A **page** is an evolving artifact: a row holding its title and an ordered list of widgets, each
+with its configuration. A **widget type** is system code — a React component and its config
+schema, the rule `step-executor.mjs` follows for step types: a new kind of widget is a code change;
+which widgets a page shows, over which data, is data.
+
+| Widget type | Shows | Configuration | Phase |
+|---|---|---|---|
+| `needs_you` | Waiting gates, oldest first, each opening the gate | — | 0 |
+| `conversations` | Recent conversations, each opening the drawer | `limit` | 0 |
+| `table` | A table or view as a grid, editable where the edit policy allows (§6) | `source`, `filter`, `columns`, `order_by`, `limit` | 1 |
+| `list` | Rows as compact cards — *Olive oil · 1 left* | `source`, `filter`, `title_column`, `detail_columns`, `limit` | 1 |
+| `metric` | One number, optionally against a second — *€312 of €400* | `source`, `value_column`, `compare_column`, `format` | 1 |
+| `chart` | Bars or a line over a source's rows | `source`, `kind`, `category_column`, `value_columns` | 1 |
+| `actions` | Buttons that start workflows — *Edit the budget*, *Add a receipt* | `workflows` | 1 |
+| `activity` | Recent runs, a domain's or all | `domain`, `limit` | 1 |
+| `note` | Text the household writes | `markdown` | 1 |
+
+**A widget reads data, never computes it.** `source` names a registered table or **view**; *running
+low* is a view over inventory with its reorder rule, *budget vs spent* a view joining budgets to the
+month's expenses (§6.2). The widget filters, sorts, limits and formats through the registry's
+`display` metadata (§6.3) — it holds no domain arithmetic and no domain words of its own: every
+label is the registry's or the page author's. A widget whose source no longer exists draws a
+*source missing* frame naming it, rather than disappearing.
+
+**Who makes pages.** The user, from a widget menu — **+** on a page opens the catalog, a widget is
+configured in a short form (source, then the type's options), and widgets are reordered with up and
+down controls; drag-and-drop layout comes later. Or **Novia**: *"put the supplies running low on my
+home page"* becomes a gated `propose_page_change`, shown as a preview of the page before it is
+written. Either way the page row is versioned like a workflow.
+
+**Seeded.** Home ships as a seed with `needs_you` and `conversations`; nothing domain-specific is
+seeded (`CLAUDE.md`, system artifacts stay generic). Phase 0 draws Home from that seed, so the page
+model is in place from the first build and Phase 1 only adds widget types.
+
+### 4.3 Explaining the system
+
+A new user meets words the brain uses for itself. Three devices, each from data rather than hand
+copy.
+
+| Device | What it does |
+|---|---|
+| **One vocabulary** | Six words, used the same everywhere — in the app, in Novia's replies, in errors. *Domain*: a kind of thing you keep track of. *Workflow*: a routine the brain runs for you. *Question*: the brain needs your answer before it carries on (a gate). *Run*: one time a workflow ran. *Memory*: what the brain has learned. *Novia*: the brain's builder — she makes and fixes workflows, pages and domains. The definitions are catalog keys (§13); a term's first use on a screen carries a dotted underline |
+| **ⓘ on every widget and term** | Opens on hover **and** on tap — a phone has no hover. A term shows its definition. A widget shows where its data comes from, from its config and the registry: *"Items from Inventory below their reorder level · view `running_low` · added by Novia, 24 Oct · Ask to change this"* |
+| **How your brain works** | A page under ⚙, generated from the household's registry, never written by hand: each domain with its tables, the workflows that act on it, what is scheduled, what it remembers, what is waiting. It describes *this* brain, so it stays true as the brain evolves |
+
+### 4.4 Ask — one conversation, whoever answers
+
+The user asks; the brain decides who answers. A request a workflow covers starts that workflow; the
+rest goes to Novia. **Threads** and **Novia** are no longer menu items: a conversation is what was
+a thread, and Novia is one of the voices in it.
+
+| Behaviour | Design |
+|---|---|
+| **Drawer** | Opens over the page from the right (a full-screen sheet on a phone), so the page stays in view. Deep-linkable as `?ask=<conversationId>` on any route. A list of past conversations at its head; each is the command, then every message and question of its runs in order, answerable in place |
+| **Routing** | `POST /commands` → `CLASSIFY_INTENT`, exactly as `/mind`. **Phase 1:** where routing finds no workflow — today it answers *"I could not complete that request"* — a web command hands off to Novia (`MINDS_EYE`) in the same conversation instead, and a conversation she is in continues with her. Slack's `/mind` and `/novia` are unchanged |
+| **Who answered** | Each reply names its source — *Edit the budget* (a workflow) or *Novia* — with ⓘ |
+| **Ask about this** | From any widget, record or question: opens the drawer with Novia and the item's identifiers (widget config, run id, record) in the opening message |
+| **Phase 0** | The drawer with workflow routing only; a request nothing matches gets today's notice |
+
+### 4.5 ⚙ — the machinery
+
+| Route | Page | Phase |
+|---|---|---|
+| `/system/how-it-works` | How your brain works (§4.3) | 1 |
+| `/system/data`, `/system/data/{domain}` | **All data** — every domain, from the registry, with its records in the §6 views; the place for anything not yet on a page | 1 |
+| `/system/activity`, `/system/activity/{runId}` | Runs, and one run's steps | 1 |
+| `/system/workflows` | Workflows by domain, each runnable | 1 |
+| `/system/memory` | What the brain remembers, by domain | 1 |
+| `/system/settings` | Language, timezone, household currency | 1 |
+
+### 4.6 Routes
+
+Client-side; every page has a deep link.
 
 | Route | Page | Phase |
 |---|---|---|
 | (Cognito managed login) | Sign-in, then back to the page asked for | 0 |
-| `/` | **Home** — command bar; *Needs you* (waiting gates, a count on the tab); recent threads | 0 |
-| `/gates/{runId}` | **Gate** — the workflow name and the gate, full width; Back returns to Home | 0 |
-| `/threads/{threadId}` | **Thread** — one command's conversation: the command, then every message and gate of its runs in order, answerable in place | 0 |
-| `/domains`, `/domains/{domain}` | Navigator; domain page with records and its workflows as actions | 1 |
-| `/runs`, `/runs/{runId}` | Activity; a run's steps | 1 |
-| `/novia`, `/novia/{sessionId}` | Novia sessions; a conversation, her gated actions as gates | 1 |
+| `/` | The first page — Home | 0 |
+| `/p/{pageId}` | A household page | 1 |
+| `/gates/{runId}` | **Question** — the workflow's name and the gate, full width; Back returns to the page it came from | 0 |
+| `?ask=<conversationId>` | The conversation drawer, over any route | 0 |
+| `/system/…` | The machinery (§4.5) | 1 |
 
-```
-Desktop                                              Phone
-┌───────────────────────────────────────────────┐   ┌──────────────────────┐
-│ ◉ Home brain   [ Ask the home brain…      ] ◯ │   │ [ Ask the home brain…]│
-├──────────┬────────────────────────────────────┤   ├──────────────────────┤
-│ Home   2 │ Needs you (2)                      │   │ Needs you (2)        │
-│ Threads  │ ┌────────────────────────────────┐ │   │ ┌──────────────────┐ │
-│ ─ Ph. 1 ─│ │ manage_budget · Edit amounts   │ │   │ │ manage_budget …  │ │
-│ Domains  │ │ waiting 3 min   [ Open ]       │ │   │ │ [ Open ]         │ │
-│ Activity │ └────────────────────────────────┘ │   │ └──────────────────┘ │
-│ Novia    │ Recent threads                     │   │ Recent threads       │
-│          │  "manage budget"  · completed      │   ├──────────────────────┤
-│          │                                    │   │ Home  Threads  More  │
-└──────────┴────────────────────────────────────┘   └──────────────────────┘
-```
-
-The mock-up draws every Phase 0 page and the Phase 1 regions as greyed placeholders.
+The mock-up draws Phase 0's Home and question, the drawer, a Phase 1 Home and second page, the
+widget menu, the ⓘ popovers and How your brain works; Phase 1 surfaces are labelled.
 
 ---
 
@@ -229,7 +345,7 @@ builds). It is optional: a form without it renders as a stacked form on both pro
 unchanged. It describes the **structure** of the form — these fields are cells of one table — not a
 provider: no workflow ever says "on the web". Slack cannot draw a grid, so it ignores `row` and
 `column`; it uses `group` as a header. The contract text goes on the `human_gate` `PGC_StepType` so
-Novia emits the hint when she builds a bulk edit. Domain pages (§6) need nothing in any workflow —
+Novia emits the hint when she builds a bulk edit. Domain views (§6) need nothing in any workflow —
 their layout comes from the registry.
 
 When **every** input field carries `row` and `column`, the web lays the form out as a grid: rows
@@ -257,7 +373,7 @@ is the workflow's, in the message.
 
 ## 6. Domain views — records outside any workflow (Phase 1)
 
-The domain pages read and write records through the REST resources (§3.2) — `WebApiFunction` →
+All data (§4.5) and the `table` widget (§4.2) read and write records through the REST resources (§3.2) — `WebApiFunction` →
 PROC `records` → SERV — and **never through a workflow**. React decides the widgets. It decides
 them from the registry, **never from a domain name**: a new rendering behaviour is a new view type
 in the app (system code), and which domain uses it is registry data — the rule `step-executor.mjs`
@@ -304,7 +420,7 @@ registry fact.
 | `label` | Domain, table, entity, workflow | What a person reads instead of the identifier — a string or a language map (§13) |
 | `description` | Domain, workflow | One line under the label in menus — a string or a language map |
 | `icon` | Domain, workflow | A name from the app's own icon set; an unknown name draws the default |
-| `order`, `menu` | Domain, workflow | Position in the navigator and action lists; `menu: false` keeps a workflow out of them |
+| `order`, `menu` | Domain, workflow | Position in All data, the workflow list and an `actions` widget's picker; `menu: false` keeps a workflow out of them |
 | `columns` | Table | Order, and per column: `label` (string or language map), `hidden`, `width` |
 | `format` | Column | `currency` with `currency_column` (the row's own currency column) or a fixed code; `percent`; `date` |
 | `total` | Column | `sum` — a totals row on a grid |
@@ -444,7 +560,7 @@ for every message, Slack's included; that is how a Slack-started run also appear
 
 | Case | Behaviour |
 |---|---|
-| **Slack-started run, gate answered on the web** | The response is enqueued with the run's own callback (Slack). The next gate and the results post to the Slack thread as always, and through the inbox they also appear in Needs you and the thread on the web. The Slack message's buttons stay live; a click there is refused by `gate_id` (§2.2) and `interactive.mjs` answers *"Already answered elsewhere."* ephemerally |
+| **Slack-started run, gate answered on the web** | The response is enqueued with the run's own callback (Slack). The next gate and the results post to the Slack thread as always, and through the inbox they also appear in Needs you and the conversation on the web. The Slack message's buttons stay live; a click there is refused by `gate_id` (§2.2) and `interactive.mjs` answers *"Already answered elsewhere."* ephemerally |
 | **Web-started run** | No Slack message exists, so it can only be answered on the web |
 | **Phase 1** | A `GATE_RESOLVED` callback updates the Slack message to show it was answered on the web, so the stale buttons disappear rather than refuse |
 
@@ -454,13 +570,14 @@ for every message, Slack's included; that is how a Slack-started run also appear
 
 | State | What the user sees |
 |---|---|
-| **Loading** | Skeleton rows in Needs you and threads; a gate shows its frame and a spinner in the button row |
-| **Empty** | Needs you: *Nothing is waiting for you.* Threads: the command bar is the call to action |
-| **Run working** | A *Working…* line at the foot of the thread after a command or an answer, until the next message arrives |
+| **Loading** | Skeleton widgets on the page and rows in the drawer; a gate shows its frame and a spinner in the button row |
+| **Empty** | Needs you: *Nothing is waiting for you.* Conversations: the Ask box is the call to action. A data widget with no rows: its own title and *Nothing here yet*. A new page: the widget menu, open |
+| **Run working** | A *Working…* line at the foot of the conversation after a command or an answer, until the next message arrives |
 | **Answer sent** | The gate collapses to a one-line record — *You chose Save · 3 changes* — and its inputs are disabled; the next gate or message follows below |
 | **Gate moved (`409`)** | *This was answered elsewhere.* The gate reloads from `GET /gates/{runId}` |
 | **Invalid fields (`422`)** | The offending cells outlined, each with its message; nothing is sent to the run |
-| **Workflow error** | The summarised error in the thread, with the run id for Novia |
+| **Workflow error** | The summarised error in the conversation, with *Ask Novia about this* carrying the run id |
+| **Source missing** | A widget whose `source` is gone draws a frame naming it and offers *Ask Novia about this*; the rest of the page draws normally |
 | **Offline / API failure** | A banner, *Can't reach the home brain — retrying*; polling backs off; typed values are kept |
 | **Signed out** | The token is refreshed silently; when that fails, the user returns to sign-in and then to the same page |
 
@@ -471,9 +588,9 @@ for every message, Slack's included; that is how a Slack-started run also appear
 | | Phase 0 — prove the seam | Phase 1 — the console |
 |---|---|---|
 | **Infrastructure** | S3 + CloudFront, Cognito pool and one user, `WebApiFunction`, the web routes, `deploy-web.mjs` | WebSocket only if polling is felt |
-| **PROC** | `PGC_UiMessage` and `enqueueCallback` writing it; `gate_id`; `GET /proc/gates`, `GET /proc/inbox` | Navigate reads (§3.2), the edit policy and `PGC_RecordEdit`, the `arch-home-brain.md` §3.2 Slack leaks removed |
+| **PROC** | `PGC_UiMessage` and `enqueueCallback` writing it; `gate_id`; `PGC_Page` with the seeded Home; `GET /proc/gates`, `GET /proc/inbox`, `GET /proc/pages` | Navigate reads (§3.2), the edit policy and `PGC_RecordEdit`, the `arch-home-brain.md` §3.2 Slack leaks removed |
 | **Contract** | `row`, `column`, `group` on the `human_gate` contract | — |
-| **Pages** | Sign-in, Home, Gate, Thread; every gate type of §5.2 | Navigator and domain pages, Activity, Novia panel, *Ask Novia about this* |
+| **Pages** | Sign-in, Home from the seeded `PGC_Page` (`needs_you`, `conversations`), Question, the Ask drawer with workflow routing; every gate type of §5.2 | Household pages and the widget menu, the Phase 1 widget types of §4.2, Ask's hand-off to Novia, ⚙ (How your brain works, All data, Activity, Workflows, Memory, Settings), ⓘ on widgets and terms, *Ask about this*, Novia's `propose_page_change` |
 | **Slack** | `gate_id` on buttons; the ephemeral "already answered" | `GATE_RESOLVED` message update |
 | **Domain views** | — | Grid and document views, cell editors, `display` metadata (§6); SERV batch and entity writes with version checks (§6.4) |
 | **First workflow** | `manage_budget` (357): month pick, then one grid grouped by budget type, after Novia's four corrections | — |
@@ -493,7 +610,7 @@ The threat model is `docs/arch-security.md`; these are the site's own controls.
 | **Identity** | The user is the token's `sub`, verified by the API Gateway authorizer. `WebApiFunction` passes it to PROC as the principal (`arch-security.md` S5); no request body field names a user |
 | **Markdown** | `/proc` markdown is LLM-written and may carry injected content. It is rendered **without raw HTML** and **without remote images** — an image URL can carry data out the moment it renders. Links open in a new tab with `rel="noopener noreferrer"` |
 | **Content Security Policy** | Sent by CloudFront: scripts and styles from the site's own origin only, `connect-src` the site's origin and the Cognito domain, `img-src` the site's origin and `data:`, `frame-ancestors 'none'` |
-| **Object-level checks** | Every resource taking an id — a gate, a thread, later a record — is checked against the principal in PROC, never trusted from the URL |
+| **Object-level checks** | Every resource taking an id — a gate, a conversation, a page, later a record — is checked against the principal in PROC, never trusted from the URL |
 | **Dependencies** | Lockfile committed; `npm audit` in `deploy-web.mjs` stops a deploy with a high-severity finding |
 | **No CSRF surface** | Requests authenticate with a bearer header, not a cookie |
 
@@ -526,8 +643,8 @@ language a matter of adding catalogs and language maps, not rewriting the app.
 | **Formatting through `Intl`** | Numbers, dates, currency and sorting (`Intl.NumberFormat`, `DateTimeFormat`, `Collator`) with the user's locale and timezone — never `toLocaleString()` without a locale, never a literal symbol. Number entry accepts the locale's decimal separator (the shared rule already accepts a comma) |
 | **The `dialog` stays plain strings** | PROC resolves language maps before a gate is sent (`arch-home-brain.md` §7.2), so §5's components never see one |
 | **System messages by key** | A notification or error carrying `messageKey` and `params` is rendered from the catalog; its `message` text is the fallback |
-| **Fixed menu items** | Home, Threads, Domains, Activity, Novia, Settings — app words, catalog keys like any other |
-| **Data-driven menus** | Domains and their workflows come from `GET /domains` (§3.2) with `label` already in the user's language; the app draws them and never translates a name itself |
+| **Fixed words** | Ask, the ⚙ entries (How your brain works, All data, Activity, Workflows, Memory, Settings), the six vocabulary terms and their definitions (§4.3) — app words, catalog keys like any other. Page titles are the household's, stored as language maps |
+| **Data-driven menus** | All data, the workflow list and the `actions` picker come from `GET /domains` (§3.2) with `label` already in the user's language; the app draws them and never translates a name itself |
 | **Registry labels** | `display.label` and column labels may be language maps. PROC picks the user's locale, then the household's, then the first entry, then a humanised identifier (`budgets_expenses` → *Budgets expenses*); the fallback is marked in the response (`labelFallback: true`) so missing translations can be listed |
 | **Layout** | `lang` set on the document from the locale; CSS logical properties (`margin-inline`, `padding-inline-start`) so a right-to-left language is not ruled out; no text baked into images |
 | **User content** | Shown as entered, never machine-translated without being asked |
