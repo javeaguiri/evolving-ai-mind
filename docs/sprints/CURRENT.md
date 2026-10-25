@@ -45,7 +45,7 @@ state changes, not at close.**
 
 | # | Status | Criterion | Scope | Threshold |
 |---|---|---|---|---|
-| **AC0** | 🟡 draft `docs/arch-web-app.md` v0.1 + mock-up complete — awaiting Javear's review | `docs/arch-web-app.md` covers every point in scope item 0, with wireframes, and Javear approves it before Phase 0 code starts | [0](#scope) | Approval |
+| **AC0** | 🟡 §4 rewritten and mock-up rebuilt as v0.2 (2026-10-25: the household's pages of widgets, one Ask, ⚙ for the machinery) — awaiting Javear's review | `docs/arch-web-app.md` covers every point in scope item 0, with wireframes, and Javear approves it before Phase 0 code starts | [0](#scope) | Approval |
 | **AC1** | ⬜ | A run started from the web site suspends at a gate, the gate appears on the site, and answering it there resumes the run to completion — no Slack involved | [1](#scope) | Binary, live |
 | **AC2** | ⬜ | `manage_budget` edits all its amounts in one editable grid on the site, grouped by budget type, and one save writes **only the changed rows**, as numbers, in the household's currency | [2](#scope), [3](#scope) | Binary, live |
 | **AC3** | ⬜ | The site requires sign-in, and no request from the browser carries the internal API key | [4](#scope) | Binary |
@@ -92,6 +92,16 @@ the 6–7 minutes Javear spent testing between her replies (the TTL misses, $5.3
 endpoint, the first step towards Novia testing her own work inside the TTL. `read_workflow_run`
 (item 8 / AC8) was added and then moved to `docs/backlog.md` the same session, beside the wake and
 the test-data policy.
+
+**AC0 — the navigation redesigned (Javear: a new user would be confused; why Threads *and* Novia?).**
+`arch-web-app.md` §4 rewritten: the household's own **pages of widgets** are the navigation (a page
+is an evolving artifact, `PGC_Page`, §2.3; a widget type is system code, as a step type is); one
+**Ask** drawer, where a workflow answers if one matches and Novia otherwise (Phase 1 — intent routing
+does not reach Novia today, it answers *"I could not complete that request"*); **⚙** holds the
+machinery (How your brain works, generated from the registry; All data; Activity; Workflows;
+Memory; Settings); **ⓘ** on every widget and term, on hover and on tap. Ripple edits in §3, §6, §8–§10,
+§13; `arch-data.md` §4.3.8 gains `PGC_Page`. Mock-up rebuilt as v0.2 (same link), with a P0/P1
+switch showing what Phase 0 builds: a seeded Home with Needs you and Conversations.
 
 ### Session 4 — 2026-10-24 — the 1h cache TTL, tried twice more; cheaper models priced
 

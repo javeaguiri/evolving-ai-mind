@@ -19,12 +19,21 @@ input,select,textarea{font:inherit;color:#15191E}
 .btn:hover{background:#EEF1F4}
 .btn-primary{background:#0D6A6A;border-color:#0D6A6A;color:#FFFFFF}
 .btn-primary:hover{background:#094F4F}
-.btn-danger{background:#FFFFFF;border-color:#B42318;color:#B42318}
 .btn-quiet{border-color:transparent;background:transparent}
-.btn[disabled]{opacity:.5;cursor:not-allowed}
-.nav-item{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:40px;padding:0 12px;border:0;border-radius:8px;background:transparent;color:#2B323B;font-size:14px;text-align:left}
-.nav-item:hover{background:#E8EBEF}
-.nav-on{background:#E2F0EF;color:#0A5555;font-weight:600}
+.btn-sm{min-height:32px;padding:0 10px;font-size:13px}
+.tab{min-height:44px;padding:0 14px;border:0;border-bottom:3px solid transparent;background:transparent;color:#3A424C;font-size:15px;font-weight:500}
+.tab:hover{color:#15191E;background:#F4F5F7}
+.tab-on{border-bottom-color:#0D6A6A;color:#0A5555;font-weight:600}
+.iconbtn{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:999px;border:1px solid #C9CFD6;background:#FFFFFF;color:#3A424C}
+.iconbtn:hover{background:#EEF1F4}
+.info{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:999px;border:0;background:transparent;color:#586170;font-size:15px;font-weight:600}
+.info:hover{background:#E8EBEF;color:#0A5555}
+.term{border-bottom:1px dotted #586170}
+.pop{padding:10px 12px;border-radius:8px;background:#15191E;color:#F4F5F7;font-size:13px;line-height:1.45}
+.wgrid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:16px}
+.w2{grid-column:span 2}.w3{grid-column:span 3}.w6{grid-column:span 6}
+@media (max-width:760px){.wgrid{grid-template-columns:minmax(0,1fr)}.w2,.w3,.w6{grid-column:auto}}
+.card{background:#FFFFFF;border:1px solid #DCE0E5;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
 .cell{width:100%;box-sizing:border-box;min-height:36px;padding:6px 8px;border:1px solid transparent;border-radius:6px;background:transparent;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:14px}
 .cell-text{text-align:left;font-family:'IBM Plex Sans',sans-serif}
 .cell:hover{border-color:#C9CFD6;background:#FFFFFF}
@@ -36,7 +45,7 @@ input,select,textarea{font:inherit;color:#15191E}
 .field{width:100%;box-sizing:border-box;min-height:40px;padding:8px 10px;border:1px solid #C9CFD6;border-radius:8px;background:#FFFFFF;font-size:14px}
 .field:focus{outline:2px solid #0D6A6A;outline-offset:-1px}
 .grid{width:100%;border-collapse:separate;border-spacing:0;font-size:14px}
-.grid th{font-weight:600;text-align:left;color:#3A424C;padding:8px 10px;border-bottom:1px solid #DCE0E5;background:#F8F9FA;position:sticky;top:0}
+.grid th{font-weight:600;text-align:left;color:#3A424C;padding:8px 10px;border-bottom:1px solid #DCE0E5;background:#F8F9FA}
 .grid td{padding:2px 4px;border-bottom:1px solid #EDF0F2;vertical-align:middle}
 .grid .rowhead{padding:8px 10px;color:#15191E}
 .grid .group td{background:#F4F5F7;font-weight:600;color:#3A424C;padding:10px;border-bottom:1px solid #DCE0E5}
@@ -46,58 +55,127 @@ input,select,textarea{font:inherit;color:#15191E}
 .chip-web{background:#E2F0EF;color:#0A5555}
 .chip-slack{background:#F1E9F8;color:#5B2A86}
 .chip-phase{background:#FFF0CC;color:#6A4A00}
-.lang{min-height:32px;padding:0 10px;border:1px solid #C9CFD6;background:#FFFFFF;font-size:13px;font-weight:600;color:#3A424C}
-.lang-on{background:#15191E;color:#FFFFFF;border-color:#15191E}
+.chip-wf{background:#E6EEF8;color:#1D4A7A}
+.chip-novia{background:#F7E8EE;color:#7A1F45}
+.seg{min-height:32px;padding:0 10px;border:1px solid #C9CFD6;background:#FFFFFF;font-size:13px;font-weight:600;color:#3A424C}
+.seg-on{background:#15191E;color:#FFFFFF;border-color:#15191E}
+.menu-item{display:flex;width:100%;min-height:44px;align-items:center;padding:0 14px;border:0;background:transparent;text-align:left;font-size:14px;color:#15191E}
+.menu-item:hover{background:#F4F5F7}
+.typecard{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:14px;border:1px solid #DCE0E5;border-radius:10px;background:#FFFFFF;text-align:left;color:#15191E}
+.typecard:hover{border-color:#0D6A6A;background:#F2F8F7}
+.bar-track{height:10px;border-radius:999px;background:#EDF0F2;overflow:hidden}
+.msg-user{align-self:flex-end;max-width:85%;padding:10px 14px;border-radius:12px;background:#15191E;color:#FFFFFF}
+.msg-reply{max-width:92%;padding:12px 14px;border-radius:12px;background:#FFFFFF;border:1px solid #DCE0E5}
 </style>
 </helmet>
 <div style="min-height: 100vh; background: #F4F5F7; color: #15191E; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 15px; line-height: 1.5">
 
-<header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 12px 20px; background: #FFFFFF; border-bottom: 1px solid #DCE0E5">
-<div style="display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; letter-spacing: -0.01em">
+<header style="background: #FFFFFF; border-bottom: 1px solid #DCE0E5">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 10px 20px 0">
+<div style="display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; letter-spacing: -0.01em; padding-bottom: 10px">
 <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true" fill="none" stroke="#0D6A6A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13 14 5l10 8"></path><path d="M7 11v12h14V11"></path><circle cx="14" cy="17" r="2.5"></circle></svg>
 <span>{{t.brand}}</span>
 </div>
-<form onSubmit="{{ sendCommand }}" style="flex: 1 1 320px; display: flex; gap: 8px; min-width: 0">
-<label for="cmd" style="position: absolute; left: -9999px">{{t.askLabel}}</label>
-<input id="cmd" class="field" value="{{ cmd }}" onChange="{{ onCmd }}" placeholder="{{ t.askPlaceholder }}" style="flex: 1 1 auto; min-width: 0">
-<button class="btn btn-primary" type="submit">{{t.send}}</button>
-</form>
-<div style="display: flex; align-items: center; gap: 12px">
-<div role="group" aria-label="Language" style="display: flex">
-<button class="{{ langEnCls }}" onClick="{{ setEn }}" style="border-radius: 8px 0 0 8px">EN</button>
-<button class="{{ langEsCls }}" onClick="{{ setEs }}" style="border-radius: 0 8px 8px 0; margin-left: -1px">ES</button>
+<nav aria-label="{{ t.pages }}" style="flex: 1 1 260px; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 2px; min-width: 0">
+<sc-for list="{{ tabs }}" as="tb" hint-placeholder-count="2">
+<button class="{{ tb.cls }}" onClick="{{ tb.go }}">{{tb.label}}</button>
+</sc-for>
+<sc-if value="{{ isP1 }}" hint-placeholder-val="{{ true }}">
+<button class="tab" aria-label="{{ t.newPage }}" onClick="{{ newPage }}">+</button>
+</sc-if>
+</nav>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-bottom: 10px">
+<button class="btn" onClick="{{ openAsk }}" style="min-width: 200px; justify-content: flex-start; color: #586170">
+<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4z"></path></svg>{{t.askPlaceholder}}</button>
+<div role="group" aria-label="{{ t.showing }}" style="display: flex; align-items: center; gap: 6px">
+<span style="font-size: 12px; color: #586170">{{t.showing}}</span>
+<div style="display: flex"><button class="{{ p0Cls }}" onClick="{{ setP0 }}" style="border-radius: 8px 0 0 8px">P0</button><button class="{{ p1Cls }}" onClick="{{ setP1 }}" style="border-radius: 0 8px 8px 0; margin-left: -1px">P1</button></div>
 </div>
-<button class="btn btn-quiet" aria-label="Account" style="padding: 0; min-height: 40px; width: 40px; justify-content: center; border-radius: 999px; background: #15191E; color: #FFFFFF; font-weight: 600">J</button>
+<div role="group" aria-label="Language" style="display: flex"><button class="{{ langEnCls }}" onClick="{{ setEn }}" style="border-radius: 8px 0 0 8px">EN</button><button class="{{ langEsCls }}" onClick="{{ setEs }}" style="border-radius: 0 8px 8px 0; margin-left: -1px">ES</button></div>
+<sc-if value="{{ isP1 }}" hint-placeholder-val="{{ true }}">
+<div style="position: relative">
+<button class="iconbtn" aria-label="{{ t.system }}" onClick="{{ toggleGear }}"><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"></path></svg></button>
+<sc-if value="{{ gearOpen }}" hint-placeholder-val="{{ false }}">
+<div style="position: absolute; right: 0; top: 46px; z-index: 20; width: 260px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 10px; box-shadow: 0 8px 24px rgba(21,25,30,.12); overflow: hidden">
+<div style="padding: 10px 14px 6px; font-size: 12px; color: #586170">{{t.systemHint}}</div>
+<sc-for list="{{ gearItems }}" as="gi" hint-placeholder-count="6"><button class="menu-item" onClick="{{ gi.go }}">{{gi.label}}</button></sc-for>
+</div>
+</sc-if>
+</div>
+</sc-if>
+<button class="iconbtn" aria-label="Account" style="background: #15191E; color: #FFFFFF; border-color: #15191E; font-weight: 600">J</button>
+</div>
 </div>
 </header>
 
-<div style="display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0">
+<main style="box-sizing: border-box; max-width: 1240px; margin: 0 auto; padding: 20px 20px 64px">
 
-<nav aria-label="Main" style="flex: 1 1 200px; max-width: 280px; box-sizing: border-box; padding: 16px 12px; display: flex; flex-direction: column; gap: 2px">
-<sc-for list="{{ navMain }}" as="n" hint-placeholder-count="2">
-<button class="{{ n.cls }}" onClick="{{ n.go }}"><span>{{n.label}}</span><sc-if value="{{ n.hasCount }}" hint-placeholder-val="{{ true }}"><span class="chip chip-web">{{n.count}}</span></sc-if></button>
-</sc-for>
-<div style="margin: 16px 12px 6px; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #586170">{{t.phase1}}</div>
-<sc-for list="{{ navPhase1 }}" as="n" hint-placeholder-count="4">
-<button class="{{ n.cls }}" onClick="{{ n.go }}"><span>{{n.label}}</span><span class="chip chip-phase">P1</span></button>
-</sc-for>
-</nav>
-
-<main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 20px 24px 48px">
-
-<sc-if value="{{ isHome }}" hint-placeholder-val="{{ true }}">
-<div style="max-width: 920px; display: flex; flex-direction: column; gap: 28px">
-<section aria-labelledby="needs-h">
-<h1 id="needs-h" style="margin: 0 0 12px; font-size: 22px; font-weight: 600">{{t.needsYou}} <span style="color: #586170; font-weight: 500">({{needsCount}})</span></h1>
-<sc-if value="{{ hasNeeds }}" hint-placeholder-val="{{ true }}">
-<div style="display: flex; flex-direction: column; gap: 10px">
-<sc-for list="{{ needs }}" as="g" hint-placeholder-count="2">
-<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 16px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px">
-<div style="flex: 1 1 280px; min-width: 0">
-<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 4px">
-<span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #586170">{{g.workflow}}</span>
-<span class="{{ g.chipCls }}">{{g.provider}}</span>
+<sc-if value="{{ isPage }}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; flex-direction: column; gap: 16px">
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px">
+<h1 style="margin: 0; font-size: 22px; font-weight: 600">{{pageTitle}}</h1>
+<sc-if value="{{ isP1 }}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; flex-wrap: wrap; gap: 8px">
+<sc-if value="{{ editing }}" hint-placeholder-val="{{ false }}"><button class="btn" onClick="{{ openAdd }}">+ {{t.addWidget}}</button></sc-if>
+<button class="btn" onClick="{{ toggleEdit }}">{{editLabel}}</button>
 </div>
+</sc-if>
+</div>
+
+<sc-if value="{{ adding }}" hint-placeholder-val="{{ false }}">
+<section aria-labelledby="add-h" style="padding: 18px; background: #FFFFFF; border: 2px solid #0D6A6A; border-radius: 12px; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px">
+<h2 id="add-h" style="margin: 0; font-size: 17px; font-weight: 600">{{addHeading}}</h2>
+<button class="btn btn-quiet" onClick="{{ closeAdd }}">{{t.cancel}}</button>
+</div>
+<sc-if value="{{ addPickType }}" hint-placeholder-val="{{ true }}">
+<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px">
+<sc-for list="{{ widgetTypes }}" as="wt" hint-placeholder-count="6">
+<button class="typecard" onClick="{{ wt.pick }}"><strong>{{wt.label}}</strong><span style="font-size: 13px; color: #586170">{{wt.desc}}</span></button>
+</sc-for>
+</div>
+<div style="font-size: 13px; color: #586170">{{t.orAskNovia}}</div>
+</sc-if>
+<sc-if value="{{ addConfig }}" hint-placeholder-val="{{ false }}">
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px">
+<div><label for="wsrc" style="display: block; font-size: 13px; font-weight: 500; color: #3A424C; margin-bottom: 4px">{{t.source}}</label>
+<select id="wsrc" class="field" value="{{ addSource }}" onChange="{{ onAddSource }}"><sc-for list="{{ sourceOptions }}" as="so" hint-placeholder-count="3"><option value="{{ so.value }}">{{so.label}}</option></sc-for></select></div>
+<div><label for="wtitle" style="display: block; font-size: 13px; font-weight: 500; color: #3A424C; margin-bottom: 4px">{{t.widgetTitle}}</label>
+<input id="wtitle" class="field" value="{{ addTitle }}" onChange="{{ onAddTitle }}"></div>
+<div><label for="wwidth" style="display: block; font-size: 13px; font-weight: 500; color: #3A424C; margin-bottom: 4px">{{t.width}}</label>
+<select id="wwidth" class="field" value="{{ addWidth }}" onChange="{{ onAddWidth }}"><option value="w2">⅓</option><option value="w3">½</option><option value="w6">{{t.fullWidth}}</option></select></div>
+</div>
+<div style="font-size: 13px; color: #586170">{{addSourceDesc}}</div>
+<div style="display: flex; flex-wrap: wrap; gap: 8px"><button class="btn btn-primary" onClick="{{ confirmAdd }}">{{t.addToPage}}</button><button class="btn" onClick="{{ backToTypes }}">{{t.back}}</button></div>
+</sc-if>
+</section>
+</sc-if>
+
+<sc-if value="{{ pageEmpty }}" hint-placeholder-val="{{ false }}">
+<div style="padding: 28px; background: #FFFFFF; border: 1px dashed #C9CFD6; border-radius: 12px; color: #586170">{{t.emptyPage}}</div>
+</sc-if>
+
+<div class="wgrid">
+<sc-for list="{{ widgets }}" as="w" hint-placeholder-count="4">
+<section class="{{ w.cls }}" aria-label="{{ w.title }}">
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px">
+<h2 style="margin: 0; font-size: 16px; font-weight: 600">{{w.title}}<sc-if value="{{ w.hasCount }}" hint-placeholder-val="{{ false }}"> <span style="color: #586170; font-weight: 500">({{w.count}})</span></sc-if></h2>
+<div style="display: flex; align-items: center; gap: 2px">
+<sc-if value="{{ w.showPhase }}" hint-placeholder-val="{{ false }}"><span class="chip chip-phase">P1</span></sc-if>
+<button class="info" aria-label="{{ w.infoLabel }}" aria-expanded="{{ w.infoOpen }}" onClick="{{ w.toggleInfo }}" onMouseEnter="{{ w.hoverOn }}" onMouseLeave="{{ w.hoverOff }}">ⓘ</button>
+</div>
+</div>
+<sc-if value="{{ w.infoOpen }}" hint-placeholder-val="{{ false }}">
+<div class="pop" role="note">{{w.infoText}}<sc-if value="{{ w.canAsk }}" hint-placeholder-val="{{ true }}"> <button class="btn btn-sm" onClick="{{ w.askAbout }}" style="margin-top: 8px; display: flex">{{t.askAbout}}</button></sc-if></div>
+</sc-if>
+
+<sc-if value="{{ w.isNeeds }}" hint-placeholder-val="{{ false }}">
+<sc-if value="{{ hasNeeds }}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; flex-direction: column; gap: 8px">
+<sc-for list="{{ needs }}" as="g" hint-placeholder-count="2">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px; border: 1px solid #EDF0F2; border-radius: 10px">
+<div style="flex: 1 1 180px; min-width: 0">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 2px"><span style="font-size: 13px; color: #586170">{{g.workflow}}</span><span class="{{ g.chipCls }}">{{g.provider}}</span></div>
 <div style="font-weight: 600">{{g.title}}</div>
 <div style="font-size: 13px; color: #586170">{{g.waiting}}</div>
 </div>
@@ -106,62 +184,97 @@ input,select,textarea{font:inherit;color:#15191E}
 </sc-for>
 </div>
 </sc-if>
-<sc-if value="{{ noNeeds }}" hint-placeholder-val="{{ false }}">
-<div style="padding: 24px; background: #FFFFFF; border: 1px dashed #C9CFD6; border-radius: 12px; color: #586170">{{t.nothingWaiting}}</div>
+<sc-if value="{{ noNeeds }}" hint-placeholder-val="{{ false }}"><div style="color: #586170">{{t.nothingWaiting}}</div></sc-if>
 </sc-if>
-</section>
-<section aria-labelledby="threads-h">
-<h2 id="threads-h" style="margin: 0 0 12px; font-size: 18px; font-weight: 600">{{t.recentThreads}}</h2>
-<div style="background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px">
-<sc-for list="{{ threads }}" as="th" hint-placeholder-count="3">
-<div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; padding: 12px 16px; border-bottom: 1px solid #EDF0F2">
-<span>“{{th.text}}”</span>
-<span style="font-size: 13px; color: #586170">{{th.status}} · {{th.when}}</span>
+
+<sc-if value="{{ w.isConvos }}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column">
+<sc-for list="{{ convoList }}" as="cv" hint-placeholder-count="3">
+<button onClick="{{ cv.open }}" style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; padding: 10px 4px; border: 0; border-bottom: 1px solid #EDF0F2; background: transparent; text-align: left; color: #15191E">
+<span style="min-width: 0">“{{cv.text}}”</span><span style="font-size: 13px; color: #586170">{{cv.who}} · {{cv.when}}</span>
+</button>
+</sc-for>
+</div>
+</sc-if>
+
+<sc-if value="{{ w.isList }}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column">
+<sc-for list="{{ w.listRows }}" as="lr" hint-placeholder-count="4">
+<div style="display: flex; justify-content: space-between; gap: 12px; padding: 8px 2px; border-bottom: 1px solid #EDF0F2"><span>{{lr.title}}</span><span style="color: #586170; font-size: 14px; text-align: right">{{lr.detail}}</span></div>
+</sc-for>
+</div>
+</sc-if>
+
+<sc-if value="{{ w.isMetric }}" hint-placeholder-val="{{ false }}">
+<div style="font-size: 30px; font-weight: 600; font-family: 'IBM Plex Mono', monospace; letter-spacing: -0.02em">{{w.metricValue}}</div>
+<div style="font-size: 14px; color: #3A424C">{{w.metricCompare}}</div>
+</sc-if>
+
+<sc-if value="{{ w.isChart }}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column; gap: 10px">
+<sc-for list="{{ w.bars }}" as="bar" hint-placeholder-count="4">
+<div style="display: flex; flex-direction: column; gap: 4px">
+<div style="display: flex; justify-content: space-between; gap: 8px; font-size: 14px"><span>{{bar.label}}</span><span class="num" style="color: {{ bar.textColor }}">{{bar.valueText}}</span></div>
+<div class="bar-track"><div style="height: 10px; width: {{ bar.pct }}%; background: {{ bar.color }}; border-radius: 999px"></div></div>
 </div>
 </sc-for>
 </div>
+</sc-if>
+
+<sc-if value="{{ w.isTable }}" hint-placeholder-val="{{ false }}">
+<div style="overflow-x: auto">
+<table class="grid" style="min-width: 420px">
+<thead><tr><sc-for list="{{ w.tableCols }}" as="tc" hint-placeholder-count="3"><th scope="col" class="{{ tc.cls }}">{{tc.label}}</th></sc-for></tr></thead>
+<tbody><sc-for list="{{ w.tableRows }}" as="trw" hint-placeholder-count="4"><tr><sc-for list="{{ trw.cells }}" as="tcl" hint-placeholder-count="3"><td class="{{ tcl.cls }}">{{tcl.text}}</td></sc-for></tr></sc-for></tbody>
+</table>
+</div>
+</sc-if>
+
+<sc-if value="{{ w.isActions }}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-wrap: wrap; gap: 8px">
+<sc-for list="{{ w.actions }}" as="ac" hint-placeholder-count="3"><button class="btn" onClick="{{ ac.run }}">{{ac.label}}</button></sc-for>
+</div>
+</sc-if>
+
+<sc-if value="{{ w.isNote }}" hint-placeholder-val="{{ false }}">
+<p style="margin: 0; color: #3A424C; white-space: pre-line">{{w.noteText}}</p>
+</sc-if>
+
+<sc-if value="{{ editing }}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-wrap: wrap; gap: 6px; padding-top: 6px; border-top: 1px dashed #DCE0E5">
+<button class="btn btn-sm" aria-label="{{ t.moveUp }}" onClick="{{ w.up }}">↑</button>
+<button class="btn btn-sm" aria-label="{{ t.moveDown }}" onClick="{{ w.down }}">↓</button>
+<button class="btn btn-sm" onClick="{{ w.remove }}">{{t.remove}}</button>
+</div>
+</sc-if>
 </section>
+</sc-for>
+</div>
 </div>
 </sc-if>
 
 <sc-if value="{{ isBudget }}" hint-placeholder-val="{{ false }}">
 <div style="max-width: 920px; display: flex; flex-direction: column; gap: 16px">
 <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px">
-<button class="btn btn-quiet" onClick="{{ goHome }}" style="padding: 0 8px">← {{t.back}}</button>
-<span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #586170">manage_budget · run 931</span>
+<button class="btn btn-quiet" onClick="{{ goBack }}" style="padding: 0 8px">← {{t.back}}</button>
+<span style="font-size: 14px; color: #3A424C">{{t.question}} · {{wf.editBudget}}</span>
 <span class="chip chip-web">{{t.web}}</span>
 </div>
-
-<sc-if value="{{ b.showCommand }}" hint-placeholder-val="{{ false }}">
-<div style="align-self: flex-end; max-width: 70%; padding: 10px 14px; border-radius: 12px; background: #15191E; color: #FFFFFF">{{b.commandText}}</div>
-</sc-if>
-
 <sc-if value="{{ b.monthOpen }}" hint-placeholder-val="{{ false }}">
 <div style="padding: 20px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 14px">
 <div style="font-weight: 600">{{wf.monthQuestion}}</div>
 <div style="max-width: 360px">
 <label for="month" style="display: block; font-size: 13px; font-weight: 500; color: #3A424C; margin-bottom: 4px">{{wf.month}}</label>
-<select id="month" class="field" value="{{ b.month }}" onChange="{{ onMonth }}">
-<sc-for list="{{ months }}" as="m" hint-placeholder-count="3"><option value="{{ m.value }}">{{m.label}}</option></sc-for>
-</select>
+<select id="month" class="field" value="{{ b.month }}" onChange="{{ onMonth }}"><sc-for list="{{ months }}" as="m" hint-placeholder-count="3"><option value="{{ m.value }}">{{m.label}}</option></sc-for></select>
 </div>
-<div style="display: flex; gap: 8px; flex-wrap: wrap">
-<button class="btn btn-primary" onClick="{{ monthContinue }}">{{wf.continue}}</button>
-<button class="btn" onClick="{{ goHome }}">{{wf.cancel}}</button>
-</div>
+<div style="display: flex; gap: 8px; flex-wrap: wrap"><button class="btn btn-primary" onClick="{{ monthContinue }}">{{wf.continue}}</button><button class="btn" onClick="{{ goBack }}">{{t.cancel}}</button></div>
 </div>
 </sc-if>
-<sc-if value="{{ b.monthAnswered }}" hint-placeholder-val="{{ false }}">
-<div style="font-size: 14px; color: #586170; padding: 0 4px">✓ {{t.youChose}} {{wf.continue}} · {{b.monthLabel}}</div>
-</sc-if>
-
 <sc-if value="{{ b.gridOpen }}" hint-placeholder-val="{{ true }}">
 <div style="background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; overflow: hidden">
 <div style="padding: 20px 20px 8px">
 <div style="font-size: 18px; font-weight: 600; margin-bottom: 8px">{{wf.editorTitle}} — {{b.monthLabel}}</div>
-<div style="display: flex; flex-wrap: wrap; gap: 6px 20px; font-size: 14px; color: #3A424C">
-<sc-for list="{{ subtotals }}" as="s" hint-placeholder-count="4"><span><strong>{{s.label}}</strong> {{s.value}}</span></sc-for>
-</div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px 20px; font-size: 14px; color: #3A424C"><sc-for list="{{ subtotals }}" as="s" hint-placeholder-count="4"><span><strong>{{s.label}}</strong> {{s.value}}</span></sc-for></div>
 <div style="margin-top: 6px; font-size: 14px"><strong>{{wf.net}}</strong> {{netLoaded}}</div>
 </div>
 <div style="overflow-x: auto; padding: 8px 12px 0">
@@ -180,30 +293,17 @@ input,select,textarea{font:inherit;color:#15191E}
 </sc-for>
 </table>
 </div>
-<div style="position: sticky; bottom: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; background: #FFFFFF; border-top: 1px solid #DCE0E5">
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; background: #FFFFFF; border-top: 1px solid #DCE0E5">
 <span style="font-size: 14px; color: #3A424C">{{changesLabel}}</span>
-<div style="display: flex; gap: 8px; flex-wrap: wrap">
-<button class="btn" onClick="{{ discardBudget }}">{{t.discard}}</button>
-<button class="btn" onClick="{{ goHome }}">{{wf.cancel}}</button>
-<button class="btn btn-primary" onClick="{{ saveBudget }}">{{wf.save}}</button>
+<div style="display: flex; gap: 8px; flex-wrap: wrap"><button class="btn" onClick="{{ discardBudget }}">{{t.discard}}</button><button class="btn" onClick="{{ goBack }}">{{t.cancel}}</button><button class="btn btn-primary" onClick="{{ saveBudget }}">{{wf.save}}</button></div>
 </div>
-</div>
-<sc-if value="{{ b.showErrors }}" hint-placeholder-val="{{ false }}">
-<div role="alert" style="margin: 0 20px 16px; padding: 10px 14px; border-radius: 8px; background: #FDECEA; color: #8C1D13; font-size: 14px">{{t.fixCells}}</div>
-</sc-if>
+<sc-if value="{{ b.showErrors }}" hint-placeholder-val="{{ false }}"><div role="alert" style="margin: 0 20px 16px; padding: 10px 14px; border-radius: 8px; background: #FDECEA; color: #8C1D13; font-size: 14px">{{t.fixCells}}</div></sc-if>
 </div>
 </sc-if>
-<sc-if value="{{ b.gridAnswered }}" hint-placeholder-val="{{ false }}">
-<div style="font-size: 14px; color: #586170; padding: 0 4px">✓ {{t.youChose}} {{wf.save}} · {{b.sentChanges}}</div>
-</sc-if>
-
 <sc-if value="{{ b.working }}" hint-placeholder-val="{{ false }}">
 <div style="display: flex; align-items: center; gap: 10px; font-size: 14px; color: #586170; padding: 0 4px">
-<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" fill="none" stroke="#0D6A6A" stroke-width="2"><circle cx="9" cy="9" r="7" stroke-opacity=".25"></circle><path d="M16 9a7 7 0 0 0-7-7" stroke-linecap="round"></path></svg>
-{{t.working}}
-</div>
+<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" fill="none" stroke="#0D6A6A" stroke-width="2"><circle cx="9" cy="9" r="7" stroke-opacity=".25"></circle><path d="M16 9a7 7 0 0 0-7-7" stroke-linecap="round"></path></svg>{{t.working}}</div>
 </sc-if>
-
 <sc-if value="{{ b.done }}" hint-placeholder-val="{{ false }}">
 <div style="padding: 20px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 12px">
 <div style="font-weight: 600">✓ {{wf.savedFor}} {{b.monthLabel}}</div>
@@ -211,12 +311,10 @@ input,select,textarea{font:inherit;color:#15191E}
 <div style="overflow-x: auto">
 <table class="grid" style="max-width: 560px">
 <thead><tr><th scope="col">{{wf.category}}</th><th scope="col" class="num" style="text-align: right">{{t.before}}</th><th scope="col" class="num" style="text-align: right">{{t.after}}</th></tr></thead>
-<tbody>
-<sc-for list="{{ savedRows }}" as="sr" hint-placeholder-count="2"><tr><td class="rowhead">{{sr.name}}</td><td class="num rowhead">{{sr.before}}</td><td class="num rowhead">{{sr.after}}</td></tr></sc-for>
-</tbody>
+<tbody><sc-for list="{{ savedRows }}" as="sr" hint-placeholder-count="2"><tr><td class="rowhead">{{sr.name}}</td><td class="num rowhead">{{sr.before}}</td><td class="num rowhead">{{sr.after}}</td></tr></sc-for></tbody>
 </table>
 </div>
-<div style="font-size: 14px"><strong>{{wf.net}}</strong> {{netNow}}</div>
+<div><button class="btn" onClick="{{ goBack }}">{{t.back}}</button></div>
 </div>
 </sc-if>
 </div>
@@ -225,8 +323,8 @@ input,select,textarea{font:inherit;color:#15191E}
 <sc-if value="{{ isSlackGate }}" hint-placeholder-val="{{ false }}">
 <div style="max-width: 920px; display: flex; flex-direction: column; gap: 16px">
 <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px">
-<button class="btn btn-quiet" onClick="{{ goHome }}" style="padding: 0 8px">← {{t.back}}</button>
-<span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #586170">review_inventory · run 928</span>
+<button class="btn btn-quiet" onClick="{{ goBack }}" style="padding: 0 8px">← {{t.back}}</button>
+<span style="font-size: 14px; color: #3A424C">{{t.question}} · {{wf.reviewInventory}}</span>
 <span class="chip chip-slack">{{t.startedInSlack}}</span>
 </div>
 <div style="padding: 20px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 14px">
@@ -234,38 +332,63 @@ input,select,textarea{font:inherit;color:#15191E}
 <div style="overflow-x: auto">
 <table class="grid" style="max-width: 640px">
 <thead><tr><th scope="col">{{wf.item}}</th><th scope="col">{{wf.keep}}</th><th scope="col" class="num" style="text-align: right">{{wf.qty}}</th></tr></thead>
-<tbody>
-<tr><td class="rowhead">Whole milk 1 L</td><td class="rowhead">✓</td><td class="num rowhead">4</td></tr>
-<tr><td class="rowhead">Milk, whole, 1 litre</td><td class="rowhead">—</td><td class="num rowhead">2</td></tr>
-</tbody>
+<tbody><tr><td class="rowhead">Whole milk 1 L</td><td class="rowhead">✓</td><td class="num rowhead">4</td></tr><tr><td class="rowhead">Milk, whole, 1 litre</td><td class="rowhead">—</td><td class="num rowhead">2</td></tr></tbody>
 </table>
 </div>
-<details style="font-size: 14px"><summary style="cursor: pointer; color: #0D6A6A; font-weight: 500">{{wf.whyMerge}}</summary><p style="margin: 8px 0 0; color: #3A424C">{{wf.whyMergeText}}</p></details>
-<sc-if value="{{ slackOpen }}" hint-placeholder-val="{{ true }}">
-<div style="display: flex; gap: 8px; flex-wrap: wrap">
-<button class="btn btn-primary" onClick="{{ approveSlack }}">{{wf.approve}}</button>
-<button class="btn" onClick="{{ goHome }}">{{wf.cancel}}</button>
+<sc-if value="{{ slackOpen }}" hint-placeholder-val="{{ true }}"><div style="display: flex; gap: 8px; flex-wrap: wrap"><button class="btn btn-primary" onClick="{{ approveSlack }}">{{wf.approve}}</button><button class="btn" onClick="{{ goBack }}">{{t.cancel}}</button></div></sc-if>
 </div>
-</sc-if>
-</div>
-<sc-if value="{{ slackDone }}" hint-placeholder-val="{{ false }}">
-<div style="display: flex; flex-direction: column; gap: 8px">
-<div style="font-size: 14px; color: #586170; padding: 0 4px">✓ {{t.youChose}} {{wf.approve}}</div>
-<div style="padding: 14px 16px; border-radius: 10px; background: #F1E9F8; color: #3F1D5E; font-size: 14px">{{t.slackNote}}</div>
-</div>
-</sc-if>
+<sc-if value="{{ slackDone }}" hint-placeholder-val="{{ false }}"><div style="padding: 14px 16px; border-radius: 10px; background: #F1E9F8; color: #3F1D5E; font-size: 14px">{{t.slackNote}}</div></sc-if>
 </div>
 </sc-if>
 
-<sc-if value="{{ isThreads }}" hint-placeholder-val="{{ false }}">
-<div style="max-width: 920px">
-<h1 style="margin: 0 0 12px; font-size: 22px; font-weight: 600">{{t.threads}}</h1>
-<div style="background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px">
-<sc-for list="{{ threads }}" as="th" hint-placeholder-count="3">
-<div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; padding: 14px 16px; border-bottom: 1px solid #EDF0F2">
-<span>“{{th.text}}”</span>
-<span style="font-size: 13px; color: #586170">{{th.status}} · {{th.when}}</span>
+<sc-if value="{{ isHow }}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column; gap: 20px">
+<div>
+<div style="font-size: 13px; color: #586170">⚙ › {{t.howItWorks}}</div>
+<h1 style="margin: 2px 0 4px; font-size: 22px; font-weight: 600">{{t.howItWorks}}</h1>
+<p style="margin: 0; color: #3A424C; max-width: 720px">{{t.howIntro}}</p>
 </div>
+<section aria-labelledby="flow-h" class="card">
+<h2 id="flow-h" style="margin: 0; font-size: 16px; font-weight: 600">{{t.howFlow}}</h2>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+<sc-for list="{{ flowSteps }}" as="fs" hint-placeholder-count="5">
+<div style="display: flex; align-items: center; gap: 8px"><div style="padding: 10px 12px; border-radius: 10px; background: {{ fs.bg }}; font-size: 14px; max-width: 200px"><strong>{{fs.term}}</strong><div style="font-size: 13px; color: #3A424C">{{fs.text}}</div></div><sc-if value="{{ fs.arrow }}" hint-placeholder-val="{{ true }}"><span aria-hidden="true" style="color: #586170">→</span></sc-if></div>
+</sc-for>
+</div>
+<div style="font-size: 14px; color: #3A424C">{{t.howNovia}}</div>
+</section>
+<section aria-labelledby="dom-h" style="display: flex; flex-direction: column; gap: 10px">
+<h2 id="dom-h" style="margin: 0; font-size: 16px; font-weight: 600">{{t.yourDomains}}</h2>
+<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px">
+<sc-for list="{{ domainCards }}" as="dc" hint-placeholder-count="4">
+<div class="card">
+<div style="font-weight: 600; font-size: 16px">{{dc.label}}</div>
+<div style="font-size: 13px; color: #586170">{{dc.desc}}</div>
+<div style="font-size: 14px"><span class="term">{{t.tables}}</span>: {{dc.tables}}</div>
+<div style="font-size: 14px"><span class="term">{{t.workflowsWord}}</span>: {{dc.workflows}}</div>
+<div style="font-size: 14px">{{t.scheduled}}: {{dc.scheduled}}</div>
+<div style="font-size: 14px">{{t.memoryWord}}: {{dc.memory}}</div>
+<sc-if value="{{ dc.hasWaiting }}" hint-placeholder-val="{{ false }}"><div style="font-size: 14px; color: #0A5555; font-weight: 600">{{dc.waiting}}</div></sc-if>
+</div>
+</sc-for>
+</div>
+</section>
+<section aria-labelledby="voc-h" class="card">
+<h2 id="voc-h" style="margin: 0; font-size: 16px; font-weight: 600">{{t.vocabulary}}</h2>
+<dl style="margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px 20px">
+<sc-for list="{{ vocab }}" as="vc" hint-placeholder-count="6"><div><dt style="font-weight: 600">{{vc.term}}</dt><dd style="margin: 0; font-size: 14px; color: #3A424C">{{vc.def}}</dd></div></sc-for>
+</dl>
+</section>
+<div style="font-size: 13px; color: #586170">{{t.howGenerated}}</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isData }}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column; gap: 14px">
+<div><div style="font-size: 13px; color: #586170">⚙ › {{t.allData}}</div><h1 style="margin: 2px 0 0; font-size: 22px; font-weight: 600">{{t.allData}}</h1></div>
+<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px">
+<sc-for list="{{ dataTables }}" as="dt" hint-placeholder-count="4">
+<button class="typecard" onClick="{{ dt.open }}"><span style="font-size: 13px; color: #586170">{{dt.domain}}</span><strong>{{dt.label}}</strong><span style="font-size: 13px; color: #586170">{{dt.view}}</span></button>
 </sc-for>
 </div>
 </div>
@@ -274,27 +397,13 @@ input,select,textarea{font:inherit;color:#15191E}
 <sc-if value="{{ isExpenses }}" hint-placeholder-val="{{ false }}">
 <div style="display: flex; flex-direction: column; gap: 14px">
 <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px">
-<div>
-<div style="font-size: 13px; color: #586170">{{t.domains}} › {{reg.budgetDomain}}</div>
-<h1 style="margin: 2px 0 0; font-size: 22px; font-weight: 600">{{reg.expenses}} <span class="chip chip-phase" style="vertical-align: middle">{{t.phase1}}</span></h1>
-</div>
-<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
-<label for="expmonth" style="font-size: 13px; color: #3A424C">{{reg.month}}</label>
-<select id="expmonth" class="field" style="width: auto"><option>{{b.monthLabel}}</option></select>
+<div><div style="font-size: 13px; color: #586170">⚙ › {{t.allData}} › {{reg.budgetDomain}}</div><h1 style="margin: 2px 0 0; font-size: 22px; font-weight: 600">{{reg.expenses}}</h1></div>
 <button class="btn" onClick="{{ addExpense }}">+ {{t.addRow}}</button>
-</div>
 </div>
 <div style="background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; overflow: hidden">
 <div style="overflow-x: auto">
 <table class="grid" style="min-width: 820px">
-<thead><tr>
-<th scope="col" style="width: 150px">{{reg.date}}</th>
-<th scope="col">{{reg.title}}</th>
-<th scope="col" style="width: 170px">{{reg.category}}</th>
-<th scope="col" style="width: 140px">{{reg.payment}}</th>
-<th scope="col" style="width: 130px; text-align: right">{{reg.amount}} (€)</th>
-<th scope="col" style="width: 56px"><span style="position: absolute; left: -9999px">{{t.actions}}</span></th>
-</tr></thead>
+<thead><tr><th scope="col" style="width: 150px">{{reg.date}}</th><th scope="col">{{reg.title}}</th><th scope="col" style="width: 170px">{{reg.category}}</th><th scope="col" style="width: 140px">{{reg.payment}}</th><th scope="col" style="width: 130px; text-align: right">{{reg.amount}} (€)</th><th scope="col" style="width: 56px"><span style="position: absolute; left: -9999px">{{t.actions}}</span></th></tr></thead>
 <tbody>
 <sc-for list="{{ expRows }}" as="e" hint-placeholder-count="6">
 <tr class="{{ e.rowCls }}">
@@ -312,24 +421,16 @@ input,select,textarea{font:inherit;color:#15191E}
 </div>
 <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; border-top: 1px solid #DCE0E5">
 <span style="font-size: 14px; color: #3A424C">{{expChangesLabel}}</span>
-<div style="display: flex; gap: 8px; flex-wrap: wrap">
-<button class="btn" onClick="{{ discardExp }}">{{t.discard}}</button>
-<button class="btn btn-primary" onClick="{{ saveExp }}">{{t.saveChanges}}</button>
+<div style="display: flex; gap: 8px; flex-wrap: wrap"><button class="btn" onClick="{{ discardExp }}">{{t.discard}}</button><button class="btn btn-primary" onClick="{{ saveExp }}">{{t.saveChanges}}</button></div>
 </div>
 </div>
-</div>
-<sc-if value="{{ expBanner }}" hint-placeholder-val="{{ false }}">
-<div role="status" style="padding: 12px 16px; border-radius: 10px; background: #E2F0EF; color: #0A4545; font-size: 14px">{{expBannerText}}</div>
-</sc-if>
+<sc-if value="{{ expBanner }}" hint-placeholder-val="{{ false }}"><div role="status" style="padding: 12px 16px; border-radius: 10px; background: #E2F0EF; color: #0A4545; font-size: 14px">{{expBannerText}}</div></sc-if>
 </div>
 </sc-if>
 
 <sc-if value="{{ isRecipe }}" hint-placeholder-val="{{ false }}">
 <div style="max-width: 980px; display: flex; flex-direction: column; gap: 16px">
-<div>
-<div style="font-size: 13px; color: #586170">{{t.domains}} › {{reg.recipes}}</div>
-<h1 style="margin: 2px 0 0; font-size: 22px; font-weight: 600">{{rec.name}} <span class="chip chip-phase" style="vertical-align: middle">{{t.phase1}}</span></h1>
-</div>
+<div><div style="font-size: 13px; color: #586170">⚙ › {{t.allData}} › {{reg.recipes}}</div><h1 style="margin: 2px 0 0; font-size: 22px; font-weight: 600">{{rec.name}}</h1></div>
 <section style="padding: 20px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px">
 <div style="grid-column: 1 / -1"><label for="rname" style="display: block; font-size: 13px; font-weight: 500; color: #3A424C; margin-bottom: 4px">{{reg.recipeName}}</label><input id="rname" class="field" value="{{ rec.name }}" onChange="{{ onRecName }}"></div>
 <div><label for="rserv" style="display: block; font-size: 13px; font-weight: 500; color: #3A424C; margin-bottom: 4px">{{reg.servings}}</label><input id="rserv" class="field" inputmode="numeric" value="{{ rec.servings }}" onChange="{{ onRecServ }}"></div>
@@ -337,10 +438,7 @@ input,select,textarea{font:inherit;color:#15191E}
 <div><label for="rcook" style="display: block; font-size: 13px; font-weight: 500; color: #3A424C; margin-bottom: 4px">{{reg.cook}}</label><input id="rcook" class="field" inputmode="numeric" value="{{ rec.cook }}" onChange="{{ onRecCook }}"></div>
 </section>
 <section style="background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; overflow: hidden">
-<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 20px 6px">
-<h2 style="margin: 0; font-size: 16px; font-weight: 600">{{reg.ingredients}}</h2>
-<button class="btn" onClick="{{ addIng }}">+ {{t.addRow}}</button>
-</div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 20px 6px"><h2 style="margin: 0; font-size: 16px; font-weight: 600">{{reg.ingredients}}</h2><button class="btn" onClick="{{ addIng }}">+ {{t.addRow}}</button></div>
 <div style="overflow-x: auto; padding: 0 12px">
 <table class="grid" style="min-width: 640px">
 <thead><tr><th scope="col">{{reg.ingredient}}</th><th scope="col" style="width: 110px; text-align: right">{{reg.quantity}}</th><th scope="col" style="width: 110px">{{reg.unit}}</th><th scope="col">{{reg.note}}</th><th scope="col" style="width: 56px"><span style="position: absolute; left: -9999px">{{t.actions}}</span></th></tr></thead>
@@ -359,57 +457,96 @@ input,select,textarea{font:inherit;color:#15191E}
 </div>
 </section>
 <section style="background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; padding: 14px 20px 18px">
-<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px">
-<h2 style="margin: 0; font-size: 16px; font-weight: 600">{{reg.steps}}</h2>
-<button class="btn" onClick="{{ addStep }}">+ {{t.addStep}}</button>
-</div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px"><h2 style="margin: 0; font-size: 16px; font-weight: 600">{{reg.steps}}</h2><button class="btn" onClick="{{ addStep }}">+ {{t.addStep}}</button></div>
 <ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px">
 <sc-for list="{{ stepRows }}" as="st" hint-placeholder-count="4">
 <li style="display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px">
 <span style="flex: 0 0 32px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 999px; background: #E2F0EF; color: #0A5555; font-weight: 600; font-size: 14px">{{st.n}}</span>
 <textarea class="field" rows="2" aria-label="{{ st.aria }}" value="{{ st.text }}" onChange="{{ st.onText }}" style="flex: 1 1 320px; min-width: 0; resize: vertical"></textarea>
-<div style="display: flex; gap: 4px">
-<button class="btn btn-quiet" aria-label="{{ t.moveUp }}" onClick="{{ st.up }}" style="padding: 0 10px">↑</button>
-<button class="btn btn-quiet" aria-label="{{ t.moveDown }}" onClick="{{ st.down }}" style="padding: 0 10px">↓</button>
-<button class="btn btn-quiet" aria-label="{{ t.remove }}" onClick="{{ st.remove }}" style="padding: 0 10px">✕</button>
-</div>
+<div style="display: flex; gap: 4px"><button class="btn btn-quiet" aria-label="{{ t.moveUp }}" onClick="{{ st.up }}" style="padding: 0 10px">↑</button><button class="btn btn-quiet" aria-label="{{ t.moveDown }}" onClick="{{ st.down }}" style="padding: 0 10px">↓</button><button class="btn btn-quiet" aria-label="{{ t.remove }}" onClick="{{ st.remove }}" style="padding: 0 10px">✕</button></div>
 </li>
 </sc-for>
 </ol>
 </section>
-<div style="position: sticky; bottom: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px">
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px">
 <span style="font-size: 14px; color: #3A424C">{{recChangesLabel}}</span>
-<div style="display: flex; gap: 8px; flex-wrap: wrap">
-<button class="btn" onClick="{{ discardRec }}">{{t.discard}}</button>
-<button class="btn btn-primary" onClick="{{ saveRec }}">{{t.saveRecipe}}</button>
+<div style="display: flex; gap: 8px; flex-wrap: wrap"><button class="btn" onClick="{{ discardRec }}">{{t.discard}}</button><button class="btn btn-primary" onClick="{{ saveRec }}">{{t.saveRecipe}}</button></div>
 </div>
-</div>
-<sc-if value="{{ recBanner }}" hint-placeholder-val="{{ false }}">
-<div role="status" style="padding: 12px 16px; border-radius: 10px; background: #E2F0EF; color: #0A4545; font-size: 14px">{{t.recSaved}}</div>
-</sc-if>
+<sc-if value="{{ recBanner }}" hint-placeholder-val="{{ false }}"><div role="status" style="padding: 12px 16px; border-radius: 10px; background: #E2F0EF; color: #0A4545; font-size: 14px">{{t.recSaved}}</div></sc-if>
 </div>
 </sc-if>
 
-<sc-if value="{{ isNovia }}" hint-placeholder-val="{{ false }}">
-<div style="max-width: 760px; display: flex; flex-direction: column; gap: 14px">
-<h1 style="margin: 0; font-size: 22px; font-weight: 600">Novia <span class="chip chip-phase" style="vertical-align: middle">{{t.phase1}}</span></h1>
-<div style="align-self: flex-end; max-width: 75%; padding: 10px 14px; border-radius: 12px; background: #15191E; color: #FFFFFF">{{t.noviaAsk}}</div>
-<div style="max-width: 85%; padding: 14px 16px; border-radius: 12px; background: #FFFFFF; border: 1px solid #DCE0E5">{{t.noviaReply}}</div>
-<div style="padding: 18px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 10px">
-<div style="font-weight: 600">{{t.noviaGate}}</div>
-<pre style="margin: 0; padding: 12px; background: #F4F5F7; border-radius: 8px; font-family: 'IBM Plex Mono', monospace; font-size: 13px; white-space: pre-wrap">step 12 · fields[*]
-+ row:    "&lt;category id&gt;"
-+ column: "Amount"
-+ group:  "&lt;budget type&gt;"</pre>
-<div style="display: flex; gap: 8px; flex-wrap: wrap"><button class="btn btn-primary">{{wf.approve}}</button><button class="btn">{{wf.cancel}}</button></div>
+<sc-if value="{{ isList }}" hint-placeholder-val="{{ false }}">
+<div style="max-width: 920px; display: flex; flex-direction: column; gap: 14px">
+<div><div style="font-size: 13px; color: #586170">⚙ › {{listTitle}}</div><h1 style="margin: 2px 0 0; font-size: 22px; font-weight: 600">{{listTitle}}</h1></div>
+<div style="background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px">
+<sc-for list="{{ listRows }}" as="li" hint-placeholder-count="5">
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 16px; padding: 12px 16px; border-bottom: 1px solid #EDF0F2">
+<div style="min-width: 0"><div style="font-weight: 500">{{li.title}}</div><div style="font-size: 13px; color: #586170">{{li.detail}}</div></div>
+<sc-if value="{{ li.hasAction }}" hint-placeholder-val="{{ false }}"><button class="btn btn-sm" onClick="{{ li.action }}">{{li.actionLabel}}</button></sc-if>
+<sc-if value="{{ li.hasStatus }}" hint-placeholder-val="{{ false }}"><span style="font-size: 13px; color: #3A424C">{{li.status}}</span></sc-if>
 </div>
-<label for="nmsg" style="position: absolute; left: -9999px">{{t.messageNovia}}</label>
-<input id="nmsg" class="field" placeholder="{{ t.messageNovia }}">
+</sc-for>
+</div>
 </div>
 </sc-if>
 
 </main>
+
+<sc-if value="{{ drawerOpen }}" hint-placeholder-val="{{ false }}">
+<div onClick="{{ closeAsk }}" style="position: fixed; inset: 0; background: rgba(21,25,30,.28); z-index: 30"></div>
+<aside aria-label="{{ t.ask }}" style="position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 100%); z-index: 31; background: #F4F5F7; border-left: 1px solid #DCE0E5; display: flex; flex-direction: column; box-shadow: -8px 0 24px rgba(21,25,30,.12)">
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 16px; background: #FFFFFF; border-bottom: 1px solid #DCE0E5">
+<div style="display: flex; align-items: center; gap: 8px">
+<sc-if value="{{ inConvo }}" hint-placeholder-val="{{ false }}"><button class="btn btn-quiet btn-sm" onClick="{{ toList }}">← {{t.conversations}}</button></sc-if>
+<sc-if value="{{ notInConvo }}" hint-placeholder-val="{{ true }}"><strong>{{t.ask}}</strong></sc-if>
 </div>
+<button class="iconbtn" aria-label="{{ t.close }}" onClick="{{ closeAsk }}" style="width: 36px; height: 36px">✕</button>
+</div>
+<div style="flex: 1 1 auto; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px">
+<sc-if value="{{ notInConvo }}" hint-placeholder-val="{{ true }}">
+<div style="font-size: 14px; color: #3A424C">{{askIntro}}</div>
+<div style="font-weight: 600; margin-top: 4px">{{t.conversations}}</div>
+<div style="background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px">
+<sc-for list="{{ convoList }}" as="cv" hint-placeholder-count="3">
+<button onClick="{{ cv.open }}" style="display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 12px 14px; border: 0; border-bottom: 1px solid #EDF0F2; background: transparent; text-align: left; color: #15191E">
+<span>“{{cv.text}}”</span><span style="font-size: 13px; color: #586170">{{cv.who}} · {{cv.when}}</span>
+</button>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{ inConvo }}" hint-placeholder-val="{{ false }}">
+<sc-for list="{{ msgs }}" as="mg" hint-placeholder-count="3">
+<sc-if value="{{ mg.isUser }}" hint-placeholder-val="{{ true }}"><div class="msg-user">{{mg.text}}</div></sc-if>
+<sc-if value="{{ mg.isReply }}" hint-placeholder-val="{{ false }}">
+<div class="msg-reply">
+<div style="display: flex; align-items: center; gap: 6px; margin-bottom: 6px"><span class="{{ mg.chipCls }}">{{mg.who}}</span><button class="info" aria-label="{{ mg.whoInfoLabel }}" onClick="{{ mg.toggleInfo }}" style="width: 24px; height: 24px; font-size: 13px">ⓘ</button></div>
+<sc-if value="{{ mg.infoOpen }}" hint-placeholder-val="{{ false }}"><div class="pop" style="margin-bottom: 8px">{{mg.whoInfo}}</div></sc-if>
+<div style="white-space: pre-line">{{mg.text}}</div>
+<sc-if value="{{ mg.hasOpen }}" hint-placeholder-val="{{ false }}"><button class="btn btn-primary btn-sm" onClick="{{ mg.open }}" style="margin-top: 10px">{{mg.openLabel}}</button></sc-if>
+<sc-if value="{{ mg.isProposal }}" hint-placeholder-val="{{ false }}">
+<div style="margin-top: 10px; padding: 12px; border: 1px solid #DCE0E5; border-radius: 10px; background: #F8F9FA; display: flex; flex-direction: column; gap: 8px">
+<div style="font-weight: 600; font-size: 14px">{{mg.proposalTitle}}</div>
+<div style="padding: 10px; border: 1px dashed #0D6A6A; border-radius: 8px; background: #FFFFFF; font-size: 14px"><strong>{{mg.previewTitle}}</strong><sc-for list="{{ mg.previewRows }}" as="pr" hint-placeholder-count="3"><div style="display: flex; justify-content: space-between; gap: 8px; color: #3A424C"><span>{{pr.title}}</span><span>{{pr.detail}}</span></div></sc-for></div>
+<sc-if value="{{ mg.proposalOpen }}" hint-placeholder-val="{{ true }}"><div style="display: flex; gap: 8px; flex-wrap: wrap"><button class="btn btn-primary btn-sm" onClick="{{ mg.approve }}">{{t.approve}}</button><button class="btn btn-sm" onClick="{{ mg.decline }}">{{t.cancel}}</button></div></sc-if>
+<sc-if value="{{ mg.proposalDone }}" hint-placeholder-val="{{ false }}"><div style="font-size: 14px; color: #0A5555">✓ {{mg.proposalResult}}</div></sc-if>
+</div>
+</sc-if>
+</div>
+</sc-if>
+<sc-if value="{{ mg.isNotice }}" hint-placeholder-val="{{ false }}"><div style="font-size: 14px; color: #586170; padding: 0 4px">{{mg.text}}</div></sc-if>
+<sc-if value="{{ mg.isWorking }}" hint-placeholder-val="{{ false }}"><div style="font-size: 14px; color: #586170; padding: 0 4px">{{t.working}}</div></sc-if>
+</sc-for>
+</sc-if>
+</div>
+<form onSubmit="{{ sendAsk }}" style="display: flex; gap: 8px; padding: 12px 16px; background: #FFFFFF; border-top: 1px solid #DCE0E5">
+<label for="askbox" style="position: absolute; left: -9999px">{{t.ask}}</label>
+<input id="askbox" class="field" value="{{ askText }}" onChange="{{ onAsk }}" placeholder="{{ askHint }}" style="flex: 1 1 auto; min-width: 0">
+<button class="btn btn-primary" type="submit">{{t.send}}</button>
+</form>
+</aside>
+</sc-if>
+
 </div>
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
@@ -435,8 +572,7 @@ class Component extends DCLogic {
       { id: 303, date: '2026-10-05', title: 'Pizza night', category: '7', payment: 'cash', amount: 32 },
       { id: 304, date: '2026-10-08', title: 'Running shoes', category: '9', payment: 'credit', amount: 79.9 },
       { id: 305, date: '2026-10-11', title: 'Bakery', category: '6', payment: 'cash', amount: 6.4 },
-      { id: 306, date: '2026-10-14', title: 'Cinema', category: '8', payment: 'debit', amount: 18 },
-      { id: 307, date: '2026-10-17', title: 'Market — fruit and vegetables', category: '6', payment: 'cash', amount: 27.75 }
+      { id: 306, date: '2026-10-14', title: 'Cinema', category: '8', payment: 'debit', amount: 18 }
     ];
     this.recSeed = {
       name: 'Potato omelette', servings: '4', prep: '15', cook: '25',
@@ -444,30 +580,62 @@ class Component extends DCLogic {
         { ingredient: 'Potatoes', qty: '600', unit: 'g', note: 'peeled, thinly sliced' },
         { ingredient: 'Eggs', qty: '6', unit: 'unit', note: '' },
         { ingredient: 'Onion', qty: '1', unit: 'unit', note: 'optional' },
-        { ingredient: 'Olive oil', qty: '200', unit: 'ml', note: 'for frying' },
-        { ingredient: 'Salt', qty: '1', unit: 'tsp', note: '' }
+        { ingredient: 'Olive oil', qty: '200', unit: 'ml', note: 'for frying' }
       ],
       steps: [
         'Fry the potatoes and onion slowly in the oil until soft, not browned.',
         'Drain well, keeping the oil.',
-        'Beat the eggs with the salt and fold in the potatoes. Rest 5 minutes.',
-        'Cook in a little of the oil over medium heat until the base sets.',
-        'Turn with a plate, cook the other side, and serve warm.'
+        'Beat the eggs and fold in the potatoes. Rest 5 minutes.',
+        'Cook over medium heat until set, turn with a plate, and serve warm.'
       ]
     };
     this.state = {
-      lang: 'en', screen: 'home', cmd: '',
-      budgetFrom: 'needs', stage: 'grid', month: '2026-10', edits: {}, showErrors: false, sent: null,
-      budgetDone: false, slack: 'open',
-      exp: this.cloneExp(), expBanner: '',
-      rec: this.cloneRec(), recEdits: 0, recBanner: false
+      lang: 'en', phase: 'p1', screen: 'page', page: 'home', back: 'page',
+      gear: false, editing: false, add: null, info: null, hover: null,
+      pages: this.seedPages(), pageSeq: 1,
+      drawer: false, convo: null, askText: '', convos: this.seedConvos(), msgInfo: null,
+      stage: 'grid', month: '2026-10', edits: {}, showErrors: false, sent: null, budgetDone: false, slack: 'open',
+      exp: this.cloneExp(), expBanner: '', rec: this.cloneRec(), recEdits: 0, recBanner: false, listKind: null
     };
+  }
+  seedPages() {
+    return [
+      { key: 'home', title: { en: 'Home', es: 'Inicio' }, widgets: [
+        { id: 'w1', type: 'needs_you', width: 'w3', by: 'seed' },
+        { id: 'w2', type: 'chart', width: 'w3', source: 'budget_vs_spent', title: { en: 'Budget vs spent · October', es: 'Presupuesto y gasto · octubre' }, by: 'user', on: '12 Oct' },
+        { id: 'w3', type: 'actions', width: 'w3', title: { en: 'Quick actions', es: 'Acciones rápidas' }, by: 'user', on: '12 Oct' },
+        { id: 'w4', type: 'conversations', width: 'w3', by: 'seed' }
+      ] },
+      { key: 'stocks', title: { en: 'Stocks', es: 'Bolsa' }, widgets: [
+        { id: 'w5', type: 'metric', width: 'w2', source: 'holdings_value', title: { en: 'Portfolio value', es: 'Valor de la cartera' }, by: 'novia', on: '20 Oct' },
+        { id: 'w6', type: 'note', width: 'w2', title: { en: 'Plan', es: 'Plan' }, note: { en: 'Rebalance in January.\nNo new positions before then.', es: 'Reequilibrar en enero.\nSin posiciones nuevas hasta entonces.' }, by: 'user', on: '20 Oct' },
+        { id: 'w7', type: 'table', width: 'w6', source: 'holdings_value', title: { en: 'Holdings', es: 'Posiciones' }, by: 'novia', on: '20 Oct' }
+      ] }
+    ];
+  }
+  seedConvos() {
+    return [
+      { id: 'c1', text: 'manage budget', who: 'wf', when: '09:12', msgs: [
+        { kind: 'user', text: 'manage budget' },
+        { kind: 'reply', who: 'wf', wfKey: 'editBudget', textKey: 'budgetWaiting', open: 'budget' }
+      ] },
+      { id: 'c2', text: 'what did we spend on groceries in September?', who: 'wf', when: 'yesterday', msgs: [
+        { kind: 'user', text: 'what did we spend on groceries in September?' },
+        { kind: 'reply', who: 'wf', wfKey: 'spendingReport', textKey: 'groceriesAnswer' }
+      ] },
+      { id: 'c3', text: 'why is coffee on the shopping list?', who: 'novia', when: 'Mon', msgs: [
+        { kind: 'user', text: 'why is coffee on the shopping list?' },
+        { kind: 'reply', who: 'novia', textKey: 'coffeeAnswer' }
+      ] }
+    ];
   }
   cloneExp() { return this.expSeed.map(r => Object.assign({}, r, { amount: null, deleted: false, isNew: false })); }
   cloneRec() { const s = this.recSeed; return { name: s.name, servings: s.servings, prep: s.prep, cook: s.cook, ings: s.ings.map(i => Object.assign({}, i)), steps: s.steps.slice() }; }
   locale() { return this.state.lang === 'es' ? 'es-ES' : 'en-IE'; }
   money(n) { return new Intl.NumberFormat(this.locale(), { style: 'currency', currency: 'EUR' }).format(n); }
+  money0(n) { return new Intl.NumberFormat(this.locale(), { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(n); }
   plain(n) { return new Intl.NumberFormat(this.locale(), { minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: false }).format(n); }
+  L(m) { if (!m) return ''; if (typeof m === 'string') return m; return m[this.state.lang] || m.en; }
   parse(text) {
     const s = String(text).trim().replace(/\s/g, '');
     if (s === '') return null;
@@ -476,65 +644,170 @@ class Component extends DCLogic {
   }
   dict() {
     const en = {
-      brand: 'Home brain', askLabel: 'Ask the home brain', askPlaceholder: 'Ask the home brain… e.g. “manage budget”', send: 'Send',
-      home: 'Home', threads: 'Threads', phase1: 'Phase 1', domains: 'Domains', expenses: 'Expenses', recipes: 'Recipes', activity: 'Activity', novia: 'Novia',
-      needsYou: 'Needs you', open: 'Open', nothingWaiting: 'Nothing is waiting for you.', recentThreads: 'Recent threads',
-      back: 'Back', web: 'Web', startedInSlack: 'Started in Slack', youChose: 'You chose', working: 'Working…',
+      brand: 'Home brain', pages: 'Pages', newPage: 'New page', askPlaceholder: 'Ask…', ask: 'Ask', send: 'Send', close: 'Close',
+      showing: 'Showing', system: 'How it works, data and settings', systemHint: 'Everything behind your pages',
+      howItWorks: 'How your brain works', allData: 'All data', activity: 'Activity', workflows: 'Workflows', memory: 'Memory', settings: 'Settings',
+      addWidget: 'Add widget', editPage: 'Edit page', doneEditing: 'Done', cancel: 'Cancel', back: 'Back', open: 'Open', approve: 'Approve',
+      addTo: 'Add to this page', pickType: 'What should it show?', configure: 'Set it up', source: 'Data from', widgetTitle: 'Title', width: 'Width', fullWidth: 'Full width', addToPage: 'Add to page',
+      orAskNovia: 'Or ask: “put the supplies running low on this page” — Novia builds it and shows it before it is added.',
+      emptyPage: 'This page is empty. Add a widget, or ask Novia to set it up.',
+      moveUp: 'Move up', moveDown: 'Move down', remove: 'Remove', askAbout: 'Ask about this',
+      needsYou: 'Needs you', nothingWaiting: 'Nothing is waiting for you.', conversations: 'Conversations',
+      question: 'Question', web: 'Web', startedInSlack: 'Started in Slack', working: 'Working…',
       notANumber: 'Not a number', fixCells: 'Some amounts are not numbers. Fix the marked cells — nothing was sent.',
       discard: 'Discard', before: 'Before', after: 'After', total: 'Total', addRow: 'Add row', actions: 'Actions',
-      saveChanges: 'Save changes', saveRecipe: 'Save recipe', addStep: 'Add step', remove: 'Remove', moveUp: 'Move up', moveDown: 'Move down',
+      saveChanges: 'Save changes', saveRecipe: 'Save recipe', addStep: 'Add step',
       recSaved: 'Saved — the recipe, its ingredients and its steps were written in one transaction.',
-      slackNote: 'Answered on the web. The Slack message’s buttons now reply “Already answered elsewhere.” (Phase 1 updates the message itself.)',
-      noviaAsk: 'Can the budget form show as a grid on the web?',
-      noviaReply: 'Yes. I’ll add the layout hint to the fields step 12 already builds — Slack ignores it and keeps the stacked form.',
-      noviaGate: 'Approve change to manage_budget (v8)', messageNovia: 'Message Novia…',
+      slackNote: 'Answered on the web. The Slack message’s buttons now reply “Already answered elsewhere.”',
       noChanges: 'No changes', oneChange: '1 change', nChanges: ' changes', rows: ' rows', waiting: 'waiting ',
-      completed: 'completed', awaiting: 'awaiting you', running: 'running'
+      askIntroP1: 'Ask for anything. If a workflow covers it, the workflow runs; otherwise Novia answers — and can build what is missing.',
+      askIntroP0: 'Ask for something a workflow covers, such as “manage budget”.',
+      askHintP1: 'e.g. “put the supplies running low on my home page”', askHintP0: 'e.g. “manage budget”',
+      notUnderstood: 'I could not complete that request — please be more specific.',
+      howIntro: 'This page is drawn from your own brain — its domains, workflows, schedules and memory — so it changes as your brain does.',
+      howFlow: 'What happens when you ask', yourDomains: 'Your domains', vocabulary: 'Words the brain uses',
+      tables: 'Tables', workflowsWord: 'Workflows', scheduled: 'Scheduled', memoryWord: 'Memory', none: 'none',
+      howNovia: 'Novia is the builder: when nothing covers a request, or something breaks, she designs or fixes the workflow, the tables or the page — and asks you before she changes anything.',
+      howGenerated: 'Generated from the registry: PGC_DomainHelp, PGC_Schema, PGC_Workflow, PGC_Schedule and PGC_Memory.',
+      vWidget: 'widget', table: 'Table', list: 'List', metric: 'Number', chart: 'Chart', actionsW: 'Buttons', note: 'Note',
+      dTable: 'A grid of rows, editable where allowed', dList: 'Short rows — a shopping list, upcoming items', dMetric: 'One figure, against a target', dChart: 'Bars over rows', dActions: 'Start a workflow with one tap', dNote: 'Text you write',
+      gridView: 'Grid', documentView: 'Document',
+      wfWho: 'Answered by the workflow “{n}” — a routine the brain runs for you, no AI involved.',
+      noviaWho: 'Answered by Novia, the brain’s builder. She can read your data and propose changes; she asks before changing anything.',
+      noneWho: 'No workflow matched this request.',
+      runStarted: 'Started. It needs your answer:', budgetWaiting: 'Which month, then the amounts — it is waiting in Needs you.',
+      groceriesAnswer: 'September groceries: €398.20 across 14 purchases — €121.80 under budget.',
+      coffeeAnswer: 'Coffee beans are at 250 g; their reorder level is 500 g, so they show in Running low and on the shopping list.',
+      noviaGeneric: 'No workflow covers that yet. I can build one: tell me what it should do, and I will show you the steps before anything is saved.',
+      noviaPage: 'I’ll add a list over the Running low view to your Home page. Here it is before I add it:',
+      pageChange: 'Change page “Home” — add 1 widget', pageAdded: 'Added to Home.', pageDeclined: 'Nothing changed.',
+      openQuestion: 'Open the question',
+      termQuestion: 'Question — the brain needs your answer before a workflow carries on.'
     };
     const es = {
-      brand: 'Cerebro de casa', askLabel: 'Pregunta al cerebro de casa', askPlaceholder: 'Pregunta… p. ej. “manage budget”', send: 'Enviar',
-      home: 'Inicio', threads: 'Conversaciones', phase1: 'Fase 1', domains: 'Dominios', expenses: 'Gastos', recipes: 'Recetas', activity: 'Actividad', novia: 'Novia',
-      needsYou: 'Te necesita', open: 'Abrir', nothingWaiting: 'No hay nada pendiente.', recentThreads: 'Conversaciones recientes',
-      back: 'Volver', web: 'Web', startedInSlack: 'Iniciado en Slack', youChose: 'Elegiste', working: 'Trabajando…',
+      brand: 'Cerebro de casa', pages: 'Páginas', newPage: 'Página nueva', askPlaceholder: 'Pregunta…', ask: 'Preguntar', send: 'Enviar', close: 'Cerrar',
+      showing: 'Mostrando', system: 'Cómo funciona, datos y ajustes', systemHint: 'Todo lo que hay detrás de tus páginas',
+      howItWorks: 'Cómo funciona tu cerebro', allData: 'Todos los datos', activity: 'Actividad', workflows: 'Flujos', memory: 'Memoria', settings: 'Ajustes',
+      addWidget: 'Añadir widget', editPage: 'Editar página', doneEditing: 'Hecho', cancel: 'Cancelar', back: 'Volver', open: 'Abrir', approve: 'Aprobar',
+      addTo: 'Añadir a esta página', pickType: '¿Qué debe mostrar?', configure: 'Configúralo', source: 'Datos de', widgetTitle: 'Título', width: 'Ancho', fullWidth: 'Ancho completo', addToPage: 'Añadir a la página',
+      orAskNovia: 'O pide: «pon en esta página lo que se está acabando» — Novia lo construye y te lo enseña antes de añadirlo.',
+      emptyPage: 'Esta página está vacía. Añade un widget o pide a Novia que la prepare.',
+      moveUp: 'Subir', moveDown: 'Bajar', remove: 'Quitar', askAbout: 'Preguntar sobre esto',
+      needsYou: 'Te necesita', nothingWaiting: 'No hay nada pendiente.', conversations: 'Conversaciones',
+      question: 'Pregunta', web: 'Web', startedInSlack: 'Iniciado en Slack', working: 'Trabajando…',
       notANumber: 'No es un número', fixCells: 'Algunos importes no son números. Corrige las celdas marcadas — no se ha enviado nada.',
       discard: 'Descartar', before: 'Antes', after: 'Después', total: 'Total', addRow: 'Añadir fila', actions: 'Acciones',
-      saveChanges: 'Guardar cambios', saveRecipe: 'Guardar receta', addStep: 'Añadir paso', remove: 'Quitar', moveUp: 'Subir', moveDown: 'Bajar',
+      saveChanges: 'Guardar cambios', saveRecipe: 'Guardar receta', addStep: 'Añadir paso',
       recSaved: 'Guardado — la receta, sus ingredientes y sus pasos se escribieron en una sola transacción.',
-      slackNote: 'Respondido en la web. Los botones del mensaje de Slack ahora responden «Ya se respondió en otro sitio». (La fase 1 actualiza el propio mensaje.)',
-      noviaAsk: '¿Puede el formulario del presupuesto verse como una cuadrícula en la web?',
-      noviaReply: 'Sí. Añadiré la indicación de diseño a los campos que ya construye el paso 12 — Slack la ignora y mantiene el formulario apilado.',
-      noviaGate: 'Aprobar cambio en manage_budget (v8)', messageNovia: 'Escribe a Novia…',
+      slackNote: 'Respondido en la web. Los botones del mensaje de Slack ahora responden «Ya se respondió en otro sitio».',
       noChanges: 'Sin cambios', oneChange: '1 cambio', nChanges: ' cambios', rows: ' filas', waiting: 'esperando ',
-      completed: 'completada', awaiting: 'te espera', running: 'en curso'
+      askIntroP1: 'Pide lo que quieras. Si un flujo lo cubre, se ejecuta; si no, responde Novia — y puede construir lo que falte.',
+      askIntroP0: 'Pide algo que cubra un flujo, como «manage budget».',
+      askHintP1: 'p. ej. «pon lo que se está acabando en mi página de inicio»', askHintP0: 'p. ej. «manage budget»',
+      notUnderstood: 'No he podido completar la petición — sé más concreto, por favor.',
+      howIntro: 'Esta página se dibuja a partir de tu propio cerebro — sus dominios, flujos, horarios y memoria — así que cambia cuando él cambia.',
+      howFlow: 'Qué pasa cuando preguntas', yourDomains: 'Tus dominios', vocabulary: 'Palabras que usa el cerebro',
+      tables: 'Tablas', workflowsWord: 'Flujos', scheduled: 'Programado', memoryWord: 'Memoria', none: 'nada',
+      howNovia: 'Novia es la constructora: cuando nada cubre una petición, o algo falla, diseña o arregla el flujo, las tablas o la página — y te pregunta antes de cambiar nada.',
+      howGenerated: 'Generado desde el registro: PGC_DomainHelp, PGC_Schema, PGC_Workflow, PGC_Schedule y PGC_Memory.',
+      vWidget: 'widget', table: 'Tabla', list: 'Lista', metric: 'Cifra', chart: 'Gráfico', actionsW: 'Botones', note: 'Nota',
+      dTable: 'Una cuadrícula de filas, editable donde se permita', dList: 'Filas cortas — lista de la compra, próximos', dMetric: 'Una cifra, frente a un objetivo', dChart: 'Barras sobre filas', dActions: 'Inicia un flujo con un toque', dNote: 'Texto que escribes tú',
+      gridView: 'Cuadrícula', documentView: 'Documento',
+      wfWho: 'Respondido por el flujo «{n}» — una rutina que el cerebro ejecuta por ti, sin IA.',
+      noviaWho: 'Respondido por Novia, la constructora del cerebro. Puede leer tus datos y proponer cambios; pregunta antes de cambiar nada.',
+      noneWho: 'Ningún flujo coincide con esta petición.',
+      runStarted: 'Iniciado. Necesita tu respuesta:', budgetWaiting: 'Qué mes, y después los importes — te espera en Te necesita.',
+      groceriesAnswer: 'Compra de septiembre: 398,20 € en 14 compras — 121,80 € por debajo del presupuesto.',
+      coffeeAnswer: 'Quedan 250 g de café; su nivel de reposición es 500 g, así que aparece en Se está acabando y en la lista de la compra.',
+      noviaGeneric: 'Todavía no hay un flujo para eso. Puedo construirlo: dime qué debe hacer y te enseñaré los pasos antes de guardar nada.',
+      noviaPage: 'Añadiré una lista sobre la vista Se está acabando a tu página de inicio. Así queda antes de añadirla:',
+      pageChange: 'Cambiar la página «Inicio» — añadir 1 widget', pageAdded: 'Añadido a Inicio.', pageDeclined: 'No ha cambiado nada.',
+      openQuestion: 'Abrir la pregunta',
+      termQuestion: 'Pregunta — el cerebro necesita tu respuesta antes de que un flujo continúe.'
     };
     return this.state.lang === 'es' ? es : en;
   }
   wfText() {
-    const en = { monthQuestion: 'Which month do you want to edit?', month: 'Month', continue: 'Continue', cancel: 'Cancel', save: 'Save',
+    const en = { monthQuestion: 'Which month do you want to edit?', month: 'Month', continue: 'Continue', save: 'Save',
       editorTitle: 'Budget editor', net: 'Net cash flow:', category: 'Category', amount: 'Amount', savedFor: 'Budget saved for',
       income: 'Income', non_discretionary: 'Non-discretionary', discretionary: 'Discretionary', savings: 'Savings',
       mergeTitle: 'Merge these two inventory items?', item: 'Item', keep: 'Keep', qty: 'Quantity', approve: 'Approve',
-      whyMerge: 'Why these two?', whyMergeText: 'Same product, two receipt spellings. Quantities are added; the kept name stays.' };
-    const es = { monthQuestion: '¿Qué mes quieres editar?', month: 'Mes', continue: 'Continuar', cancel: 'Cancelar', save: 'Guardar',
+      editBudget: 'Edit the budget', reviewInventory: 'Review inventory', spendingReport: 'Spending report', addReceipt: 'Add a receipt', manageExpenses: 'Manage expenses', processReceipt: 'Process a receipt', recipeSearch: 'Find a recipe', portfolioUpdate: 'Update prices' };
+    const es = { monthQuestion: '¿Qué mes quieres editar?', month: 'Mes', continue: 'Continuar', save: 'Guardar',
       editorTitle: 'Editor de presupuesto', net: 'Flujo neto:', category: 'Categoría', amount: 'Importe', savedFor: 'Presupuesto guardado para',
       income: 'Ingresos', non_discretionary: 'No discrecional', discretionary: 'Discrecional', savings: 'Ahorro',
       mergeTitle: '¿Unir estos dos artículos del inventario?', item: 'Artículo', keep: 'Conservar', qty: 'Cantidad', approve: 'Aprobar',
-      whyMerge: '¿Por qué estos dos?', whyMergeText: 'Mismo producto, dos grafías de ticket. Las cantidades se suman; se conserva el nombre marcado.' };
+      editBudget: 'Editar el presupuesto', reviewInventory: 'Revisar inventario', spendingReport: 'Informe de gastos', addReceipt: 'Añadir un ticket', manageExpenses: 'Gestionar gastos', processReceipt: 'Procesar un ticket', recipeSearch: 'Buscar una receta', portfolioUpdate: 'Actualizar precios' };
     return this.state.lang === 'es' ? es : en;
   }
   regText() {
-    const en = { budgetDomain: 'Budgets and expenses', expenses: 'Expenses', month: 'Month', date: 'Date', title: 'Title', category: 'Category', payment: 'Payment', amount: 'Amount',
-      recipes: 'Recipes', recipeName: 'Name', servings: 'Servings', prep: 'Prep (min)', cook: 'Cook (min)', ingredients: 'Ingredients', ingredient: 'Ingredient', quantity: 'Quantity', unit: 'Unit', note: 'Note', steps: 'Steps' };
-    const es = { budgetDomain: 'Presupuestos y gastos', expenses: 'Gastos', month: 'Mes', date: 'Fecha', title: 'Concepto', category: 'Categoría', payment: 'Pago', amount: 'Importe',
-      recipes: 'Recetas', recipeName: 'Nombre', servings: 'Raciones', prep: 'Preparación (min)', cook: 'Cocción (min)', ingredients: 'Ingredientes', ingredient: 'Ingrediente', quantity: 'Cantidad', unit: 'Unidad', note: 'Nota', steps: 'Pasos' };
+    const en = { budgetDomain: 'Budgets and expenses', expenses: 'Expenses', date: 'Date', title: 'Title', category: 'Category', payment: 'Payment', amount: 'Amount',
+      recipes: 'Recipes', recipeName: 'Name', servings: 'Servings', prep: 'Prep (min)', cook: 'Cook (min)', ingredients: 'Ingredients', ingredient: 'Ingredient', quantity: 'Quantity', unit: 'Unit', note: 'Note', steps: 'Steps',
+      inventory: 'Inventory', portfolio: 'Stock portfolio', budgets: 'Budgets', items: 'Items', holdings: 'Holdings' };
+    const es = { budgetDomain: 'Presupuestos y gastos', expenses: 'Gastos', date: 'Fecha', title: 'Concepto', category: 'Categoría', payment: 'Pago', amount: 'Importe',
+      recipes: 'Recetas', recipeName: 'Nombre', servings: 'Raciones', prep: 'Preparación (min)', cook: 'Cocción (min)', ingredients: 'Ingredientes', ingredient: 'Ingrediente', quantity: 'Cantidad', unit: 'Unidad', note: 'Nota', steps: 'Pasos',
+      inventory: 'Inventario', portfolio: 'Cartera de acciones', budgets: 'Presupuestos', items: 'Artículos', holdings: 'Posiciones' };
     return this.state.lang === 'es' ? es : en;
+  }
+  sources() {
+    const es = this.state.lang === 'es';
+    const m = n => this.money(n);
+    return {
+      running_low: { label: es ? 'Se está acabando (vista sobre Inventario)' : 'Running low (view over Inventory)', domain: es ? 'Inventario' : 'Inventory',
+        desc: es ? 'Artículos del inventario por debajo de su nivel de reposición.' : 'Items from Inventory below their reorder level.', view: 'running_low',
+        rows: [
+          { title: es ? 'Aceite de oliva' : 'Olive oil', detail: es ? '1 botella · reponer a 2' : '1 bottle · reorder at 2' },
+          { title: es ? 'Café en grano' : 'Coffee beans', detail: es ? '250 g · reponer a 500 g' : '250 g · reorder at 500 g' },
+          { title: es ? 'Lavavajillas' : 'Dish soap', detail: es ? '1 · reponer a 2' : '1 · reorder at 2' },
+          { title: es ? 'Arroz' : 'Rice', detail: es ? '0,5 kg · reponer a 1 kg' : '0.5 kg · reorder at 1 kg' }
+        ],
+        metric: { value: '4', compare: es ? 'artículos por debajo de su nivel' : 'items below their level' },
+        cols: [es ? 'Artículo' : 'Item', es ? 'Queda' : 'Left'] },
+      budget_vs_spent: { label: es ? 'Presupuesto y gasto del mes (vista)' : 'Budget vs spent this month (view)', domain: es ? 'Presupuestos y gastos' : 'Budgets and expenses',
+        desc: es ? 'Presupuesto de cada categoría frente a los gastos del mes.' : 'Each category’s budget against the month’s expenses.', view: 'budget_vs_spent',
+        bars: [ ['Groceries', 'Compra', 312, 400], ['Dining out', 'Restaurantes', 118, 160], ['Utilities', 'Suministros', 180, 180], ['Leisure', 'Ocio', 64, 120], ['Clothing', 'Ropa', 86, 80] ],
+        metric: { value: m(760), compare: es ? 'de 940 € presupuestados' : 'of €940 budgeted' },
+        cols: [es ? 'Categoría' : 'Category', es ? 'Gastado / presupuesto' : 'Spent / budget'] },
+      holdings_value: { label: es ? 'Valor de las posiciones (vista sobre Cartera)' : 'Holdings value (view over Stock portfolio)', domain: es ? 'Cartera de acciones' : 'Stock portfolio',
+        desc: es ? 'Cada posición por su último precio: acciones × precio, calculado en la vista.' : 'Each holding at its last price — shares × price, computed in the view.', view: 'holdings_value',
+        holdings: [ ['Global equity fund', 120, 108.4], ['Euro bond fund', 300, 52.1], ['Company A', 40, 187.25], ['Company B', 85, 33.9] ],
+        metric: { value: m(39009.5), compare: es ? '+2,1 % este mes' : '+2.1% this month' } },
+      expenses_recent: { label: es ? 'Gastos recientes (tabla Gastos)' : 'Recent expenses (Expenses table)', domain: es ? 'Presupuestos y gastos' : 'Budgets and expenses',
+        desc: es ? 'Los últimos gastos, del más reciente al más antiguo.' : 'The latest expenses, newest first.', view: 'expenses',
+        rows: this.expSeed.slice().reverse().slice(0, 4).map(r => ({ title: r.title, detail: m(r.amount) })),
+        metric: { value: m(this.expSeed.reduce((a, r) => a + r.amount, 0)), compare: es ? 'este mes' : 'this month' } }
+    };
+  }
+  shape(src, type) {
+    const s = this.sources()[src];
+    if (!s) return null;
+    const m = n => this.money(n);
+    const es = this.state.lang === 'es';
+    const out = {};
+    if (s.holdings) {
+      out.listRows = s.holdings.map(h => ({ title: h[0], detail: m(h[1] * h[2]) }));
+      out.tableCols = [{ label: es ? 'Posición' : 'Holding', cls: '' }, { label: es ? 'Acciones' : 'Shares', cls: 'num' }, { label: es ? 'Precio' : 'Price', cls: 'num' }, { label: es ? 'Valor' : 'Value', cls: 'num' }];
+      out.tableRows = s.holdings.map(h => ({ cells: [{ text: h[0], cls: 'rowhead' }, { text: String(h[1]), cls: 'num rowhead' }, { text: m(h[2]), cls: 'num rowhead' }, { text: m(h[1] * h[2]), cls: 'num rowhead' }] }));
+      out.bars = s.holdings.map(h => ({ label: h[0], valueText: m(h[1] * h[2]), pct: Math.round(h[1] * h[2] / 160), color: '#0D6A6A', textColor: '#15191E' }));
+    } else if (s.bars) {
+      out.bars = s.bars.map(b => { const over = b[2] > b[3]; return { label: es ? b[1] : b[0], valueText: this.money0(b[2]) + ' / ' + this.money0(b[3]), pct: Math.min(100, Math.round(b[2] / b[3] * 100)), color: over ? '#C2410C' : '#0D6A6A', textColor: over ? '#9A3412' : '#15191E' }; });
+      out.listRows = s.bars.map(b => ({ title: es ? b[1] : b[0], detail: this.money0(b[2]) + ' / ' + this.money0(b[3]) }));
+      out.tableCols = s.cols.map((c, i) => ({ label: c, cls: i ? 'num' : '' }));
+      out.tableRows = out.listRows.map(r => ({ cells: [{ text: r.title, cls: 'rowhead' }, { text: r.detail, cls: 'num rowhead' }] }));
+    } else {
+      out.listRows = s.rows;
+      out.bars = s.rows.map((r, i) => ({ label: r.title, valueText: r.detail, pct: 80 - i * 15, color: '#0D6A6A', textColor: '#15191E' }));
+      out.tableCols = (s.cols || [es ? 'Fila' : 'Row', es ? 'Detalle' : 'Detail']).map((c, i) => ({ label: c, cls: '' }));
+      out.tableRows = s.rows.map(r => ({ cells: [{ text: r.title, cls: 'rowhead' }, { text: r.detail, cls: 'rowhead' }] }));
+    }
+    out.metricValue = s.metric.value; out.metricCompare = s.metric.compare;
+    return out;
   }
   monthLabel(key) {
     const p = key.split('-');
     const s = new Date(Number(p[0]), Number(p[1]) - 1, 1).toLocaleString(this.locale(), { month: 'long', year: 'numeric' });
     return s.charAt(0).toUpperCase() + s.slice(1);
   }
-  go(screen) { this.setState({ screen: screen }); }
   budgetCells() {
     const edits = this.state.edits;
     return this.cats.map(c => {
@@ -546,64 +819,178 @@ class Component extends DCLogic {
       return { c: c, text: text, value: bad ? c.amount : v, bad: bad, changed: changed };
     });
   }
+  startBudget(fromScreen) { this.setState({ screen: 'budget', back: fromScreen || 'page', drawer: false, stage: 'month', month: '2026-10', edits: {}, showErrors: false, sent: null }); }
+  setPages(fn) { this.setState(s => ({ pages: fn(s.pages.map(p => Object.assign({}, p, { widgets: p.widgets.slice() }))) })); }
   renderVals() {
     const t = this.dict(), wf = this.wfText(), reg = this.regText();
-    const st = this.state;
-    const self = this;
-    const cells = this.budgetCells();
-    const changedCells = cells.filter(x => x.changed);
-    const badCells = cells.filter(x => x.bad);
-    const countLabel = n => n === 0 ? t.noChanges : (n === 1 ? t.oneChange : n + t.nChanges);
-    const typeOrder = ['income', 'non_discretionary', 'discretionary', 'savings'];
-    const sum = (list, key) => list.reduce((a, x) => a + x[key], 0);
-    const subtotalsLoaded = typeOrder.map(ty => ({ label: wf[ty], value: this.money(sum(this.cats.filter(c => c.type === ty), 'amount')) }));
-    const netOf = vals => {
-      const by = ty => vals.filter(x => x.c.type === ty).reduce((a, x) => a + x.value, 0);
-      return by('income') - by('non_discretionary') - by('discretionary') - by('savings');
-    };
-    const loadedCells = this.cats.map(c => ({ c: c, value: c.amount }));
-    const groups = typeOrder.map(ty => ({
-      label: wf[ty],
-      rows: cells.filter(x => x.c.type === ty).map(x => ({
-        name: x.c.name, text: x.text, bad: x.bad && st.showErrors, aria: wf.amount + ' — ' + x.c.name,
-        cls: 'cell' + (x.changed ? ' cell-changed' : '') + (x.bad && st.showErrors ? ' cell-bad' : ''),
-        onInput: e => { const v = e.target.value; self.setState(s => { const ed = Object.assign({}, s.edits); ed[x.c.id] = v; return { edits: ed }; }); }
-      }))
-    }));
-    const stage = st.stage;
-    const fromCmd = st.budgetFrom === 'command';
-    const b = {
-      showCommand: fromCmd, commandText: 'manage budget',
-      monthOpen: stage === 'month', monthAnswered: fromCmd && stage !== 'month' && stage !== 'working0',
-      gridOpen: stage === 'grid', gridAnswered: stage === 'sending' || stage === 'done',
-      working: stage === 'working0' || stage === 'working1' || stage === 'sending', done: stage === 'done',
-      month: st.month, monthLabel: this.monthLabel(st.month), showErrors: st.showErrors && badCells.length > 0,
-      sentChanges: st.sent ? countLabel(st.sent.length) : ''
-    };
-    const months = ['2026-11', '2026-10', '2026-09', '2026-08'].map(k => ({ value: k, label: this.monthLabel(k) }));
-    const later = (stage2, ms, extra) => setTimeout(() => self.setState(Object.assign({ stage: stage2 }, extra || {})), ms);
+    const st = this.state, self = this;
+    const isP1 = st.phase === 'p1';
+    const srcs = this.sources();
 
-    const sent = st.sent || [];
-    const savedRows = sent.map(x => ({ name: x.name, before: this.money(x.before), after: this.money(x.after) }));
-    const afterCells = this.cats.map(c => { const s = sent.find(x => x.id === c.id); return { c: c, value: s ? s.after : c.amount }; });
+    // pages — Phase 0 draws the seeded Home only
+    const p0Home = { key: 'home', title: { en: 'Home', es: 'Inicio' }, widgets: [ { id: 'p0a', type: 'needs_you', width: 'w3', by: 'seed' }, { id: 'p0b', type: 'conversations', width: 'w3', by: 'seed' } ] };
+    const pages = isP1 ? st.pages : [p0Home];
+    const page = pages.find(p => p.key === st.page) || pages[0];
+    const tabs = pages.map(p => ({ label: this.L(p.title), cls: 'tab' + (st.screen === 'page' && p.key === page.key ? ' tab-on' : ''), go: () => self.setState({ screen: 'page', page: p.key, gear: false, add: null, editing: false }) }));
 
+    // needs you
     const needs = [];
-    if (!st.budgetDone) needs.push({ workflow: 'manage_budget', provider: t.web, chipCls: 'chip chip-web', title: wf.editorTitle + ' — ' + this.monthLabel('2026-10'), waiting: t.waiting + '3 min',
-      open: () => self.setState({ screen: 'budget', budgetFrom: 'needs', stage: 'grid', month: '2026-10', edits: {}, showErrors: false, sent: null }) });
-    if (st.slack === 'open') needs.push({ workflow: 'review_inventory', provider: 'Slack', chipCls: 'chip chip-slack', title: wf.mergeTitle, waiting: t.waiting + '42 min',
-      open: () => self.setState({ screen: 'slack' }) });
+    if (!st.budgetDone) needs.push({ workflow: wf.editBudget, provider: t.web, chipCls: 'chip chip-web', title: wf.editorTitle + ' — ' + this.monthLabel('2026-10'), waiting: t.waiting + '3 min',
+      open: () => self.setState({ screen: 'budget', back: 'page', stage: 'grid', month: '2026-10', edits: {}, showErrors: false, sent: null }) });
+    if (st.slack === 'open') needs.push({ workflow: wf.reviewInventory, provider: 'Slack', chipCls: 'chip chip-slack', title: wf.mergeTitle, waiting: t.waiting + '42 min',
+      open: () => self.setState({ screen: 'slack', back: 'page' }) });
 
-    const threads = [
-      { text: 'manage budget', status: st.budgetDone ? t.completed : t.awaiting, when: '09:12' },
-      { text: 'what did we spend on groceries in September?', status: t.completed, when: 'yesterday' },
-      { text: 'add milk and eggs to the shopping list', status: t.completed, when: 'Mon' }
+    // conversations
+    const convoList = st.convos.map(c => ({ text: c.text, who: c.who === 'novia' ? 'Novia' : (c.who === 'none' ? '—' : (st.lang === 'es' ? 'flujo' : 'workflow')), when: c.when,
+      open: () => self.setState({ drawer: true, convo: c.id, gear: false }) }));
+
+    // widgets
+    const typeLabel = { needs_you: t.needsYou, conversations: t.conversations, table: t.table, list: t.list, metric: t.metric, chart: t.chart, actions: t.actionsW, note: t.note };
+    const byLabel = w => w.by === 'seed' ? (st.lang === 'es' ? 'incluido con la app' : 'comes with the app') : (w.by === 'novia' ? (st.lang === 'es' ? 'añadido por Novia, ' : 'added by Novia, ') + w.on : (st.lang === 'es' ? 'añadido por ti, ' : 'added by you, ') + w.on);
+    const widgets = page.widgets.map((w, i) => {
+      const s = w.source ? srcs[w.source] : null;
+      const sh = w.source ? this.shape(w.source, w.type) : null;
+      const title = w.title ? this.L(w.title) : typeLabel[w.type];
+      let info;
+      if (w.type === 'needs_you') info = t.termQuestion + ' ' + (st.lang === 'es' ? 'Aquí aparecen todas, tanto si la ejecución empezó en la web como en Slack o por un horario.' : 'Every one waiting appears here, whether its run started on the web, in Slack or on a schedule.');
+      else if (w.type === 'conversations') info = st.lang === 'es' ? 'Lo que has pedido con Preguntar, y quién respondió: un flujo o Novia.' : 'What you asked with Ask, and who answered — a workflow or Novia.';
+      else if (w.type === 'actions') info = (st.lang === 'es' ? 'Cada botón inicia un flujo — una rutina que el cerebro ejecuta por ti. ' : 'Each button starts a workflow — a routine the brain runs for you. ') + byLabel(w) + '.';
+      else if (w.type === 'note') info = (st.lang === 'es' ? 'Texto escrito por ti; no viene de ningún dato. ' : 'Text you wrote; it comes from no data. ') + byLabel(w) + '.';
+      else info = (s ? s.desc + ' ' + (st.lang === 'es' ? 'Dominio ' : 'Domain ') + s.domain + ' · ' + (st.lang === 'es' ? 'vista ' : 'view ') + s.view + ' · ' : '') + byLabel(w) + '.';
+      const infoOpen = st.info === w.id || st.hover === w.id;
+      const mv = d => self.setPages(ps => { const p = ps.find(x => x.key === page.key); const j = i + d; if (j < 0 || j >= p.widgets.length) return ps; const a = p.widgets; const tmp = a[i]; a[i] = a[j]; a[j] = tmp; return ps; });
+      const base = {
+        id: w.id, cls: 'card ' + w.width, title: title, infoText: info, infoOpen: infoOpen, infoLabel: (st.lang === 'es' ? 'Qué es: ' : 'About: ') + title,
+        toggleInfo: () => self.setState({ info: st.info === w.id ? null : w.id }), hoverOn: () => self.setState({ hover: w.id }), hoverOff: () => self.setState({ hover: null }),
+        canAsk: w.type !== 'needs_you' && w.type !== 'conversations' && isP1,
+        askAbout: () => self.setState({ drawer: true, convo: null, askText: (st.lang === 'es' ? 'Sobre el widget «' : 'About the “') + title + (st.lang === 'es' ? '»: ' : '” widget: '), info: null }),
+        showPhase: false, hasCount: w.type === 'needs_you', count: needs.length,
+        isNeeds: w.type === 'needs_you', isConvos: w.type === 'conversations', isList: w.type === 'list', isMetric: w.type === 'metric', isChart: w.type === 'chart', isTable: w.type === 'table', isActions: w.type === 'actions', isNote: w.type === 'note',
+        listRows: sh ? sh.listRows : [], bars: sh ? sh.bars : [], tableCols: sh ? sh.tableCols : [], tableRows: sh ? sh.tableRows : [],
+        metricValue: sh ? sh.metricValue : '', metricCompare: sh ? sh.metricCompare : '',
+        actions: [ { label: wf.editBudget, run: () => self.startBudget('page') }, { label: wf.addReceipt, run: () => self.setState({ drawer: true, convo: null, askText: st.lang === 'es' ? 'añadir un ticket' : 'add a receipt' }) }, { label: wf.spendingReport, run: () => self.setState({ drawer: true, convo: 'c2' }) } ],
+        noteText: this.L(w.note),
+        up: () => mv(-1), down: () => mv(1), remove: () => self.setPages(ps => { const p = ps.find(x => x.key === page.key); p.widgets = p.widgets.filter(x => x.id !== w.id); return ps; })
+      };
+      return base;
+    });
+
+    // widget menu
+    const add = st.add;
+    const typeDefs = [ ['list', t.list, t.dList], ['chart', t.chart, t.dChart], ['metric', t.metric, t.dMetric], ['table', t.table, t.dTable], ['actions', t.actionsW, t.dActions], ['note', t.note, t.dNote] ];
+    const widgetTypes = typeDefs.map(d => ({ label: d[1], desc: d[2], pick: () => self.setState({ add: { step: 'config', type: d[0], source: 'running_low', title: '', width: 'w3' } }) }));
+    const sourceOptions = Object.keys(srcs).map(k => ({ value: k, label: srcs[k].label }));
+    const needsSource = !!add && add.step === 'config' && add.type !== 'actions' && add.type !== 'note';
+
+    // Ask drawer
+    const convo = st.convos.find(c => c.id === st.convo);
+    const textOf = mg => mg.textKey ? t[mg.textKey] : mg.text;
+    const msgs = convo ? convo.msgs.map((mg, i) => {
+      const key = convo.id + ':' + i;
+      const isReply = mg.kind === 'reply' || mg.kind === 'proposal';
+      const who = mg.who === 'novia' ? 'Novia' : (mg.who === 'none' ? (st.lang === 'es' ? 'Sin flujo' : 'No workflow') : wf[mg.wfKey]);
+      return {
+        isUser: mg.kind === 'user', isReply: isReply, isNotice: mg.kind === 'notice', isWorking: mg.kind === 'working',
+        text: textOf(mg), who: who, chipCls: 'chip ' + (mg.who === 'novia' ? 'chip-novia' : 'chip-wf'),
+        whoInfo: mg.who === 'novia' ? t.noviaWho : (mg.who === 'none' ? t.noneWho : t.wfWho.replace('{n}', who)), whoInfoLabel: (st.lang === 'es' ? 'Quién respondió' : 'Who answered'),
+        infoOpen: st.msgInfo === key, toggleInfo: () => self.setState({ msgInfo: st.msgInfo === key ? null : key }),
+        hasOpen: !!mg.open && !(mg.open === 'budget' && st.budgetDone), openLabel: t.openQuestion, open: () => self.startBudget('page'),
+        isProposal: mg.kind === 'proposal', proposalTitle: t.pageChange, previewTitle: st.lang === 'es' ? 'Se está acabando' : 'Running low',
+        previewRows: mg.kind === 'proposal' ? srcs.running_low.rows.slice(0, 3) : [],
+        proposalOpen: mg.kind === 'proposal' && !mg.resolved, proposalDone: mg.kind === 'proposal' && !!mg.resolved, proposalResult: mg.resolved === 'yes' ? t.pageAdded : t.pageDeclined,
+        approve: () => { self.resolveProposal(convo.id, i, 'yes'); self.setPages(ps => { const p = ps.find(x => x.key === 'home'); p.widgets.splice(1, 0, { id: 'n' + Date.now(), type: 'list', width: 'w3', source: 'running_low', title: { en: 'Running low', es: 'Se está acabando' }, by: 'novia', on: st.lang === 'es' ? 'hoy' : 'today' }); return ps; }); },
+        decline: () => self.resolveProposal(convo.id, i, 'no')
+      };
+    }) : [];
+
+    // How your brain works — drawn from the registry
+    const domainCards = [
+      { label: reg.budgetDomain, desc: st.lang === 'es' ? 'El presupuesto mensual y lo que se gasta.' : 'The monthly budget and what is spent.', tables: reg.budgets + ', ' + reg.expenses, workflows: [wf.editBudget, wf.manageExpenses, wf.spendingReport].join(', '), scheduled: t.none, memory: '6', hasWaiting: !st.budgetDone, waiting: st.lang === 'es' ? '1 pregunta te espera' : '1 question waiting for you' },
+      { label: reg.inventory, desc: st.lang === 'es' ? 'Lo que hay en casa, desde los tickets.' : 'What is in the house, from receipts.', tables: reg.items + ', aliases', workflows: [wf.processReceipt, wf.reviewInventory].join(', '), scheduled: st.lang === 'es' ? 'Revisión semanal · lunes 08:00' : 'Weekly stock check · Mon 08:00', memory: '11', hasWaiting: st.slack === 'open', waiting: st.lang === 'es' ? '1 pregunta te espera' : '1 question waiting for you' },
+      { label: reg.recipes, desc: st.lang === 'es' ? 'Recetas con sus ingredientes y pasos.' : 'Recipes with their ingredients and steps.', tables: reg.recipes + ', ' + reg.ingredients + ', ' + reg.steps, workflows: wf.recipeSearch, scheduled: t.none, memory: '2', hasWaiting: false, waiting: '' },
+      { label: reg.portfolio, desc: st.lang === 'es' ? 'Posiciones y sus precios.' : 'Holdings and their prices.', tables: reg.holdings + ', prices', workflows: wf.portfolioUpdate, scheduled: st.lang === 'es' ? 'Precios · cada día 18:00' : 'Prices · daily 18:00', memory: '1', hasWaiting: false, waiting: '' }
+    ];
+    const es = st.lang === 'es';
+    const flowSteps = [
+      { term: t.ask, text: es ? 'Escribes lo que necesitas.' : 'You say what you need.', bg: '#E6EEF8', arrow: true },
+      { term: es ? 'Flujo' : 'Workflow', text: es ? 'Una rutina guardada lo hace, sin IA.' : 'A saved routine does it, no AI.', bg: '#E2F0EF', arrow: true },
+      { term: t.question, text: es ? 'Si necesita algo de ti, espera en Te necesita.' : 'If it needs you, it waits in Needs you.', bg: '#FFF0CC', arrow: true },
+      { term: es ? 'Ejecución' : 'Run', text: es ? 'Termina y escribe tus datos.' : 'It finishes and writes your data.', bg: '#E2F0EF', arrow: true },
+      { term: es ? 'Memoria' : 'Memory', text: es ? 'Aprende para la próxima vez.' : 'It learns for next time.', bg: '#F1E9F8', arrow: false }
+    ];
+    const vocab = es ? [
+      { term: 'Dominio', def: 'Un tipo de cosa que controlas — gastos, inventario, recetas.' },
+      { term: 'Flujo', def: 'Una rutina que el cerebro ejecuta por ti, guardada para reutilizarla.' },
+      { term: 'Pregunta', def: 'El cerebro necesita tu respuesta antes de que un flujo continúe.' },
+      { term: 'Ejecución', def: 'Una vez que se ejecutó un flujo, con lo que hizo en cada paso.' },
+      { term: 'Memoria', def: 'Lo que el cerebro ha aprendido de ti y de tus datos.' },
+      { term: 'Novia', def: 'La constructora del cerebro: crea y arregla flujos, páginas y dominios.' }
+    ] : [
+      { term: 'Domain', def: 'A kind of thing you keep track of — expenses, inventory, recipes.' },
+      { term: 'Workflow', def: 'A routine the brain runs for you, saved so it is reused.' },
+      { term: 'Question', def: 'The brain needs your answer before a workflow carries on.' },
+      { term: 'Run', def: 'One time a workflow ran, with what each step did.' },
+      { term: 'Memory', def: 'What the brain has learned about you and your data.' },
+      { term: 'Novia', def: 'The brain’s builder — she makes and fixes workflows, pages and domains.' }
     ];
 
-    const navItem = (key, label, count) => ({ label: label, count: count || 0, hasCount: !!count, cls: 'nav-item' + (st.screen === key || (key === 'home' && (st.screen === 'budget' || st.screen === 'slack')) ? ' nav-on' : ''), go: () => self.go(key) });
+    // All data, Activity, Workflows, Memory
+    const dataTables = [
+      { domain: reg.budgetDomain, label: reg.expenses, view: t.gridView, open: () => self.setState({ screen: 'expenses' }) },
+      { domain: reg.budgetDomain, label: reg.budgets, view: t.gridView, open: () => self.startBudget('data') },
+      { domain: reg.recipes, label: this.state.rec.name, view: t.documentView, open: () => self.setState({ screen: 'recipe' }) },
+      { domain: reg.inventory, label: reg.items, view: t.gridView, open: () => {} },
+      { domain: reg.portfolio, label: reg.holdings, view: t.gridView, open: () => self.setState({ screen: 'page', page: 'stocks' }) }
+    ];
+    let listTitle = '', listRows = [];
+    if (st.listKind === 'activity') { listTitle = t.activity; listRows = [
+      { title: wf.editBudget + ' · run 931', detail: es ? 'hoy 09:12 · web' : 'today 09:12 · web', hasStatus: true, status: st.budgetDone ? (es ? 'completada' : 'completed') : (es ? 'te espera' : 'waiting for you') },
+      { title: wf.reviewInventory + ' · run 928', detail: es ? 'hoy 08:30 · Slack' : 'today 08:30 · Slack', hasStatus: true, status: st.slack === 'open' ? (es ? 'te espera' : 'waiting for you') : (es ? 'completada' : 'completed') },
+      { title: wf.spendingReport + ' · run 925', detail: es ? 'ayer 19:40 · web' : 'yesterday 19:40 · web', hasStatus: true, status: es ? 'completada' : 'completed' },
+      { title: wf.portfolioUpdate + ' · run 924', detail: es ? 'ayer 18:00 · horario' : 'yesterday 18:00 · schedule', hasStatus: true, status: es ? 'completada' : 'completed' } ]; }
+    if (st.listKind === 'workflows') { listTitle = t.workflows; listRows = [
+      { title: wf.editBudget, detail: reg.budgetDomain, hasAction: true, actionLabel: es ? 'Ejecutar' : 'Run', action: () => self.startBudget('list') },
+      { title: wf.manageExpenses, detail: reg.budgetDomain, hasAction: true, actionLabel: es ? 'Ejecutar' : 'Run', action: () => {} },
+      { title: wf.processReceipt, detail: reg.inventory, hasAction: true, actionLabel: es ? 'Ejecutar' : 'Run', action: () => {} },
+      { title: wf.recipeSearch, detail: reg.recipes, hasAction: true, actionLabel: es ? 'Ejecutar' : 'Run', action: () => {} } ]; }
+    if (st.listKind === 'memory') { listTitle = t.memory; listRows = [
+      { title: es ? 'Los importes del presupuesto son en euros.' : 'Budget amounts are in euros.', detail: reg.budgetDomain + (es ? ' · aprendido el 3 oct' : ' · learned 3 Oct') },
+      { title: es ? '«Leche entera 1 L» y «Milk, whole, 1 litre» son el mismo artículo.' : '“Whole milk 1 L” and “Milk, whole, 1 litre” are the same item.', detail: reg.inventory + (es ? ' · aprendido el 21 oct' : ' · learned 21 Oct') },
+      { title: es ? 'El café se repone a 500 g.' : 'Coffee is restocked at 500 g.', detail: reg.inventory + (es ? ' · aprendido el 22 oct' : ' · learned 22 Oct') } ]; }
+    if (st.listKind === 'settings') { listTitle = t.settings; listRows = [
+      { title: es ? 'Idioma' : 'Language', detail: es ? 'Español' : 'English' },
+      { title: es ? 'Zona horaria' : 'Timezone', detail: 'Europe/Madrid' },
+      { title: es ? 'Moneda del hogar' : 'Household currency', detail: 'EUR' } ]; }
+    const goList = k => self.setState({ screen: 'list', listKind: k, gear: false });
+    const gearItems = [
+      { label: t.howItWorks, go: () => self.setState({ screen: 'how', gear: false }) },
+      { label: t.allData, go: () => self.setState({ screen: 'data', gear: false }) },
+      { label: t.activity, go: () => goList('activity') },
+      { label: t.workflows, go: () => goList('workflows') },
+      { label: t.memory, go: () => goList('memory') },
+      { label: t.settings, go: () => goList('settings') }
+    ];
+
+    // budget question
+    const cells = this.budgetCells();
+    const changedCells = cells.filter(x => x.changed), badCells = cells.filter(x => x.bad);
+    const countLabel = n => n === 0 ? t.noChanges : (n === 1 ? t.oneChange : n + t.nChanges);
+    const typeOrder = ['income', 'non_discretionary', 'discretionary', 'savings'];
+    const subtotals = typeOrder.map(ty => ({ label: wf[ty], value: this.money(this.cats.filter(c => c.type === ty).reduce((a, c) => a + c.amount, 0)) }));
+    const netOf = vals => { const by = ty => vals.filter(x => x.c.type === ty).reduce((a, x) => a + x.value, 0); return by('income') - by('non_discretionary') - by('discretionary') - by('savings'); };
+    const groups = typeOrder.map(ty => ({ label: wf[ty], rows: cells.filter(x => x.c.type === ty).map(x => ({
+      name: x.c.name, text: x.text, bad: x.bad && st.showErrors, aria: wf.amount + ' — ' + x.c.name,
+      cls: 'cell' + (x.changed ? ' cell-changed' : '') + (x.bad && st.showErrors ? ' cell-bad' : ''),
+      onInput: e => { const v = e.target.value; self.setState(s => { const ed = Object.assign({}, s.edits); ed[x.c.id] = v; return { edits: ed }; }); } })) }));
+    const stage = st.stage;
+    const b = { monthOpen: stage === 'month', gridOpen: stage === 'grid', working: stage === 'working1' || stage === 'sending', done: stage === 'done',
+      month: st.month, monthLabel: this.monthLabel(st.month), showErrors: st.showErrors && badCells.length > 0 };
+    const later = (stage2, ms, extra) => setTimeout(() => self.setState(Object.assign({ stage: stage2 }, extra || {})), ms);
+    const sent = st.sent || [];
 
     // expenses grid
     const cats = this.cats.filter(c => c.type !== 'income' && c.type !== 'savings').map(c => ({ id: String(c.id), name: c.name }));
-    const payments = [{ value: '', label: '—' }, { value: 'cash', label: st.lang === 'es' ? 'Efectivo' : 'Cash' }, { value: 'debit', label: st.lang === 'es' ? 'Débito' : 'Debit card' }, { value: 'credit', label: st.lang === 'es' ? 'Crédito' : 'Credit card' }];
+    const payments = [{ value: '', label: '—' }, { value: 'cash', label: es ? 'Efectivo' : 'Cash' }, { value: 'debit', label: es ? 'Débito' : 'Debit card' }, { value: 'credit', label: es ? 'Crédito' : 'Credit card' }];
     const seedById = {}; this.expSeed.forEach(r => { seedById[r.id] = r; });
     let added = 0, changed = 0, deleted = 0, total = 0, live = 0, anyBad = false;
     const setRow = (id, patch) => self.setState(s => ({ expBanner: '', exp: s.exp.map(r => r.id === id ? Object.assign({}, r, patch) : r) }));
@@ -615,103 +1002,126 @@ class Component extends DCLogic {
       const diff = f => o && !r.isNew && String(r[f]) !== String(o[f]);
       const amtChanged = o && !r.isNew && r.amount !== null && !amtBad && amtVal !== o.amount;
       const rowChanged = !r.isNew && !r.deleted && (diff('date') || diff('title') || diff('category') || diff('payment') || amtChanged);
-      if (r.isNew && !r.deleted) added++;
-      else if (r.deleted && !r.isNew) deleted++;
-      else if (rowChanged) changed++;
+      if (r.isNew && !r.deleted) added++; else if (r.deleted && !r.isNew) deleted++; else if (rowChanged) changed++;
       if (!r.deleted && amtVal !== null && !isNaN(amtVal)) { total += amtVal; live++; }
       if (amtBad) anyBad = true;
-      const c = (f, ch) => 'cell' + (f === 'num' ? '' : ' cell-text') + (ch ? ' cell-changed' : '');
-      return {
-        date: r.date, title: r.title, category: r.category, payment: r.payment, amount: amtText, deleted: r.deleted,
+      const c = ch => 'cell cell-text' + (ch ? ' cell-changed' : '');
+      return { date: r.date, title: r.title, category: r.category, payment: r.payment, amount: amtText, deleted: r.deleted,
         rowCls: r.deleted ? 'row-deleted' : (r.isNew ? 'row-new' : ''),
-        dateCls: c('t', diff('date')), titleCls: c('t', diff('title')), catCls: c('t', diff('category')), payCls: c('t', diff('payment')),
+        dateCls: c(diff('date')), titleCls: c(diff('title')), catCls: c(diff('category')), payCls: c(diff('payment')),
         amtCls: 'cell' + (amtChanged ? ' cell-changed' : '') + (amtBad ? ' cell-bad' : ''),
         delGlyph: r.deleted ? '↺' : '✕', delLabel: r.deleted ? 'Undo delete' : 'Delete row',
         onDate: e => setRow(r.id, { date: e.target.value }), onTitle: e => setRow(r.id, { title: e.target.value }),
-        onCat: e => setRow(r.id, { category: e.target.value }), onPay: e => setRow(r.id, { payment: e.target.value }),
-        onAmt: e => setRow(r.id, { amount: e.target.value }),
-        toggleDel: () => r.isNew ? self.setState(s => ({ exp: s.exp.filter(x => x.id !== r.id) })) : setRow(r.id, { deleted: !r.deleted })
-      };
+        onCat: e => setRow(r.id, { category: e.target.value }), onPay: e => setRow(r.id, { payment: e.target.value }), onAmt: e => setRow(r.id, { amount: e.target.value }),
+        toggleDel: () => r.isNew ? self.setState(s => ({ exp: s.exp.filter(x => x.id !== r.id) })) : setRow(r.id, { deleted: !r.deleted }) };
     });
     const expParts = [];
-    if (added) expParts.push(added + (st.lang === 'es' ? ' nueva(s)' : ' added'));
-    if (changed) expParts.push(changed + (st.lang === 'es' ? ' cambiada(s)' : ' changed'));
-    if (deleted) expParts.push(deleted + (st.lang === 'es' ? ' borrada(s)' : ' deleted'));
+    if (added) expParts.push(added + (es ? ' nueva(s)' : ' added'));
+    if (changed) expParts.push(changed + (es ? ' cambiada(s)' : ' changed'));
+    if (deleted) expParts.push(deleted + (es ? ' borrada(s)' : ' deleted'));
     const expChangesLabel = expParts.length ? expParts.join(' · ') + (anyBad ? ' — ' + t.notANumber : '') : t.noChanges;
 
     // recipe
     const rec = st.rec;
     const recSet = patch => self.setState(s => ({ rec: Object.assign({}, s.rec, patch), recEdits: s.recEdits + 1, recBanner: false }));
     const ingRows = rec.ings.map((ir, i) => {
-      const upd = (f, v) => { const ings = rec.ings.map((x, j) => j === i ? Object.assign({}, x, { [f]: v }) : x); recSet({ ings: ings }); };
+      const upd = (f, v) => recSet({ ings: rec.ings.map((x, j) => j === i ? Object.assign({}, x, { [f]: v }) : x) });
       return { ingredient: ir.ingredient, qty: ir.qty, unit: ir.unit, note: ir.note,
         onIng: e => upd('ingredient', e.target.value), onQty: e => upd('qty', e.target.value), onUnit: e => upd('unit', e.target.value), onNote: e => upd('note', e.target.value),
         remove: () => recSet({ ings: rec.ings.filter((x, j) => j !== i) }) };
     });
     const stepRows = rec.steps.map((text, i) => {
       const move = d => { const a = rec.steps.slice(); const j = i + d; if (j < 0 || j >= a.length) return; const tmp = a[i]; a[i] = a[j]; a[j] = tmp; recSet({ steps: a }); };
-      return { n: i + 1, text: text, aria: reg.steps + ' ' + (i + 1),
-        onText: e => { const a = rec.steps.slice(); a[i] = e.target.value; recSet({ steps: a }); },
+      return { n: i + 1, text: text, aria: reg.steps + ' ' + (i + 1), onText: e => { const a = rec.steps.slice(); a[i] = e.target.value; recSet({ steps: a }); },
         up: () => move(-1), down: () => move(1), remove: () => recSet({ steps: rec.steps.filter((x, j) => j !== i) }) };
     });
 
+    const goBack = () => self.setState({ screen: st.back === 'data' ? 'data' : (st.back === 'list' ? 'list' : 'page') });
+
     return {
-      t: t, wf: wf, reg: reg, cmd: st.cmd,
-      langEnCls: 'lang' + (st.lang === 'en' ? ' lang-on' : ''), langEsCls: 'lang' + (st.lang === 'es' ? ' lang-on' : ''),
+      t: t, wf: wf, reg: reg, isP1: isP1, tabs: tabs, pageTitle: this.L(page.title),
+      p0Cls: 'seg' + (isP1 ? '' : ' seg-on'), p1Cls: 'seg' + (isP1 ? ' seg-on' : ''),
+      setP0: () => self.setState({ phase: 'p0', screen: 'page', page: 'home', gear: false, add: null, editing: false }), setP1: () => self.setState({ phase: 'p1' }),
+      langEnCls: 'seg' + (st.lang === 'en' ? ' seg-on' : ''), langEsCls: 'seg' + (st.lang === 'es' ? ' seg-on' : ''),
       setEn: () => self.setState({ lang: 'en' }), setEs: () => self.setState({ lang: 'es' }),
-      onCmd: e => self.setState({ cmd: e.target.value }),
-      sendCommand: e => { e.preventDefault(); if (!st.cmd.trim()) return;
-        self.setState({ cmd: '', screen: 'budget', budgetFrom: 'command', stage: 'working0', edits: {}, showErrors: false, sent: null });
-        later('month', 900); },
-      navMain: [navItem('home', t.home, needs.length), navItem('threads', t.threads)],
-      navPhase1: [navItem('expenses', t.expenses), navItem('recipe', t.recipes), navItem('novia', t.novia)],
-      isHome: st.screen === 'home', isBudget: st.screen === 'budget', isSlackGate: st.screen === 'slack', isThreads: st.screen === 'threads',
-      isExpenses: st.screen === 'expenses', isRecipe: st.screen === 'recipe', isNovia: st.screen === 'novia',
-      goHome: () => self.go('home'),
-      needs: needs, needsCount: needs.length, hasNeeds: needs.length > 0, noNeeds: needs.length === 0, threads: threads,
-      b: b, months: months,
-      onMonth: e => self.setState({ month: e.target.value }),
-      monthContinue: () => { self.setState({ stage: 'working1' }); later('grid', 900); },
-      subtotals: subtotalsLoaded, netLoaded: this.money(netOf(loadedCells)), groups: groups,
+      gearOpen: st.gear, toggleGear: () => self.setState({ gear: !st.gear }), gearItems: gearItems,
+      newPage: () => { const key = 'p' + st.pageSeq; self.setState(s => ({ pages: s.pages.concat([{ key: key, title: { en: 'New page', es: 'Página nueva' }, widgets: [] }]), pageSeq: s.pageSeq + 1, page: key, screen: 'page', editing: true, add: { step: 'type' } })); },
+      isPage: st.screen === 'page', isBudget: st.screen === 'budget', isSlackGate: st.screen === 'slack', isHow: st.screen === 'how', isData: st.screen === 'data',
+      isExpenses: st.screen === 'expenses', isRecipe: st.screen === 'recipe', isList: st.screen === 'list',
+      editing: st.editing && isP1, editLabel: st.editing ? t.doneEditing : t.editPage, toggleEdit: () => self.setState({ editing: !st.editing, add: null }),
+      openAdd: () => self.setState({ add: { step: 'type' } }), closeAdd: () => self.setState({ add: null }),
+      adding: !!add, addPickType: !!add && add.step === 'type', addConfig: !!add && add.step === 'config',
+      addHeading: add && add.step === 'config' ? t.configure + ' — ' + typeLabel[add.type] : t.pickType,
+      widgetTypes: widgetTypes, sourceOptions: needsSource ? sourceOptions : [{ value: '', label: '—' }],
+      addSource: add ? add.source : '', addTitle: add ? add.title : '', addWidth: add ? add.width : 'w3',
+      addSourceDesc: needsSource && add ? srcs[add.source].desc + ' ' + (es ? 'Las cifras vienen de la vista, nunca se calculan en la página.' : 'Figures come from the view, never computed on the page.') : '',
+      onAddSource: e => self.setState({ add: Object.assign({}, add, { source: e.target.value }) }),
+      onAddTitle: e => self.setState({ add: Object.assign({}, add, { title: e.target.value }) }),
+      onAddWidth: e => self.setState({ add: Object.assign({}, add, { width: e.target.value }) }),
+      backToTypes: () => self.setState({ add: { step: 'type' } }),
+      confirmAdd: () => { const a = add; const title = a.title.trim() || (needsSource ? srcs[a.source].label.replace(/ \(.*\)$/, '') : typeLabel[a.type]);
+        self.setPages(ps => { const p = ps.find(x => x.key === page.key); p.widgets.push({ id: 'n' + Date.now(), type: a.type, width: a.width, source: needsSource ? a.source : null, title: title, note: a.type === 'note' ? (es ? 'Escribe aquí.' : 'Write here.') : null, by: 'user', on: es ? 'hoy' : 'today' }); return ps; });
+        self.setState({ add: null }); },
+      pageEmpty: widgets.length === 0 && !add, widgets: widgets,
+      needs: needs, hasNeeds: needs.length > 0, noNeeds: needs.length === 0, convoList: convoList,
+      openAsk: () => self.setState({ drawer: true, convo: null, gear: false }), closeAsk: () => self.setState({ drawer: false }),
+      drawerOpen: st.drawer, inConvo: !!convo, notInConvo: !convo, toList: () => self.setState({ convo: null }), msgs: msgs,
+      askIntro: isP1 ? t.askIntroP1 : t.askIntroP0, askHint: isP1 ? t.askHintP1 : t.askHintP0, askText: st.askText,
+      onAsk: e => self.setState({ askText: e.target.value }),
+      sendAsk: e => { e.preventDefault(); self.ask(st.askText); },
+      flowSteps: flowSteps, domainCards: domainCards, vocab: vocab, dataTables: dataTables, listTitle: listTitle, listRows: listRows,
+      goBack: goBack,
+      months: ['2026-11', '2026-10', '2026-09'].map(k => ({ value: k, label: this.monthLabel(k) })),
+      b: b, onMonth: e => self.setState({ month: e.target.value }),
+      monthContinue: () => { self.setState({ stage: 'working1' }); later('grid', 800); },
+      subtotals: subtotals, netLoaded: this.money(netOf(this.cats.map(c => ({ c: c, value: c.amount })))), groups: groups,
       changesLabel: countLabel(changedCells.length),
       discardBudget: () => self.setState({ edits: {}, showErrors: false }),
-      saveBudget: () => {
-        if (badCells.length) { self.setState({ showErrors: true }); return; }
-        const sentRows = changedCells.map(x => ({ id: x.c.id, name: x.c.name, before: x.c.amount, after: x.value }));
-        self.setState({ stage: 'sending', sent: sentRows, showErrors: false });
-        later('done', 1200, { budgetDone: true });
-      },
-      savedRows: savedRows,
-      resultLine: sent.length === 0 ? (st.lang === 'es' ? 'Nada cambió; no se escribió ninguna fila.' : 'Nothing changed; no rows were written.')
-        : (st.lang === 'es' ? 'Solo se escribieron las filas cambiadas: ' + sent.length + '.' : 'Only the changed rows were written: ' + sent.length + '.'),
-      netNow: this.money(netOf(afterCells)),
-      slackOpen: st.slack === 'open', slackDone: st.slack === 'done',
-      approveSlack: () => self.setState({ slack: 'done' }),
-      categories: cats, payments: payments, expRows: expRows,
-      expTotal: this.money(total), expCountLabel: live + t.rows,
-      expChangesLabel: expChangesLabel,
-      addExpense: () => self.setState(s => ({ expBanner: '', exp: s.exp.concat([{ id: 'n' + Date.now(), date: '2026-10-22', title: '', category: '6', payment: '', amount: '', deleted: false, isNew: true }]) })),
+      saveBudget: () => { if (badCells.length) { self.setState({ showErrors: true }); return; }
+        self.setState({ stage: 'sending', sent: changedCells.map(x => ({ id: x.c.id, name: x.c.name, before: x.c.amount, after: x.value })), showErrors: false });
+        later('done', 1000, { budgetDone: true }); },
+      savedRows: sent.map(x => ({ name: x.name, before: this.money(x.before), after: this.money(x.after) })),
+      resultLine: sent.length === 0 ? (es ? 'Nada cambió; no se escribió ninguna fila.' : 'Nothing changed; no rows were written.') : (es ? 'Solo se escribieron las filas cambiadas: ' + sent.length + '.' : 'Only the changed rows were written: ' + sent.length + '.'),
+      slackOpen: st.slack === 'open', slackDone: st.slack === 'done', approveSlack: () => self.setState({ slack: 'done' }),
+      categories: cats, payments: payments, expRows: expRows, expTotal: this.money(total), expCountLabel: live + t.rows, expChangesLabel: expChangesLabel,
+      addExpense: () => self.setState(s => ({ expBanner: '', exp: s.exp.concat([{ id: 'n' + Date.now(), date: '2026-10-25', title: '', category: '6', payment: '', amount: '', deleted: false, isNew: true }]) })),
       discardExp: () => self.setState({ exp: self.cloneExp(), expBanner: '' }),
       saveExp: () => { if (anyBad || !expParts.length) return;
-        self.expSeed = st.exp.filter(r => !r.deleted).map((r, i) => {
-          const o = seedById[r.id];
-          const v = r.amount === null ? o.amount : self.parse(r.amount);
-          return { id: r.isNew ? 400 + i : r.id, date: r.date, title: r.title, category: r.category, payment: r.payment, amount: v };
-        });
+        self.expSeed = st.exp.filter(r => !r.deleted).map((r, i) => { const o = seedById[r.id]; const v = r.amount === null ? o.amount : self.parse(r.amount); return { id: r.isNew ? 400 + i : r.id, date: r.date, title: r.title, category: r.category, payment: r.payment, amount: v }; });
         self.setState({ exp: self.cloneExp(), expBanner: expChangesLabel }); },
-      expBanner: !!st.expBanner, expBannerText: (st.lang === 'es' ? 'Guardado en una transacción: ' : 'Saved in one transaction: ') + st.expBanner,
+      expBanner: !!st.expBanner, expBannerText: (es ? 'Guardado en una transacción: ' : 'Saved in one transaction: ') + st.expBanner,
       rec: rec, ingRows: ingRows, stepRows: stepRows,
-      ingredientOptions: ['Potatoes', 'Eggs', 'Onion', 'Olive oil', 'Salt', 'Garlic', 'Tomatoes', 'Flour'],
-      units: ['g', 'kg', 'ml', 'l', 'unit', 'tsp', 'tbsp'],
-      onRecName: e => recSet({ name: e.target.value }), onRecServ: e => recSet({ servings: e.target.value }),
-      onRecPrep: e => recSet({ prep: e.target.value }), onRecCook: e => recSet({ cook: e.target.value }),
-      addIng: () => recSet({ ings: rec.ings.concat([{ ingredient: 'Garlic', qty: '', unit: 'unit', note: '' }]) }),
-      addStep: () => recSet({ steps: rec.steps.concat(['']) }),
-      recChangesLabel: st.recEdits > 0 ? (st.lang === 'es' ? 'Cambios sin guardar' : 'Unsaved changes') : t.noChanges,
+      ingredientOptions: ['Potatoes', 'Eggs', 'Onion', 'Olive oil', 'Salt', 'Garlic'], units: ['g', 'kg', 'ml', 'l', 'unit', 'tsp', 'tbsp'],
+      onRecName: e => recSet({ name: e.target.value }), onRecServ: e => recSet({ servings: e.target.value }), onRecPrep: e => recSet({ prep: e.target.value }), onRecCook: e => recSet({ cook: e.target.value }),
+      addIng: () => recSet({ ings: rec.ings.concat([{ ingredient: 'Garlic', qty: '', unit: 'unit', note: '' }]) }), addStep: () => recSet({ steps: rec.steps.concat(['']) }),
+      recChangesLabel: st.recEdits > 0 ? (es ? 'Cambios sin guardar' : 'Unsaved changes') : t.noChanges,
       discardRec: () => self.setState({ rec: self.cloneRec(), recEdits: 0, recBanner: false }),
       saveRec: () => { if (!st.recEdits) return; self.recSeed = { name: rec.name, servings: rec.servings, prep: rec.prep, cook: rec.cook, ings: rec.ings.map(i => Object.assign({}, i)), steps: rec.steps.slice() }; self.setState({ recEdits: 0, recBanner: true }); },
       recBanner: st.recBanner
     };
+  }
+  resolveProposal(cid, i, how) {
+    this.setState(s => ({ convos: s.convos.map(c => c.id !== cid ? c : Object.assign({}, c, { msgs: c.msgs.map((m, j) => j === i ? Object.assign({}, m, { resolved: how }) : m) })) }));
+  }
+  ask(text) {
+    const q = String(text || '').trim();
+    if (!q) return;
+    const isP1 = this.state.phase === 'p1';
+    const id = 'c' + Date.now();
+    const lower = q.toLowerCase();
+    const budget = /budget|presupuesto/.test(lower);
+    const page = /page|página|pagina|home|inicio|widget/.test(lower);
+    let who = 'none';
+    const msgs = [{ kind: 'user', text: q }, { kind: 'working' }];
+    this.setState(s => ({ askText: '', convo: id, convos: [{ id: id, text: q, who: 'none', when: this.state.lang === 'es' ? 'ahora' : 'now', msgs: msgs }].concat(s.convos) }));
+    let reply;
+    if (budget) { who = 'wf'; reply = { kind: 'reply', who: 'wf', wfKey: 'editBudget', text: this.dict().runStarted + ' ' + this.dict().budgetWaiting, open: 'budget' }; }
+    else if (isP1 && page) { who = 'novia'; reply = { kind: 'proposal', who: 'novia', textKey: 'noviaPage' }; }
+    else if (isP1) { who = 'novia'; reply = { kind: 'reply', who: 'novia', textKey: 'noviaGeneric' }; }
+    else { reply = { kind: 'notice', textKey: 'notUnderstood' }; }
+    setTimeout(() => {
+      this.setState(s => ({ budgetDone: budget ? false : s.budgetDone, convos: s.convos.map(c => c.id !== id ? c : Object.assign({}, c, { who: who, msgs: [msgs[0], reply] })) }));
+    }, 900);
   }
 }
 </script>
