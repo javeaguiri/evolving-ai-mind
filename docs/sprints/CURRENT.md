@@ -109,8 +109,15 @@ all fixed by `npm audit fix` without a major bump. **Proposed, awaiting Javear's
 `ops/node-oct-2026` branch — update Node on this box, `npm audit fix`, unit tests, log
 `process.version` at cold start, deploy all four functions, confirm ≥ 22.23.4 from the logs.
 
-**Next session starts here:** the Node patch (urgent — an exploited RCE), on Javear's go. Then
-Javear's verdict on v0.3's navigation → mock-up v0.3 → AC0 approval → close Sprint 14 → scope
+**Patched and deployed the same session (Javear's go), branch `ops/node-oct-2026` (`3529a1c`):**
+build host on Node 22.23.4 (dnf); `npm audit fix` (axios 1.21.0, form-data 4.0.6, fast-uri 3.1.9,
+follow-redirects 1.16.2, uuid 11.1.1) — production audit 0 vulnerabilities; a `cold start { node }`
+log in `lambda-utils.mjs`; 1185 tests pass; all four functions redeployed onto runtime
+`nodejs:22.mainline.v158`, and `serv`'s cold start logs **`v22.23.4`** (the four share one runtime
+ARN). Left: esbuild's low advisory (Windows dev server only; the fix is a minor-version bump);
+`ops/node-oct-2026` awaits merge — prod now runs it.
+
+**Next session starts here:** Javear's verdict on v0.3's navigation → mock-up v0.3 → AC0 approval → close Sprint 14 → scope
 Sprint 15 (Novia).
 
 ### Session 5 — 2026-10-25 — Novia tests her own work
