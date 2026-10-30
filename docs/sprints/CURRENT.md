@@ -1,6 +1,7 @@
 # Sprint 14 — A web front end, Phase 0
 
 **Status: ACTIVE — started 2026-10-22 (Javear). Scope confirmed with two changes: R1 to the backlog, encryption at rest in.**
+**Narrowed 2026-10-30 (Javear): Sprint 14 finishes as a design sprint — AC0 is its deliverable. Sprint 15 is Novia: cost (the Anthropic API directly) and testing her own work end to end.**
 Read `docs/sprints/sprint-13.md` §Retro and `docs/arch-home-brain.md` (§3, §4.4, §4.6, §4.7, §4.10) first.
 
 **Branch:** `sprint/14-web-phase-0`
@@ -45,16 +46,16 @@ state changes, not at close.**
 
 | # | Status | Criterion | Scope | Threshold |
 |---|---|---|---|---|
-| **AC0** | 🟡 §4 rewritten and mock-up rebuilt as v0.2 (2026-10-25: the household's pages of widgets, one Ask, ⚙ for the machinery) — awaiting Javear's review | `docs/arch-web-app.md` covers every point in scope item 0, with wireframes, and Javear approves it before Phase 0 code starts | [0](#scope) | Approval |
-| **AC1** | ⬜ | A run started from the web site suspends at a gate, the gate appears on the site, and answering it there resumes the run to completion — no Slack involved | [1](#scope) | Binary, live |
-| **AC2** | ⬜ | `manage_budget` edits all its amounts in one editable grid on the site, grouped by budget type, and one save writes **only the changed rows**, as numbers, in the household's currency | [2](#scope), [3](#scope) | Binary, live |
-| **AC3** | ⬜ | The site requires sign-in, and no request from the browser carries the internal API key | [4](#scope) | Binary |
-| **AC4** | ⬜ | Slack still works unchanged for a run started from Slack | [1](#scope) | Binary, from Slack |
+| **AC0** | 🟡 v0.3 of §4 written 2026-10-30 on Javear's review (☰ menu with Your pages / Workflows / Your brain apart, labelled runs, Novia separate, Settings behind the brain-and-gear icon); mock-up still v0.2; Javear still considering the navigation | `docs/arch-web-app.md` covers every point in scope item 0, with wireframes, and Javear approves it before Phase 0 code starts | [0](#scope) | Approval |
+| ~~**AC1**~~ | ~~⬜~~ — **moved out: Sprint 14 is design only (Javear, 2026-10-30)**; to the web build sprint | A run started from the web site suspends at a gate, the gate appears on the site, and answering it there resumes the run to completion — no Slack involved | [1](#scope) | Binary, live |
+| ~~**AC2**~~ | ~~⬜~~ — **moved out with AC1 (Javear, 2026-10-30)** | `manage_budget` edits all its amounts in one editable grid on the site, grouped by budget type, and one save writes **only the changed rows**, as numbers, in the household's currency | [2](#scope), [3](#scope) | Binary, live |
+| ~~**AC3**~~ | ~~⬜~~ — **moved out with AC1 (Javear, 2026-10-30)** | The site requires sign-in, and no request from the browser carries the internal API key | [4](#scope) | Binary |
+| ~~**AC4**~~ | ~~⬜~~ — **moved out with AC1 (Javear, 2026-10-30)** | Slack still works unchanged for a run started from Slack | [1](#scope) | Binary, from Slack |
 | ~~**AC5**~~ | ~~⬜~~ | ~~R1 lands~~ — **moved to `docs/backlog.md` with R1 at "start sprint" (Javear, 2026-10-22)** | ~~5~~ | — |
-| **AC6** | ⬜ | The prod database is encrypted at rest: `StorageEncrypted: true` on the live instance, `template.yaml` matches the live instance, every table's row count unchanged across the cut, and the Lambdas reach it with no SSM change or with the change made through a version-pinned deploy | [6](#scope) | Binary, verified live |
-| **AC7** | 🟡 (a) and (b) deployed 2026-10-24 — awaiting the proc logs from Javear's next Novia session; (c) measured, not fixable on the gateway | A Novia round that follows an approved workflow fix, or a prose reply, reads its prefix back from cache rather than rewriting it; the logged `cacheRead` on the round's first call covers the transcript, not only the 17,270-token tools + instructions block | [7](#scope) | Binary, from the proc logs on a live session |
+| ~~**AC6**~~ | ~~⬜~~ — **moved out: design-only sprint (Javear, 2026-10-30)**; placed at sprint close | The prod database is encrypted at rest: `StorageEncrypted: true` on the live instance, `template.yaml` matches the live instance, every table's row count unchanged across the cut, and the Lambdas reach it with no SSM change or with the change made through a version-pinned deploy | [6](#scope) | Binary, verified live |
+| ~~**AC7**~~ | ~~🟡~~ (a) and (b) deployed 2026-10-24; (c) not fixable on the gateway — **moved to Sprint 15 with Novia's cost work (Javear, 2026-10-30)**, where the Anthropic API's 1h TTL answers (c) | A Novia round that follows an approved workflow fix, or a prose reply, reads its prefix back from cache rather than rewriting it; the logged `cacheRead` on the round's first call covers the transcript, not only the 17,270-token tools + instructions block | [7](#scope) | Binary, from the proc logs on a live session |
 | ~~**AC8**~~ | ~~⬜~~ | ~~Novia reads a live run with `read_workflow_run`~~ — **moved to `docs/backlog.md` with scope item 8 (Javear, 2026-10-25)** | ~~8~~ | — |
-| **AC9** | ⬜ | Novia answers a gate in a run she started and the run resumes through the same `POST /gates/{runId}/responses` path the web uses; an answer to a run she did not start, or to a gate guarding her own gated write, is refused | [9](#scope), [1](#scope) | Binary, live |
+| ~~**AC9**~~ | ~~⬜~~ — **moved to Sprint 15, Novia testing her own work (Javear, 2026-10-30)** | Novia answers a gate in a run she started and the run resumes through the same `POST /gates/{runId}/responses` path the web uses; an answer to a run she did not start, or to a gate guarding her own gated write, is refused | [9](#scope), [1](#scope) | Binary, live |
 
 ## Carried from Sprint 13, not scoped here
 
@@ -79,6 +80,38 @@ and these ACs are right.
 | Removing the Slack leaks in `arch-home-brain.md` §3.2 | Phase 1, except where Phase 0 needs one gone |
 
 ## Session Notes
+
+### Session 6 — 2026-10-30 — design-only sprint; navigation v0.3; Node's October CVEs
+
+**Javear's review of v0.2:** one Ask for workflows and Novia is not clear — keep them apart;
+workflows are grouped by workflow or get a widget each, and every run is **labelled** (*Mercadona ·
+17 Oct*, *Burger King · 12 Oct*) so receipts are picked from a list; a first-run view says *"You
+don't have any process receipts runs — they will be shown here."* Page tabs and Settings are
+different things: tabs preset or user-made; Settings is profile, security, language, date display,
+wallpaper. Then: preset pages, custom pages, menu items and settings were mixed — he will step back
+and think; **v0.3 written as the other pass he asked for** (`arch-web-app.md` §4, §2.4 run labels,
+§3.1 `POST /runs`, `GET /runs`, `GET /workflows`; `arch-data.md` §4.3.8 `PGC_WorkflowRun.label`,
+`display.run_label`). The mock-up is not yet redrawn.
+
+**Decided (Javear): Sprint 14 finishes as a design sprint; Sprint 15 fixes Novia** — her cost is
+affecting his ability to use her: Novia on the Anthropic API directly (backlog's top item), and her
+testing her own work end to end (`answer_gate`, `read_workflow_run`, the wake, the test-data
+policy). AC1–AC4, AC6 moved out; AC7, AC9 to Sprint 15.
+
+**Node.js — the October 21 security release ("Black October"), not yet acted on.** 10 CVEs on
+22.x/24.x/26.x, fixed in **22.23.4**; CVE-2026-111497 (bundled Brotli decoder, out-of-bounds write,
+RCE via `fetch()` decompression) is on CISA's KEV list since Oct 27, and we `fetch()` the gateway
+and Slack. This box runs `v22.22.2` (unpatched). Lambdas are `nodejs22.x` in Auto runtime mode:
+`proc` on `nodejs:22.mainline.v154` (deployed 10-24), `serv`, `slackbot`, `slack-callback-listener`
+on `v122` — the runtime label does not give the Node version. `npm audit --omit=dev`: 3 high
+(`axios` 1.13.6, `form-data` 4.0.5, `fast-uri` 3.1.0), 2 moderate (`follow-redirects`, `uuid`),
+all fixed by `npm audit fix` without a major bump. **Proposed, awaiting Javear's go:** an
+`ops/node-oct-2026` branch — update Node on this box, `npm audit fix`, unit tests, log
+`process.version` at cold start, deploy all four functions, confirm ≥ 22.23.4 from the logs.
+
+**Next session starts here:** the Node patch (urgent — an exploited RCE), on Javear's go. Then
+Javear's verdict on v0.3's navigation → mock-up v0.3 → AC0 approval → close Sprint 14 → scope
+Sprint 15 (Novia).
 
 ### Session 5 — 2026-10-25 — Novia tests her own work
 

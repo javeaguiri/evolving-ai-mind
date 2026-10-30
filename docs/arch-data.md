@@ -772,7 +772,7 @@ the browser through `GET /inbox?after=<id>` (`arch-web-app.md` §2.1, §7.2).
 | id | bigserial PK | The inbox cursor — `GET /inbox?after=<id>` returns rows past it |
 | provider | text | `slack`, `web` |
 | channel | text | Slack channel, or the web user's Cognito `sub` |
-| thread_id | text | Slack thread ts, or the web thread id the app generated |
+| thread_id | text | Slack thread ts, or for the web the run's id |
 | workflow_run_id | integer | Nullable, **no FK** — runs are purged independently of the inbox |
 | message_type | text | `HUMAN_GATE`, `HUMAN_NOTIFICATION`, `WORKFLOW_ERROR` |
 | payload | jsonb | The message exactly as enqueued — markdown text, or `gate_type` + `dialog` |
@@ -787,7 +787,7 @@ nothing; its gates reach the web's *Needs you* from `PGC_WorkflowRun`, not from 
 
 The household's pages (`arch-web-app.md` §2.3, §4.2): one row per page version, the latest drawn.
 An evolving artifact — written from the widget menu or by Novia's gated `propose_page_change`, and
-seeded with a generic Home only (`needs_you`, `conversations`), never a domain-specific page.
+seeded with a generic Home only (`needs_you`), never a domain-specific page.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -795,7 +795,7 @@ seeded with a generic Home only (`needs_you`, `conversations`), never a domain-s
 | page_key | text | Stable across versions; `UNIQUE (page_key, version)` |
 | version | integer | |
 | title | jsonb | A string or a language map |
-| order | integer | Position in the page tabs; Home is `0` |
+| order | integer | Position in the web menu's *Your pages*; Home is `0` |
 | widgets | jsonb | Ordered `[{ id, type, width, title?, config }]`, each `config` validated against its widget type's schema on write |
 | created_by | text | `seed`, `user`, `novia` |
 | created_at | timestamptz | |
@@ -826,9 +826,10 @@ are proposed and settled at the Phase 1 build.
 
 | Table | Change | Phase | Design |
 |---|---|---|---|
+| `PGC_WorkflowRun` | `label` text, nullable — the run's name in lists, resolved from its workflow's `display.run_label` once every token resolves, then not again | 0 | `arch-web-app.md` §2.4 |
 | `PGC_WorkflowRun` | No column. A `human_gate` frame in `stack` gains `gate_id` (UUID), set when the frame is pushed; `resumeGate` refuses an answer whose `gate_id` differs from the top frame's. An answer carrying none (a Slack button posted before the change) is accepted as today | 0 | `arch-web-app.md` §2.2 |
 | `PGC_Schema`, `PGC_EntitySchema` | `display` jsonb, nullable — how a table or entity is shown: `view`, `label`, `columns` (order, label, hidden, width), `format`, `total`, `soft_delete`, `order_by`, `default_filter`. Every key optional; absent means the default | 1 | `arch-web-app.md` §6.3 |
-| `PGC_DomainHelp`, `PGC_Workflow` | `display` jsonb, nullable — navigation: `label`, `description`, `icon`, `order`, `menu` (`false` keeps a workflow out of menus). `label` and `description` may be language maps | 1 | `arch-web-app.md` §3.2, §6.3, §13 |
+| `PGC_DomainHelp`, `PGC_Workflow` | `display` jsonb, nullable — navigation: `label`, `description`, `icon`, `order`, `menu` (`false` keeps a workflow out of menus); on a workflow also `run_label`. `label` and `description` may be language maps | 0 (`label`, `menu`, `run_label`), 1 | `arch-web-app.md` §3.2, §6.3, §13 |
 | `PGC_Schema.columns` | Each ColumnDefinition gains `editable` (boolean) for **direct** edits; absent means read-only. System-maintained columns (primary key, timestamps, embeddings, workflow-resolved foreign keys) are never editable | 1 | `arch-home-brain.md` §4.8 |
 | `PGC_Schema` | Whether direct add and direct delete are allowed, per table. Distinct from `PGC_TableMap.allow_insert` / `allow_delete`, which gate SERV for every caller including workflows; the edit policy governs the direct path only. Where on the row it lives is settled at the Phase 1 build | 1 | `arch-home-brain.md` §4.8 |
 
