@@ -118,6 +118,8 @@ Small and enumerable. Each becomes a provider-neutral name:
 
 ### 4.2 Layout
 
+The buildable shell — menu, pages, workflows and their runs, Novia, Settings — is `docs/arch-web-app.md` §4; the sketch below is the original direction.
+
 Desktop:
 
 ```
