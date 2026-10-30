@@ -8,6 +8,9 @@
 
 import { randomUUID } from 'crypto';
 
+// Once per cold start: the Node patch level the managed runtime actually runs.
+console.info('cold start', { node: process.version });
+
 /**
  * Parse an API Gateway v1 proxy event into a normalised req shape.
  * All HTTP handlers call this first — it is the single place that
