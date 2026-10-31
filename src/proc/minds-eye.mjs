@@ -2394,8 +2394,11 @@ async function assembleContext() {
     getRows('PGC_Memory',   [], [{ column: 'priority', direction: 'asc' }, { column: 'created_at', direction: 'desc' }, { column: 'id', direction: 'desc' }], MEMORY_CONTEXT_LIMIT),
   ]);
 
+  // No version: every approved propose_workflow_fix bumps one, and a changed line here
+  // rewrites the whole cached prefix — 4 rewrites of a ~200K transcript on 2026-10-24, $4.11.
+  // The version Novia patches against comes from read_workflow and nextBaseVersion, not here.
   const workflowSummary = (workflowsResp.rows ?? [])
-    .map(w => `- ${w.name}${w.domain ? ` (domain: ${w.domain})` : ''} v${w.version}`)
+    .map(w => `- ${w.name}${w.domain ? ` (domain: ${w.domain})` : ''}`)
     .join('\n');
   const layer1Context = `REGISTERED WORKFLOWS:\n${workflowSummary || '(none)'}`;
 
@@ -2587,10 +2590,24 @@ export function toInputItems(workingHistory = []) {
         pending = { callId: respondId, name: 'respond', kind: 'respond' };
         return;
       }
-      // Entries written before `items` existed, and prose replies that never called respond,
-      // keep the assistant rendering. reasoning and advisory are deliberately dropped:
-      // reasoning is per-turn scratch, and the advisory was already delivered to the user
-      // when the round ended.
+      // A respond with no gateway call to replay — a prose reply that never called respond,
+      // or an entry written before `items` existed — is rebuilt as the respond call it stands
+      // for, so the user's follow-up closes it rather than arriving as a user turn. Rendered as
+      // an assistant message instead, every round after one read back only tools + instructions:
+      // 4 of 4 on session 1261, against a full prefix read after a real respond call.
+      // reasoning and advisory are deliberately dropped: reasoning is per-turn scratch, and the
+      // advisory was already delivered to the user when the round ended.
+      if (parsed?.action === 'respond') {
+        items.push({
+          type:      'function_call',
+          call_id:   callId,
+          name:      'respond',
+          arguments: JSON.stringify({ message: parsed.message ?? '' }),
+        });
+        pending = { callId, name: 'respond', kind: 'respond' };
+        return;
+      }
+      // Content that is not a respond entry at all keeps the assistant rendering.
       items.push({ role: 'assistant', content: parsed?.message ?? String(entry?.content ?? '') });
       return;
     }

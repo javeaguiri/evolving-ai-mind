@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gate types and states</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#0D6A6A}a:hover{color:#094F4F}
+button{font:inherit}
+.btn{display:inline-flex;align-items:center;min-height:40px;padding:0 16px;border-radius:8px;border:1px solid #C9CFD6;background:#FFFFFF;color:#15191E;font-weight:500;font-size:14px}
+.btn-primary{background:#0D6A6A;border-color:#0D6A6A;color:#FFFFFF}
+.btn-danger{border-color:#B42318;color:#B42318}
+.field{width:100%;box-sizing:border-box;min-height:40px;padding:8px 10px;border:1px solid #C9CFD6;border-radius:8px;background:#FFFFFF;font:inherit;font-size:14px}
+.t{width:100%;border-collapse:collapse;font-size:14px}
+.t th{text-align:left;font-weight:600;color:#3A424C;padding:8px 10px;background:#F8F9FA;border-bottom:1px solid #DCE0E5}
+.t td{padding:8px 10px;border-bottom:1px solid #EDF0F2}
+.lbl{font-family:'IBM Plex Mono',monospace;font-size:12px;color:#586170;letter-spacing:.02em}
+</style>
+</helmet>
+<div style="width: 1280px; height: 1480px; box-sizing: border-box; padding: 48px; background: #F4F5F7; color: #15191E; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 15px; line-height: 1.5; display: flex; flex-direction: column; gap: 28px">
+<div>
+<h1 style="margin: 0; font-size: 28px; font-weight: 600">Every gate type, rendered from the same dialog Slack receives</h1>
+<p style="margin: 4px 0 0; color: #586170">One component per gate type; no domain words in the app. Sample content is invented.</p>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px">
+
+<section style="padding: 18px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 12px">
+<div class="lbl">list_selection</div>
+<div style="font-weight: 600">Pick an expense to edit</div>
+<table class="t"><thead><tr><th>Date</th><th>Title</th><th style="text-align: right">Amount</th><th></th></tr></thead>
+<tbody>
+<tr><td>2 Oct</td><td>Supermarket</td><td style="text-align: right; font-family: 'IBM Plex Mono', monospace">€84.35</td><td><button class="btn" style="min-height: 32px; padding: 0 10px">Edit</button></td></tr>
+<tr><td>3 Oct</td><td>Electricity bill</td><td style="text-align: right; font-family: 'IBM Plex Mono', monospace">€61.20</td><td><button class="btn" style="min-height: 32px; padding: 0 10px">Edit</button></td></tr>
+<tr><td>5 Oct</td><td>Pizza night</td><td style="text-align: right; font-family: 'IBM Plex Mono', monospace">€32.00</td><td><button class="btn" style="min-height: 32px; padding: 0 10px">Edit</button></td></tr>
+</tbody></table>
+<div style="display: flex; gap: 8px"><button class="btn btn-primary">Add new</button><button class="btn">Done</button></div>
+<div style="font-size: 13px; color: #586170">The row button replaces typing an ID.</div>
+</section>
+
+<section style="padding: 18px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 12px">
+<div class="lbl">choice</div>
+<div style="font-weight: 600">How should duplicates be handled?</div>
+<fieldset style="margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 10px">
+<legend style="position: absolute; left: -9999px">Options</legend>
+<label style="display: flex; gap: 10px; align-items: flex-start"><input type="radio" name="ch" checked style="margin-top: 4px"><span><strong>Merge</strong><br><span style="font-size: 13px; color: #586170">Add quantities, keep one name</span></span></label>
+<label style="display: flex; gap: 10px; align-items: flex-start"><input type="radio" name="ch" style="margin-top: 4px"><span><strong>Keep both</strong><br><span style="font-size: 13px; color: #586170">Record as an alias only</span></span></label>
+<label style="display: flex; gap: 10px; align-items: flex-start"><input type="radio" name="ch" style="margin-top: 4px"><span><strong>Skip</strong><br><span style="font-size: 13px; color: #586170">Decide later</span></span></label>
+</fieldset>
+<div style="display: flex; gap: 8px"><button class="btn btn-primary">Continue</button><button class="btn">Cancel</button></div>
+</section>
+
+<section style="padding: 18px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 12px">
+<div class="lbl">confirm</div>
+<div style="font-weight: 600">Delete “Pizza night” (€32.00)?</div>
+<div style="font-size: 14px; color: #3A424C">It is hidden from lists and totals; it can be restored.</div>
+<div style="display: flex; gap: 8px"><button class="btn btn-danger">Delete</button><button class="btn">Cancel</button></div>
+</section>
+
+<section style="padding: 18px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 12px">
+<div class="lbl">text_input</div>
+<div style="font-weight: 600">Paste the receipt text</div>
+<label for="ti" style="font-size: 13px; font-weight: 500; color: #3A424C">Receipt</label>
+<textarea id="ti" class="field" rows="4" placeholder="Paste or type…"></textarea>
+<div style="display: flex; gap: 8px"><button class="btn btn-primary">Submit</button><button class="btn">Cancel</button></div>
+</section>
+
+<section style="padding: 18px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 12px">
+<div class="lbl">review_object</div>
+<div style="font-weight: 600">Create this domain?</div>
+<table class="t"><tbody>
+<tr><th scope="row" style="width: 40%">Name</th><td>Garden</td></tr>
+<tr><th scope="row">Tables</th><td>Plants, Waterings</td></tr>
+<tr><th scope="row">Plants › columns</th><td>name, location, sown_on</td></tr>
+</tbody></table>
+<details style="font-size: 14px"><summary style="cursor: pointer; color: #0D6A6A; font-weight: 500">Details</summary><p style="margin: 6px 0 0; color: #3A424C">A reveal is a closed disclosure.</p></details>
+<div style="display: flex; gap: 8px"><button class="btn btn-primary">Confirm</button><button class="btn">Cancel</button></div>
+</section>
+
+<section style="padding: 18px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 12px">
+<div class="lbl">form — no grid hints</div>
+<div style="font-weight: 600">Edit expense</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+<div><label for="f1" style="font-size: 13px; font-weight: 500; color: #3A424C">Date</label><input id="f1" type="date" class="field" value="2026-10-05"></div>
+<div><label for="f2" style="font-size: 13px; font-weight: 500; color: #3A424C">Amount</label><input id="f2" class="field" inputmode="decimal" value="32,00" style="text-align: right"></div>
+<div style="grid-column: 1 / -1"><label for="f3" style="font-size: 13px; font-weight: 500; color: #3A424C">Title</label><input id="f3" class="field" value="Pizza night"></div>
+<div><label for="f4" style="font-size: 13px; font-weight: 500; color: #3A424C">Category</label><select id="f4" class="field"><option>Dining out</option></select></div>
+<div><label for="f5" style="font-size: 13px; font-weight: 500; color: #3A424C">Payment</label><select id="f5" class="field"><option>Cash</option></select></div>
+</div>
+<div style="display: flex; gap: 8px"><button class="btn btn-primary">Save</button><button class="btn">Cancel</button></div>
+</section>
+
+</div>
+
+<div>
+<h2 style="margin: 0 0 12px; font-size: 22px; font-weight: 600">States</h2>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px">
+
+<section style="padding: 18px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 10px">
+<div class="lbl">loading</div>
+<div style="height: 14px; width: 60%; border-radius: 6px; background: #E8EBEF"></div>
+<div style="height: 14px; width: 85%; border-radius: 6px; background: #E8EBEF"></div>
+<div style="height: 40px; width: 40%; border-radius: 8px; background: #E8EBEF"></div>
+</section>
+
+<section style="padding: 18px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 10px">
+<div class="lbl">empty</div>
+<div style="padding: 18px; border: 1px dashed #C9CFD6; border-radius: 10px; color: #586170">Nothing is waiting for you.</div>
+</section>
+
+<section style="padding: 18px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 10px">
+<div class="lbl">answer sent</div>
+<div style="font-size: 14px; color: #586170">✓ You chose Save · 2 changes</div>
+<div style="font-size: 14px; color: #586170">Working…</div>
+</section>
+
+<section style="padding: 18px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 10px">
+<div class="lbl">409 gate_moved</div>
+<div role="status" style="padding: 12px 14px; border-radius: 8px; background: #F1E9F8; color: #3F1D5E; font-size: 14px">This was answered elsewhere. Showing what the run is waiting on now.</div>
+</section>
+
+<section style="padding: 18px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 10px">
+<div class="lbl">422 invalid_fields</div>
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 10px"><span>Groceries</span><input aria-label="Amount — Groceries" value="5x0" style="width: 120px; min-height: 36px; padding: 0 8px; border: 1px solid #B42318; border-radius: 6px; background: #FDECEA; text-align: right; font-family: 'IBM Plex Mono', monospace"></div>
+<div role="alert" style="font-size: 13px; color: #8C1D13">Not a number. Nothing was sent.</div>
+</section>
+
+<section style="padding: 18px; background: #FFFFFF; border: 1px solid #DCE0E5; border-radius: 12px; display: flex; flex-direction: column; gap: 10px">
+<div class="lbl">offline · workflow error</div>
+<div role="status" style="padding: 10px 14px; border-radius: 8px; background: #FFF0CC; color: #5A3E00; font-size: 14px">Can’t reach the home brain — retrying. Your typing is kept.</div>
+<div role="alert" style="padding: 10px 14px; border-radius: 8px; background: #FDECEA; color: #8C1D13; font-size: 14px">The workflow stopped at step 16: the save was refused. Run 931 — ask Novia about it.</div>
+</section>
+
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":1480}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
