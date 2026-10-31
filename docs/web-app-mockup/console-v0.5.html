@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Home Brain mock-up v0.5</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* Layout: Pages, Domains and Activity menus across the top bar; Novia on the left, collapsible; the page of panels beside her; a mock toolbar above it. */
+:root{
+  --ink:#15191E; --muted:#586170; --line:#DCE0E5; --soft:#EEF1F4; --paper:#FFFFFF; --ground:#F4F5F7;
+  --accent:#0D6A6A; --accent-ink:#0A5555; --accent-soft:#E3F1F0;
+  --warn:#9A3412; --warn-soft:#FFF3C4; --bad:#B42318; --bad-soft:#FDECEA; --slack:#4A154B;
+  --sans:'IBM Plex Sans',system-ui,-apple-system,'Segoe UI',sans-serif; --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:#D9DDE2;color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.45;display:flex;flex-direction:column}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+h1,h2,h3{text-wrap:balance;margin:0}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* mock toolbar — not part of the product */
+.mockbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;padding:8px 16px;background:#1F2429;color:#E6E9EC;font-size:13px}
+.mockbar b{font-weight:600}
+.seg{display:inline-flex;border:1px solid #4A525B;border-radius:8px;overflow:hidden}
+.seg button{border:0;background:transparent;color:#C9CFD6;padding:4px 10px}
+.seg button[aria-pressed="true"]{background:#E6E9EC;color:#15191E;font-weight:600}
+.mockbar .hint{color:#9AA3AD}
+.mockbar a{color:#9FD8D3}
+
+.stage{flex:1 1 auto;min-height:0;display:flex;justify-content:center;align-items:stretch;padding:0}
+.app{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;background:var(--ground);position:relative;overflow:hidden}
+.stage.is-phone{padding:16px;align-items:center}
+.stage.is-phone .app{flex:0 0 390px;height:min(844px,100%);border-radius:28px;border:8px solid #15191E;box-shadow:0 10px 40px rgba(0,0,0,.25)}
+
+/* header */
+.top{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--paper);border-bottom:1px solid var(--line)}
+.homeb{width:40px;height:40px;border-radius:10px;border:0;background:transparent;display:inline-flex;align-items:center;justify-content:center}
+.homeb:hover{background:var(--soft)}
+.homeb[aria-current="page"]{background:var(--accent-soft)}
+.crumb{display:none;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.menus{display:flex;gap:2px}
+.menuwrap{position:relative}
+.mbtn{border:0;background:transparent;padding:8px 10px;border-radius:8px;font-weight:500;color:#2A3038;white-space:nowrap}
+.mbtn:hover,.menuwrap.open .mbtn{background:var(--soft)}
+.mbtn.cur{color:var(--accent-ink);font-weight:600;box-shadow:inset 0 -3px 0 var(--accent)}
+.mbtn .car{font-size:10px;margin-left:4px;color:var(--muted)}
+.dd{display:none;position:absolute;top:100%;left:0;min-width:230px;max-height:320px;overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.14);padding:6px;z-index:15}
+.menuwrap:hover .dd,.menuwrap.open .dd{display:block}
+.top.hush .menuwrap:not(.open):hover .dd{display:none}
+.dd button{display:flex;width:100%;align-items:center;gap:8px;border:0;background:transparent;text-align:left;padding:7px 10px;border-radius:8px;color:#2A3038}
+.dd button:hover{background:var(--soft)}
+.dd button[aria-current="page"]{background:var(--accent-soft);color:var(--accent-ink);font-weight:600}
+.dd hr{border:0;border-top:1px solid var(--line);margin:4px 2px}
+.dd .add{color:var(--accent-ink)}
+.dd .foot{padding:4px 10px}
+.cmd{flex:1 1 auto;max-width:420px;margin-left:auto;position:relative}
+.cmd input{width:100%;min-height:38px;padding:6px 12px 6px 34px;border:1px solid #C9CFD6;border-radius:10px;background:var(--ground)}
+.cmd svg{position:absolute;left:10px;top:10px}
+.cmd .tip{position:absolute;top:42px;left:0;right:0;z-index:5}
+.icons{display:flex;gap:6px;margin-left:auto}
+.cmd + .icons{margin-left:0}
+.ib{position:relative;width:40px;height:40px;border-radius:999px;border:1px solid #C9CFD6;background:var(--paper);display:inline-flex;align-items:center;justify-content:center;color:#3A424C}
+.ib:hover{background:var(--soft)}
+.ib .badge{position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--bad);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center}
+
+.body{flex:1 1 auto;min-height:0;display:flex}
+.main{flex:1 1 auto;min-width:0;overflow:auto;padding:18px 20px 40px}
+.pagehead{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+.pagehead h1{font-size:20px;font-weight:600}
+.pagehead .sub{color:var(--muted)}
+.pagehead .acts{margin-left:auto;display:flex;gap:8px}
+
+.grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:16px;align-items:start}
+.w2{grid-column:span 2}.w3{grid-column:span 3}.w4{grid-column:span 4}.w6{grid-column:span 6}
+@media (max-width:1100px){.w2{grid-column:span 3}.w4{grid-column:span 6}}
+.is-phone .grid{grid-template-columns:minmax(0,1fr)}
+.is-phone .w2,.is-phone .w3,.is-phone .w4,.is-phone .w6{grid-column:auto}
+
+.panel{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.panel.flash{box-shadow:0 0 0 3px var(--accent)}
+.phead{display:flex;align-items:center;gap:8px}
+.phead h2{font-size:15px;font-weight:600;flex:1 1 auto;min-width:0}
+.kind{font-size:11px;padding:2px 7px;border-radius:999px;background:var(--soft);color:var(--muted);font-weight:500;white-space:nowrap}
+.kind.wf{background:#E8EEFB;color:#2F4A8A}.kind.nv{background:#F3E8F6;color:#6B2C7A}
+.info{width:26px;height:26px;border:0;border-radius:999px;background:transparent;color:var(--muted);font-weight:700}
+.info:hover{background:var(--soft);color:var(--accent-ink)}
+.pop{padding:9px 11px;border-radius:8px;background:var(--ink);color:#F4F5F7;font-size:12.5px}
+.pop a{color:#9FD8D3}
+.foot{font-size:12px;color:var(--muted)}
+.editbar{display:flex;gap:6px;align-items:center;padding:6px;border:1px dashed #AEB6BF;border-radius:8px;background:var(--ground)}
+.editbar select{padding:2px 4px}
+.addtile{grid-column:span 6;min-height:64px;border:2px dashed #AEB6BF;border-radius:12px;background:transparent;color:var(--accent-ink);font-weight:600}
+.addtile:hover{background:var(--paper)}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:0 14px;border-radius:8px;border:1px solid #C9CFD6;background:var(--paper);font-weight:500}
+.btn:hover{background:var(--soft)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{background:#094F4F}
+.btn.quiet{border-color:transparent;background:transparent}
+.btn.sm{min-height:30px;padding:0 10px;font-size:13px}
+.btn:disabled{opacity:.5;cursor:default}
+
+.runs{display:flex;flex-direction:column}
+.runrow{display:flex;align-items:center;gap:8px;padding:7px 4px;border:0;border-top:1px solid var(--soft);background:transparent;text-align:left;width:100%}
+.runrow:hover{background:var(--ground)}
+.runrow .lbl{flex:1 1 auto;font-weight:500}
+.pill{font-size:11px;padding:1px 7px;border-radius:999px;font-weight:600}
+.pill.wait{background:var(--warn-soft);color:var(--warn)}.pill.done{background:var(--soft);color:var(--muted)}.pill.slack{background:#F1E6F1;color:var(--slack)}.pill.run{background:var(--accent-soft);color:var(--accent-ink)}
+.empty{color:var(--muted);padding:6px 0}
+
+/* run thread */
+.thread{display:flex;flex-direction:column;gap:10px;border-left:3px solid var(--accent-soft);padding-left:12px}
+.msg{background:var(--ground);border-radius:8px;padding:9px 11px}
+.msg table{border-collapse:collapse;margin-top:6px}
+.msg td,.msg th{padding:3px 10px 3px 0;text-align:left}
+.msg th{color:var(--muted);font-weight:500}
+.gate{border:1px solid var(--line);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:10px;background:var(--paper)}
+.gate .q{font-weight:600}
+.answered{font-size:13px;color:var(--muted);padding:2px 0}
+.answered b{color:var(--ink);font-weight:600}
+.working{font-size:13px;color:var(--accent-ink)}
+.choice label{display:flex;gap:8px;align-items:flex-start;padding:6px 8px;border-radius:8px}
+.choice label:hover{background:var(--ground)}
+.btnrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.btnrow .count{color:var(--muted);font-size:13px;margin-right:auto}
+
+table.g{border-collapse:collapse;width:100%}
+table.g th{font-size:12px;color:var(--muted);font-weight:500;text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+table.g td{padding:2px 8px;border-bottom:1px solid var(--soft)}
+table.g tr.grp td{background:var(--ground);font-weight:600;font-size:12.5px;padding:6px 8px}
+table.g .r{text-align:right}
+.cell{width:100%;min-height:32px;padding:4px 8px;border:1px solid transparent;border-radius:6px;background:transparent;text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.cell.txt{text-align:left;font-family:var(--sans)}
+.cell:hover{border-color:#C9CFD6;background:#fff}
+.cell:focus{outline:2px solid var(--accent);outline-offset:-1px;background:#fff}
+.cell.changed{background:var(--warn-soft)}
+.cell.bad{background:var(--bad-soft);border-color:var(--bad)}
+.errline{color:var(--bad);font-size:12px}
+.tablewrap{overflow-x:auto}
+details.slackview{font-size:13px}
+details.slackview summary{cursor:pointer;color:var(--slack);font-weight:500}
+.slackbox{margin-top:8px;border:1px solid #D9C7DA;border-left:4px solid var(--slack);border-radius:6px;padding:10px;background:#FBF8FB}
+.slackbox .opt{display:inline-block;margin:3px 4px 0 0;padding:3px 9px;border:1px solid #C9CFD6;border-radius:4px;background:#fff}
+
+/* chart */
+.chart svg{width:100%;height:auto;display:block}
+.chart .bar{cursor:pointer}
+.chart .bar rect.b{fill:var(--accent)}
+.chart .bar:hover rect.b,.chart .bar:focus rect.b{fill:#094F4F}
+.chart text{fill:var(--ink);font-size:12px;font-family:var(--sans)}
+.chart text.v{font-family:var(--mono);fill:var(--muted)}
+.metric .big{font-size:28px;font-weight:600}
+.meter{height:10px;border-radius:999px;background:var(--soft);overflow:hidden}
+.meter i{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.list .li{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--soft)}
+.list .li span:last-child{color:var(--muted)}
+.report{background:var(--ground);border-radius:8px;padding:10px 12px}
+.report ul{margin:4px 0 0;padding-left:18px}
+
+/* Novia */
+.novia{flex:0 0 300px;background:var(--paper);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.novia.closed{flex:0 0 44px;align-items:center}
+.novia.closed .why{writing-mode:vertical-rl;transform:rotate(180deg);font-size:11px;color:var(--muted);margin-top:6px}
+.novia .nh{display:flex;align-items:center;gap:8px;padding:12px;border-bottom:1px solid var(--line)}
+.novia .nh h2{font-size:14px;flex:1 1 auto}
+.sessions{display:flex;flex-direction:column;padding:6px;border-bottom:1px solid var(--line)}
+.sessions button{border:0;background:transparent;text-align:left;padding:6px 8px;border-radius:8px;display:flex;justify-content:space-between;gap:8px}
+.sessions button:hover{background:var(--soft)}
+.sessions button[aria-current="true"]{background:#F3E8F6;color:#4E1F59;font-weight:600}
+.convo{flex:1 1 auto;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
+.bub{padding:8px 10px;border-radius:10px;max-width:92%}
+.bub.me{align-self:flex-end;background:var(--accent-soft)}
+.bub.nv{align-self:flex-start;background:var(--ground)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid #C9CFD6;background:#fff;border-radius:999px;padding:3px 10px;font-size:12.5px}
+.compose{display:flex;gap:6px;padding:10px;border-top:1px solid var(--line)}
+.compose input{flex:1 1 auto;min-height:36px;padding:6px 10px;border:1px solid #C9CFD6;border-radius:8px}
+.vlabel{writing-mode:vertical-rl;transform:rotate(180deg);margin:10px auto;color:#6B2C7A;font-weight:600;border:0;background:transparent}
+
+/* drawers and modals */
+.scrim{position:absolute;inset:0;background:rgba(21,25,30,.35);z-index:20;display:flex;justify-content:flex-end}
+.drawer{width:min(560px,100%);height:100%;background:var(--paper);display:flex;flex-direction:column;box-shadow:-8px 0 30px rgba(0,0,0,.15)}
+.drawer .dh{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.drawer .dh h2{font-size:16px;flex:1 1 auto}
+.drawer .db{flex:1 1 auto;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+.scrim.center{justify-content:center;align-items:center}
+.modal{width:min(720px,94%);max-height:90%;background:var(--paper);border-radius:14px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.25)}
+.modal .db{overflow:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+.steps{display:flex;gap:6px;font-size:12px;color:var(--muted)}
+.steps span{padding:2px 8px;border-radius:999px;background:var(--soft)}
+.steps span.on{background:var(--accent);color:#fff}
+.opts{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px}
+.opt{border:1px solid var(--line);border-radius:10px;padding:10px;background:#fff;text-align:left;display:flex;flex-direction:column;gap:3px}
+.opt:hover{border-color:var(--accent)}
+.opt[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+.opt small{color:var(--muted)}
+.opt:disabled{opacity:.45;cursor:not-allowed}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);padding:0 16px}
+.tabs button{border:0;background:transparent;padding:10px 10px;border-bottom:3px solid transparent;color:#3A424C;font-weight:500}
+.tabs button[aria-selected="true"]{border-bottom-color:var(--accent);color:var(--accent-ink);font-weight:600}
+.settings{display:flex;min-height:340px}
+.settings nav{flex:0 0 180px;border-right:1px solid var(--line);padding:8px}
+.settings nav button{display:block;width:100%;text-align:left;border:0;background:transparent;padding:8px 10px;border-radius:8px}
+.settings nav button[aria-current="true"]{background:var(--accent-soft);color:var(--accent-ink);font-weight:600}
+.settings .pane{flex:1 1 auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+.fld{display:flex;flex-direction:column;gap:4px}
+.fld label{font-size:12.5px;color:var(--muted);font-weight:500}
+.fld input,.fld select{min-height:36px;padding:6px 10px;border:1px solid #C9CFD6;border-radius:8px;background:#fff}
+.term{border-bottom:1px dotted var(--muted)}
+.toast{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:8px 14px;border-radius:8px;z-index:40;font-size:13px}
+.p0note{background:#FFF8E1;border:1px solid #F0D98C;border-radius:8px;padding:8px 12px;font-size:13px;margin-bottom:14px}
+.hidden-p0{}
+dl.words{display:grid;grid-template-columns:110px 1fr;gap:6px 12px;margin:0}
+dl.words dt{font-weight:600}dl.words dd{margin:0;color:#2A3038}
+
+/* phone */
+.tabbar{display:none}
+.is-phone .menus,.is-phone .cmd{display:none}
+.is-phone .crumb{display:block;flex:1 1 auto}
+.is-phone .novia{display:none}
+.is-phone .tabbar{display:grid;grid-template-columns:repeat(4,1fr);background:var(--paper);border-top:1px solid var(--line);padding-bottom:10px}
+.tabbar button{border:0;background:transparent;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:12px;color:var(--muted);gap:2px}
+.tabbar button[aria-current="true"]{color:var(--accent-ink);font-weight:600}
+.tabbar button:disabled{opacity:.5}
+.is-phone .main{padding:14px 14px 30px}
+.is-phone .top{padding:10px 12px}
+.is-phone .drawer{width:100%}
+.sheetnav button{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid var(--soft);background:transparent;padding:12px 4px;font-size:15px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="mockbar" role="region" aria-label="Mock-up controls">
+  <b>Home Brain web app · mock-up v0.5</b>
+  <span>Phase <span class="seg" id="seg-phase"><button data-act="phase" data-v="P0">P0</button><button data-act="phase" data-v="P1">P1</button></span></span>
+  <span>View <span class="seg" id="seg-view"><button data-act="view" data-v="desktop">Desktop</button><button data-act="view" data-v="phone">Phone</button></span></span>
+  <span class="hint">Try: hover Pages ▾ / Domains ▾ · Edit the budget (Novia steps aside) · click a bar · ↻ Refresh · 🔔 · « on Novia · Edit page → + Add panel · 🧠 · ⚙. All names and amounts are invented.</span>
+</div>
+<div class="stage" id="stage"><div class="app" id="app"></div></div>
+
+<script>
+'use strict';
+const euro = n => '€' + n.toLocaleString('en-GB', {minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2});
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ---------- invented sample data ---------- */
+const DOMAINS = {
+  inventory: {label:'Inventory', tables:['PGD_InventoryItem','running_low (view)'], schedules:['Weekly stock check · Mondays 08:00']},
+  budget:    {label:'Budget', tables:['PGD_Budget','budget_vs_spent (view)'], schedules:[]},
+  expenses:  {label:'Expenses', tables:['PGD_Expenses','spend_by_category (view)'], schedules:[]},
+  recipes:   {label:'Recipes', tables:['PGD_Recipe','PGD_RecipeIngredient'], schedules:[]},
+};
+const WF = {
+  manage_budget:    {label:'Edit the budget', domain:'budget', desc:'One month’s amounts in a grid'},
+  process_receipt:  {label:'Process a receipt', domain:'expenses', desc:'Turn a receipt into expense lines'},
+  manage_expenses:  {label:'Manage expenses', domain:'expenses', desc:'Add, edit or delete an expense'},
+  manage_inventory: {label:'Manage inventory', domain:'inventory', desc:'Count stock and build the grocery list'},
+  review_inventory: {label:'Review inventory', domain:'inventory', desc:'Find and merge duplicate items'},
+  plan_meals:       {label:'Plan meals', domain:'recipes', desc:'A week of dinners from your recipes'},
+};
+const SOURCES = [
+  {id:'PGD_Expenses', label:'Expenses', domain:'expenses', type:'table', numeric:true},
+  {id:'spend_by_category', label:'Spending by category', domain:'expenses', type:'view', numeric:true},
+  {id:'budget_vs_spent', label:'Budget vs spent', domain:'budget', type:'view', numeric:true},
+  {id:'PGD_InventoryItem', label:'Inventory items', domain:'inventory', type:'table', numeric:true},
+  {id:'running_low', label:'Running low', domain:'inventory', type:'view', numeric:true},
+  {id:'recipe', label:'Recipes', domain:'recipes', type:'entity', numeric:false},
+  {id:'out:manage_inventory', label:'Grocery list', domain:'inventory', type:'output', wf:'manage_inventory'},
+  {id:'out:manage_budget', label:'Budget summary', domain:'budget', type:'output', wf:'manage_budget'},
+];
+const WIDGETS = {
+  table:{label:'Table', desc:'A grid, editable where allowed'},
+  form:{label:'Form', desc:'One record, children inline'},
+  list:{label:'List', desc:'Compact rows'},
+  chart:{label:'Chart', desc:'Bars, line or pie; click through'},
+  metric:{label:'Metric', desc:'One number against another'},
+  report:{label:'Report', desc:'A workflow’s latest output; Refresh re-runs it'},
+};
+function widgetsFor(src){
+  if (src.type==='output') return ['report'];
+  if (src.type==='entity') return ['form','list'];
+  return ['table','list'].concat(src.numeric ? ['chart','metric'] : []);
+}
+const EXPENSES = [
+  {id:301,date:'02 Oct',merchant:'Mercadona',category:'Groceries',amount:84.20},
+  {id:302,date:'05 Oct',merchant:'Renfe',category:'Transport',amount:42.00},
+  {id:303,date:'07 Oct',merchant:'Lidl',category:'Groceries',amount:56.35},
+  {id:304,date:'09 Oct',merchant:'Zara',category:'Clothing',amount:86.00},
+  {id:305,date:'11 Oct',merchant:'Pharmacy',category:'Household',amount:18.40},
+  {id:306,date:'12 Oct',merchant:'Burger King',category:'Eating out',amount:23.90},
+  {id:307,date:'14 Oct',merchant:'Repsol',category:'Transport',amount:61.00},
+  {id:308,date:'17 Oct',merchant:'Mercadona',category:'Groceries',amount:112.75},
+  {id:309,date:'19 Oct',merchant:'La Tasca',category:'Eating out',amount:72.10},
+  {id:310,date:'21 Oct',merchant:'Leroy Merlin',category:'Household',amount:39.60},
+  {id:311,date:'24 Oct',merchant:'Lidl',category:'Groceries',amount:58.70},
+  {id:312,date:'26 Oct',merchant:'Metro',category:'Transport',amount:37.00},
+];
+const INVENTORY = [
+  {item:'Olive oil', qty:'1 bottle', reorder:'2', low:true},
+  {item:'Coffee beans', qty:'250 g', reorder:'500 g', low:true},
+  {item:'Dish soap', qty:'1', reorder:'2', low:true},
+  {item:'Milk', qty:'3 L', reorder:'4 L', low:true},
+  {item:'Rice', qty:'2 kg', reorder:'1 kg', low:false},
+  {item:'Pasta', qty:'4 packs', reorder:'2', low:false},
+];
+const BUDGET = [
+  {group:'Monthly', id:17, cat:'Groceries', amt:400},
+  {group:'Monthly', id:18, cat:'Transport', amt:150},
+  {group:'Monthly', id:19, cat:'Eating out', amt:120},
+  {group:'Monthly', id:20, cat:'Household', amt:80},
+  {group:'Monthly', id:21, cat:'Clothing', amt:80},
+  {group:'Annual', id:30, cat:'Car insurance', amt:540},
+  {group:'Annual', id:31, cat:'Holidays', amt:1200},
+  {group:'Annual', id:32, cat:'Gifts', amt:300},
+];
+const RECIPES = [
+  {name:'Lentil stew', serves:4, ingredients:[['Lentils','300 g'],['Carrot','2'],['Onion','1'],['Paprika','1 tsp']]},
+  {name:'Tortilla', serves:4, ingredients:[['Eggs','6'],['Potatoes','600 g'],['Onion','1']]},
+];
+const spendByCat = () => {
+  const m = {}; EXPENSES.forEach(e => m[e.category] = (m[e.category]||0) + e.amount);
+  return Object.entries(m).sort((a,b)=>b[1]-a[1]);
+};
+
+/* ---------- runs ---------- */
+let RUN_SEQ = 940;
+const RUNS = [
+  {id:931, wf:'review_inventory', label:'Bread duplicates · 30 Oct', status:'waiting', provider:'slack', when:'30 Oct', host:'drawer',
+   thread:[{t:'msg', html:'Found two items that look like the same thing: <b>Bread, sliced</b> (3 left) and <b>Bread</b> (1 left).'},
+           {t:'gate', kind:'confirm', q:'Merge “Bread, sliced” into “Bread”?', actions:['Merge','Keep both']}]},
+  {id:922, wf:'manage_budget', label:'October · 4 edits', status:'completed', provider:'web', when:'01 Oct',
+   thread:[{t:'answered', html:'You chose <b>October 2026</b>'},{t:'answered', html:'You chose <b>Save</b> · 4 changes'},{t:'msg', html:'Saved 4 changes to October 2026’s budget.'}]},
+  {id:905, wf:'manage_budget', label:'September · 2 edits', status:'completed', provider:'slack', when:'02 Sep',
+   thread:[{t:'answered', html:'You chose <b>September 2026</b>'},{t:'msg', html:'Saved 2 changes to September 2026’s budget.'}]},
+  {id:928, wf:'process_receipt', label:'Mercadona · 17 Oct', status:'completed', provider:'web', when:'17 Oct', thread:[{t:'msg', html:'Added 9 lines from Mercadona, €112.75.'}]},
+  {id:926, wf:'process_receipt', label:'Burger King · 12 Oct', status:'completed', provider:'slack', when:'12 Oct', thread:[{t:'msg', html:'Added 3 lines from Burger King, €23.90.'}]},
+  {id:925, wf:'process_receipt', label:'Pharmacy · 11 Oct', status:'completed', provider:'web', when:'11 Oct', thread:[{t:'msg', html:'Added 2 lines from Pharmacy, €18.40.'}]},
+  {id:927, wf:'manage_inventory', label:'Weekly stock check · 17 Oct', status:'completed', provider:'schedule', when:'17 Oct', thread:[{t:'msg', html:'Counted 24 items; 4 at or below their reorder level.'}]},
+];
+const OUTPUTS = {
+  manage_inventory: {when:'17 Oct', run:'Weekly stock check · 17 Oct',
+    html:'<b>Grocery list</b><ul><li>Olive oil × 1</li><li>Coffee beans × 1 (500 g)</li><li>Dish soap × 1</li><li>Milk × 2 L</li></ul>'},
+  manage_budget: {when:'01 Oct', run:'October · 4 edits',
+    html:'<b>October 2026</b> · monthly budget €830 · spent so far €692<br>Over: Clothing (€86 of €80)'},
+};
+
+/* ---------- state ---------- */
+const S = {
+  phase:'P1', phone:false, route:'home', noviaOpen: loadNoviaOpen(), noviaPeek:false, noviaSession:'s1', menu:null, hush:false,
+  overlay:null,          // {type:'run'|'bell'|'help'|'settings'|'add'|'drill'|'sheet', ...}
+  editing:false, pops:{}, toast:null, flash:null, cmdTip:null,
+  helpTab:'can', settingsTab:'profile', add:null, gridSlack:false,
+  expEdits:{}, recipeIx:0,
+  pages:{
+    home:{title:'Home', panels:[
+      {id:'p1', kind:'data', w:'w3', title:'Spending by category · October', source:'spend_by_category', widget:'chart', by:'you, 22 Oct'},
+      {id:'p2', kind:'workflow', w:'w3', title:'Budget', workflow:'manage_budget', by:'you, 22 Oct'},
+      {id:'p3', kind:'data', w:'w4', title:'Grocery list', source:'out:manage_inventory', widget:'report', by:'you, 24 Oct'},
+      {id:'p4', kind:'data', w:'w2', title:'Groceries this month', source:'budget_vs_spent', widget:'metric', by:'Novia, 24 Oct'},
+    ]},
+    money:{title:'Money', panels:[
+      {id:'m1', kind:'data', w:'w6', title:'Expenses · October', source:'PGD_Expenses', widget:'table', by:'you, 25 Oct'},
+      {id:'m2', kind:'workflow', w:'w3', title:'Receipts', workflow:'process_receipt', by:'you, 25 Oct'},
+      {id:'m3', kind:'novia', w:'w3', title:'Novia · Budget', topic:'Budget', by:'you, 25 Oct'},
+    ]},
+    inventory:{title:'Inventory', panels:[
+      {id:'i1', kind:'workflow', w:'w6', title:'Inventory workflows', domain:'inventory', by:'you, 25 Oct'},
+      {id:'i2', kind:'data', w:'w2', title:'Running low', source:'running_low', widget:'list', by:'you, 25 Oct'},
+      {id:'i3', kind:'data', w:'w4', title:'Stock', source:'PGD_InventoryItem', widget:'table', by:'you, 25 Oct'},
+    ]},
+  },
+};
+function loadNoviaOpen(){ try { return localStorage.getItem('mock.noviaOpen') !== 'false'; } catch { return true; } }
+function saveNoviaOpen(){ try { localStorage.setItem('mock.noviaOpen', String(S.noviaOpen)); } catch {} }
+const P0_PAGES = ['home','money','inventory'];
+const SESSIONS = [
+  {id:'s1', topic:'Shopping list', when:'today', msgs:[
+    {me:true, text:'Why does the grocery list say milk when we have 3 litres?'},
+    {me:false, text:'Milk’s reorder level is 4 L, so 3 L counts as low. Shall I lower it to 2 L?'}]},
+  {id:'s2', topic:'Stock alerts', when:'28 Oct', msgs:[{me:true, text:'Tell me when coffee runs low.'},{me:false, text:'Done — the weekly stock check now lists coffee beans below 500 g.'}]},
+  {id:'s3', topic:'Budget', when:'28 Oct', msgs:[{me:true, text:'Why is Clothing over?'},{me:false, text:'One Zara purchase of €86 on 9 Oct, against €80.'}]},
+  {id:'s4', topic:'Budget', when:'20 Oct', msgs:[{me:true, text:'Plan the December budget.'},{me:false, text:'I copied November’s amounts and raised Gifts to €300.'}]},
+];
+const p0 = () => S.phase === 'P0';
+const visiblePages = () => Object.entries(S.pages).filter(([k]) => !p0() || P0_PAGES.includes(k));
+
+/* ---------- small renderers ---------- */
+const ICON = {
+  home:'<svg width="22" height="22" viewBox="0 0 28 28" fill="none" stroke="#0D6A6A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 13 14 5l10 8"/><path d="M7 11v12h14V11"/><circle cx="14" cy="17" r="2.5"/></svg>',
+  bell:'<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>',
+  brain:'<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 3A2.5 2.5 0 0 0 7 5.5v.3A3 3 0 0 0 4.5 9a3 3 0 0 0 .6 1.8A3 3 0 0 0 6 16a3 3 0 0 0 3.5 3A2.5 2.5 0 0 0 12 20.5V5.5A2.5 2.5 0 0 0 9.5 3Z"/><path d="M14.5 3A2.5 2.5 0 0 1 17 5.5v.3A3 3 0 0 1 19.5 9a3 3 0 0 1-.6 1.8A3 3 0 0 1 18 16a3 3 0 0 1-3.5 3A2.5 2.5 0 0 1 12 20.5"/></svg>',
+  gear:'<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>',
+  search:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#586170" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+};
+const waiting = () => RUNS.filter(r => r.status === 'waiting');
+const providerPill = r => r.provider==='slack' ? '<span class="pill slack">Slack</span>' : r.provider==='schedule' ? '<span class="pill done">Scheduled</span>' : '';
+const statusPill = r => r.status==='waiting' ? '<span class="pill wait">Needs you</span>' : r.status==='running' ? '<span class="pill run">Running</span>' : '';
+
+function header(){
+  const pageTitle = S.route.startsWith('d-') ? DOMAINS[S.route.slice(2)].label : S.route === 'domains' ? 'Domains'
+    : S.route.startsWith('act-') ? 'Activity' : S.route.startsWith('run-') ? 'Run' : (S.pages[S.route]?.title || 'Home');
+  const n = waiting().length;
+  return `<header class="top ${S.hush ? 'hush' : ''}">
+    <button class="homeb" data-act="go" data-v="home" aria-label="Home" title="Home" ${S.route==='home'?'aria-current="page"':''}>${ICON.home}</button>
+    <span class="crumb">${esc(pageTitle)}</span>
+    ${menus()}
+    ${p0() ? '' : `<form class="cmd" data-form="cmd" role="search">${ICON.search}
+      <label for="cmd-in" class="sr" style="position:absolute;left:-9999px">Run a workflow</label>
+      <input id="cmd-in" placeholder="Run a workflow… e.g. edit the budget" autocomplete="off">
+      ${S.cmdTip ? `<div class="tip pop">${S.cmdTip}</div>` : ''}</form>`}
+    <div class="icons">
+      <button class="ib" data-act="bell" aria-label="Needs you, ${n} waiting" title="Needs you">${ICON.bell}${n ? `<span class="badge">${n}</span>` : ''}</button>
+      ${p0() ? '' : `<button class="ib" data-act="help" aria-label="Help: what your brain can do" title="Help — what your brain can do, building pages">${ICON.brain}</button>`}
+      <button class="ib" data-act="settings" aria-label="Settings" title="Settings — profile, security, language, dates & numbers">${ICON.gear}</button>
+    </div>
+  </header>`;
+}
+
+/* ---------- the top bar's menus: open on hover and on click ---------- */
+function menuItems(which){
+  const cur = r => S.route === r ? 'aria-current="page"' : '';
+  if (which === 'pages') return visiblePages().map(([k,p]) => `<button data-act="go" data-v="${k}" ${cur(k)}>${esc(p.title)}</button>`).join('')
+    + (p0() ? '' : '<hr><button class="add" data-act="newpage">+ New page</button>');
+  if (which === 'domains') return Object.entries(DOMAINS).map(([k,d]) => `<button data-act="go" data-v="d-${k}" ${cur('d-'+k)}>${d.label}</button>`).join('')
+    + `<hr><button data-act="go" data-v="domains" ${cur('domains')}>See all…</button>`;
+  return [['act-runs','Runs'],['act-schedules','Schedules'],['act-memory','Memory']].map(([k,l]) => `<button data-act="go" data-v="${k}" ${cur(k)}>${l}</button>`).join('');
+}
+function section(){
+  return S.pages[S.route] ? 'pages' : (S.route.startsWith('d-') || S.route === 'domains') ? 'domains' : S.route.startsWith('act-') ? 'activity' : null;
+}
+function menus(){
+  const list = [['pages','Pages'],['domains','Domains']].concat(p0() ? [] : [['activity','Activity']]);
+  return `<nav class="menus" aria-label="Sections">${list.map(([k,l]) => `<div class="menuwrap ${S.menu===k?'open':''}">
+      <button class="mbtn ${section()===k?'cur':''}" data-act="menu" data-v="${k}" aria-haspopup="true" aria-expanded="${S.menu===k}">${l}<span class="car">▾</span></button>
+      <div class="dd" role="menu" aria-label="${l}">${menuItems(k)}</div></div>`).join('')}</nav>`;
+}
+
+function provenance(p){
+  if (p.kind === 'workflow') return `Runs of <b>${p.workflow ? WF[p.workflow].label : DOMAINS[p.domain].label + ' workflows'}</b>, newest first, each named by what it was about · added by ${p.by} · <a href="#" data-act="asknovia" data-v="${p.id}">Ask Novia about this</a>`;
+  if (p.kind === 'novia') return `Novia’s sessions on the topic <b>${esc(p.topic)}</b> · added by ${p.by}`;
+  const s = SOURCES.find(x => x.id === p.source);
+  if (s.type === 'output') return `The latest output of <b>${WF[s.wf].label}</b>, kept after the run · ↻ runs it again · added by ${p.by} · <a href="#" data-act="asknovia" data-v="${p.id}">Ask Novia about this</a>`;
+  return `${s.type === 'view' ? 'View' : s.type === 'entity' ? 'Entity' : 'Table'} <code>${s.id}</code> in ${DOMAINS[s.domain].label}, shown as a ${WIDGETS[p.widget].label.toLowerCase()} · added by ${p.by} · <a href="#" data-act="asknovia" data-v="${p.id}">Ask Novia about this</a>`;
+}
+
+function panel(p, pageKey, i, n){
+  const activeRun = p.kind === 'workflow' && RUNS.find(r => r.host === p.id && r.status !== 'completed');
+  const w = activeRun ? 'w6' : p.w;
+  const kindTag = p.kind === 'workflow' ? '<span class="kind wf">Workflow</span>' : p.kind === 'novia' ? '<span class="kind nv">Novia</span>' : `<span class="kind">${WIDGETS[p.widget].label}</span>`;
+  const refresh = p.kind === 'data' && p.widget === 'report' ? `<button class="btn sm quiet" data-act="refresh" data-v="${p.id}" aria-label="Refresh by running the workflow again">↻ Refresh</button>` : '';
+  const edit = S.editing ? `<div class="editbar">
+      <button class="btn sm" data-act="mv" data-v="${p.id}" data-d="-1" ${i===0?'disabled':''} aria-label="Move up">↑</button>
+      <button class="btn sm" data-act="mv" data-v="${p.id}" data-d="1" ${i===n-1?'disabled':''} aria-label="Move down">↓</button>
+      <label for="w-${p.id}" class="foot">Width</label>
+      <select id="w-${p.id}" data-chg="width" data-v="${p.id}">${[['w2','1/3'],['w3','1/2'],['w4','2/3'],['w6','Full']].map(([v,l]) => `<option value="${v}" ${p.w===v?'selected':''}>${l}</option>`).join('')}</select>
+      <button class="btn sm quiet" data-act="rm" data-v="${p.id}" style="margin-left:auto">Remove</button></div>` : '';
+  return `<section class="panel ${w} ${S.flash===p.id?'flash':''}" aria-label="${esc(p.title)}">
+    ${edit}
+    <div class="phead"><h2>${esc(p.title)}</h2>${kindTag}${refresh}<button class="info" data-act="pop" data-v="${p.id}" aria-label="About this panel" aria-expanded="${!!S.pops[p.id]}">ⓘ</button></div>
+    ${S.pops[p.id] ? `<div class="pop">${provenance(p)}</div>` : ''}
+    ${p.kind === 'workflow' ? workflowPanel(p, activeRun) : p.kind === 'novia' ? noviaPanel(p) : dataWidget(p)}
+  </section>`;
+}
+
+/* ---------- panel kinds ---------- */
+function workflowPanel(p, active){
+  const wfs = p.workflow ? [p.workflow] : Object.keys(WF).filter(k => WF[k].domain === p.domain);
+  const runs = RUNS.filter(r => wfs.includes(r.wf)).slice(0, 5);
+  const starts = `<div class="btnrow">${wfs.map(k => `<button class="btn ${wfs.length===1?'primary':''} sm" data-act="start" data-v="${k}" data-host="${p.id}" ${active?'disabled':''}>${WF[k].label}</button>`).join('')}</div>`;
+  if (active) return `${starts}${runView(active)}`;
+  const list = runs.length ? `<div class="runs">${runs.map(r => `<button class="runrow" data-act="openrun" data-v="${r.id}">
+      <span class="lbl">${esc(r.label)}</span>${wfs.length>1?`<span class="foot">${WF[r.wf].label}</span>`:''}${statusPill(r)}${providerPill(r)}</button>`).join('')}</div>`
+    : `<div class="empty">You don’t have any ${WF[wfs[0]].label.toLowerCase()} runs yet — they will be shown here.</div>`;
+  return starts + list;
+}
+
+function noviaPanel(p){
+  const ss = SESSIONS.filter(s => s.topic === p.topic);
+  return `<div class="runs">${ss.map(s => `<button class="runrow" data-act="opensession" data-v="${s.id}"><span class="lbl">${esc(s.msgs[0].text)}</span><span class="foot">${s.when}</span></button>`).join('') || '<div class="empty">No sessions on this topic yet.</div>'}</div>
+    <div><button class="btn sm" data-act="newsession" data-v="${esc(p.topic)}">New session on ${esc(p.topic)}</button></div>`;
+}
+
+function dataWidget(p){
+  const s = SOURCES.find(x => x.id === p.source);
+  switch (p.widget){
+    case 'chart': return chartWidget(s);
+    case 'metric': return `<div class="metric"><div class="big num">${euro(312)} <span class="foot" style="font-size:14px">of ${euro(400)}</span></div><div class="meter"><i style="width:78%"></i></div><div class="foot">Groceries · October · 78%</div></div>`;
+    case 'report': { const o = OUTPUTS[s.wf]; return o ? `<div class="report">${o.html}</div><div class="foot">Updated ${o.when}, from ${esc(o.run)}</div>` : `<div class="empty">Not run yet.</div>`; }
+    case 'list': return `<div class="list">${(s.id==='recipe' ? RECIPES.map(r=>({item:r.name,qty:`serves ${r.serves}`})) : s.id==='running_low' ? INVENTORY.filter(x=>x.low) : s.id.includes('Expenses') ? EXPENSES.slice(-5).map(e=>({item:e.merchant,qty:euro(e.amount)})) : INVENTORY).map(x => `<div class="li"><span>${esc(x.item)}</span><span>${esc(x.qty)}${x.reorder?` · reorder at ${esc(x.reorder)}`:''}</span></div>`).join('')}</div>`;
+    case 'form': return formWidget();
+    case 'table': return s.id === 'PGD_Expenses' ? expensesTable(EXPENSES, !p0()) : s.id.startsWith('PGD_Inv') || s.id==='running_low' ? invTable(s.id==='running_low') : expensesTable(EXPENSES, false);
+  }
+}
+
+function chartWidget(){
+  const data = spendByCat(); const max = Math.max(...data.map(d => d[1])); const W = 460, rowH = 30, labW = 90, valW = 60;
+  const scale = v => (W - labW - valW) * v / (Math.ceil(max/50)*50);
+  const bars = data.map(([c,v],i) => `<g class="bar" tabindex="0" role="button" data-act="drill" data-v="${esc(c)}" aria-label="${esc(c)} ${euro(v)} — show the expenses">
+      <text x="0" y="${i*rowH+19}">${esc(c)}</text>
+      <rect class="b" x="${labW}" y="${i*rowH+6}" width="${scale(v).toFixed(1)}" height="18" rx="3"/>
+      <text class="v" x="${labW+scale(v)+6}" y="${i*rowH+19}">${euro(Math.round(v))}</text></g>`).join('');
+  return `<div class="chart"><svg viewBox="0 0 ${W} ${data.length*rowH+4}" role="img" aria-label="Spending by category, October">${bars}</svg></div><div class="foot">Click a bar to see the expenses behind it.</div>`;
+}
+
+function expensesTable(rows, editable){
+  const changed = Object.keys(S.expEdits).length;
+  return `<div class="tablewrap"><table class="g"><thead><tr><th>Date</th><th>Merchant</th><th>Category</th><th class="r">Amount</th></tr></thead><tbody>
+    ${rows.map(e => `<tr><td>${e.date}</td>
+      <td>${editable ? `<input class="cell txt ${S.expEdits[e.id+':merchant']!==undefined?'changed':''}" data-exp="${e.id}:merchant" value="${esc(S.expEdits[e.id+':merchant'] ?? e.merchant)}" aria-label="Merchant, ${e.date}">` : esc(e.merchant)}</td>
+      <td>${esc(e.category)}</td>
+      <td class="r">${editable ? `<input class="cell ${S.expEdits[e.id+':amount']!==undefined?'changed':''}" inputmode="decimal" data-exp="${e.id}:amount" value="${esc(S.expEdits[e.id+':amount'] ?? e.amount.toFixed(2))}" aria-label="Amount, ${e.date}">` : `<span class="num">${euro(e.amount)}</span>`}</td></tr>`).join('')}
+    <tr><td colspan="3" style="font-weight:600;padding:8px">Total</td><td class="r num" style="font-weight:600;padding:8px">${euro(rows.reduce((a,e)=>a+e.amount,0))}</td></tr>
+    </tbody></table></div>
+    ${editable ? `<div class="btnrow"><span class="count" id="exp-count">${changed ? `${changed} change${changed>1?'s':''}` : 'Edit a cell to change it'}</span><button class="btn sm" data-act="expreset">Undo</button><button class="btn sm primary" data-act="expsave">Save</button></div>` : ''}`;
+}
+function invTable(lowOnly){
+  const rows = lowOnly ? INVENTORY.filter(x=>x.low) : INVENTORY;
+  return `<div class="tablewrap"><table class="g"><thead><tr><th>Item</th><th>In stock</th><th>Reorder at</th></tr></thead><tbody>${rows.map(r => `<tr><td>${esc(r.item)}</td><td>${esc(r.qty)}</td><td>${esc(r.reorder)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+function formWidget(){
+  const r = RECIPES[S.recipeIx];
+  return `<div class="fld"><label for="rp">Recipe</label><select id="rp" data-chg="recipe">${RECIPES.map((x,i)=>`<option value="${i}" ${i===S.recipeIx?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div>
+    <div class="fld"><label for="rs">Serves</label><input id="rs" value="${r.serves}" inputmode="numeric"></div>
+    <div class="foot">Ingredients</div>
+    <table class="g"><thead><tr><th>Ingredient</th><th>Quantity</th></tr></thead><tbody>${r.ingredients.map(([a,b],i)=>`<tr><td><input class="cell txt" value="${esc(a)}" aria-label="Ingredient ${i+1}"></td><td><input class="cell txt" value="${esc(b)}" aria-label="Quantity ${i+1}"></td></tr>`).join('')}</tbody></table>
+    <div class="btnrow"><span class="count">One Save writes the recipe and its ingredients</span><button class="btn sm primary" data-act="toast" data-v="Saved the recipe.">Save</button></div>`;
+}
+
+/* ---------- a run, stepped through as in Slack ---------- */
+function runView(r){
+  const head = r.host === 'drawer' ? '' : `<div class="btnrow"><span class="count">${esc(r.label)}</span><button class="btn sm quiet" data-act="expand" data-v="${r.id}" aria-label="Open as a page">⤢ Open</button></div>`;
+  return `${head}<div class="thread">${r.thread.map((s, i) => step(r, s, i)).join('')}${r.status==='running' ? '<div class="working">Working…</div>' : ''}</div>
+    ${r.status==='completed' && r.host!=='drawer' ? `<div class="btnrow"><button class="btn sm" data-act="closerun" data-v="${r.id}">Done</button></div>` : ''}`;
+}
+function step(r, s, i){
+  if (s.t === 'msg') return `<div class="msg">${s.html}</div>`;
+  if (s.t === 'answered') return `<div class="answered">${s.html}</div>`;
+  const live = i === r.thread.length - 1 && r.status === 'waiting';
+  if (!live) return '';
+  if (s.kind === 'confirm') return `<div class="gate"><div class="q">${s.q}</div><div class="btnrow">${s.actions.map((a,j) => `<button class="btn ${j===0?'primary':''}" data-act="answer" data-v="${r.id}" data-a="${esc(a)}">${esc(a)}</button>`).join('')}</div></div>`;
+  if (s.kind === 'choice') return `<form class="gate choice" data-form="choice" data-v="${r.id}"><div class="q">${s.q}</div>${s.options.map((o,j) => `<label><input type="radio" name="c" value="${esc(o)}" ${j===0?'checked':''}> ${esc(o)}</label>`).join('')}<div class="btnrow"><button class="btn primary" type="submit">Continue</button><button class="btn" type="button" data-act="answer" data-v="${r.id}" data-a="Cancel">Cancel</button></div></form>`;
+  if (s.kind === 'text') return `<form class="gate" data-form="text" data-v="${r.id}"><div class="q">${s.q}</div><div class="fld"><label for="tx-${r.id}">Receipt text</label><textarea id="tx-${r.id}" rows="4" style="padding:8px;border:1px solid #C9CFD6;border-radius:8px">LIDL 31/10  Bananas 1,89  Yoghurt 2,45  Bread 1,20 …</textarea></div><div class="btnrow"><button class="btn primary" type="submit">Submit</button></div></form>`;
+  if (s.kind === 'grid') return gridGate(r, s);
+}
+function gridGate(r, s){
+  let grp = null, rows = '';
+  s.rows.forEach(b => {
+    if (b.group !== grp){ grp = b.group; rows += `<tr class="grp"><td colspan="2">${grp}</td></tr>`; }
+    const v = s.values[b.id]; const bad = s.bad[b.id];
+    rows += `<tr><td>${esc(b.cat)}</td><td class="r" style="width:150px"><input class="cell ${v!==undefined && !bad?'changed':''} ${bad?'bad':''}" inputmode="decimal" data-grid="${r.id}:${b.id}" value="${esc(v ?? String(b.amt))}" aria-label="${esc(b.cat)} amount">${bad?`<div class="errline">${bad}</div>`:''}</td></tr>`;
+  });
+  const n = Object.keys(s.values).length;
+  return `<div class="gate"><div class="q">${s.q}</div>
+    <div class="tablewrap"><table class="g"><thead><tr><th>Category</th><th class="r">Amount (€)</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="btnrow"><span class="count" id="grid-count-${r.id}">${n ? `${n} change${n>1?'s':''}` : 'No changes yet'}</span><button class="btn" data-act="answer" data-v="${r.id}" data-a="Cancel">Cancel</button><button class="btn primary" data-act="gridsave" data-v="${r.id}">Save</button></div>
+    <details class="slackview"><summary>How Slack shows this question</summary><div class="slackbox">
+      <div><b>Edit the budget</b> — November 2026 · pick a row to edit</div>
+      <div>${s.rows.map(b => `<span class="opt">${esc(b.cat)} · ${euro(b.amt)}</span>`).join('')}</div>
+      <div class="foot" style="margin-top:6px">Past Slack’s size limit, Slack picks one row and opens it in a pop-up with that row’s fields; its Save answers with that row only. The workflow is the same; Slack’s renderer does the splitting.</div></div></details>
+  </div>`;
+}
+
+const SCRIPTS = {
+  manage_budget(r, a){
+    if (a === undefined){ r.label = 'Budget · choosing a month'; r.thread.push({t:'gate', kind:'choice', q:'Which month’s budget?', options:['November 2026','December 2026','October 2026']}); r.status='waiting'; return; }
+    const last = r.thread[r.thread.length-1];
+    if (a === 'Cancel'){ r.thread.push({t:'answered', html:'You chose <b>Cancel</b>'}); r.thread.push({t:'msg', html:'Nothing changed.'}); r.status='completed'; r.label='Cancelled · '+today(); return; }
+    if (last.kind === 'choice'){ r.month = a; r.thread.push({t:'answered', html:`You chose <b>${esc(a)}</b>`}); r.label = `${a.split(' ')[0]} · editing`;
+      return later(r, () => r.thread.push({t:'gate', kind:'grid', q:`${esc(a)} — change any amounts, then Save`, rows:BUDGET, values:{}, bad:{}})); }
+    if (last.kind === 'grid'){ const ch = Object.entries(last.values);
+      r.thread.push({t:'answered', html:`You chose <b>Save</b> · ${ch.length} change${ch.length===1?'':'s'}`});
+      return later(r, () => { r.thread.push({t:'msg', html: ch.length ? `Saved ${ch.length} change${ch.length>1?'s':''} to ${esc(r.month)}’s budget — only the changed rows were written.<table><tr><th>Category</th><th>Was</th><th>Now</th></tr>${ch.map(([id,v]) => { const b = BUDGET.find(x=>x.id==id); return `<tr><td>${esc(b.cat)}</td><td class="num">${euro(b.amt)}</td><td class="num">${euro(parseNum(v))}</td></tr>`; }).join('')}</table>` : 'No changes, so nothing was written.'});
+        r.status='completed'; r.label = `${r.month.split(' ')[0]} · ${ch.length} edit${ch.length===1?'':'s'}`; }, true); }
+  },
+  manage_inventory(r, a){
+    if (a === undefined){ r.label = 'Stock check · ' + today(); r.status='running';
+      return later(r, () => { r.thread.push({t:'msg', html:'Counted 24 items; 5 are at or below their reorder level.'}); r.thread.push({t:'gate', kind:'confirm', q:'Use these counts for the grocery list?', actions:['Confirm','Cancel']}); }); }
+    r.thread.push({t:'answered', html:`You chose <b>${esc(a)}</b>`});
+    if (a === 'Cancel'){ r.status='completed'; r.thread.push({t:'msg', html:'Kept the previous grocery list.'}); return; }
+    later(r, () => { const html = '<b>Grocery list</b><ul><li>Olive oil × 1</li><li>Coffee beans × 1 (500 g)</li><li>Dish soap × 1</li><li>Milk × 2 L</li><li>Eggs × 12</li></ul>';
+      r.thread.push({t:'msg', html}); r.status='completed'; OUTPUTS.manage_inventory = {when: today(), run: r.label, html}; toast('Grocery list updated on the page.'); }, true);
+  },
+  process_receipt(r, a){
+    if (a === undefined){ r.label = 'New receipt · ' + today(); r.thread.push({t:'gate', kind:'text', q:'Paste or type the receipt'}); r.status='waiting'; return; }
+    r.thread.push({t:'answered', html:'You sent the receipt'});
+    later(r, () => { r.thread.push({t:'msg', html:'Added 6 lines from Lidl, €23.40.'}); r.status='completed'; r.label = 'Lidl · ' + today(); }, true);
+  },
+  review_inventory(r, a){
+    r.thread.push({t:'answered', html:`You chose <b>${esc(a)}</b>`});
+    later(r, () => { r.thread.push({t:'msg', html: a==='Merge' ? 'Merged. “Bread” now has 4 in stock and the alias “Bread, sliced”.' : 'Kept both items.'}); r.status='completed'; }, true);
+  },
+};
+['manage_expenses','plan_meals'].forEach(k => SCRIPTS[k] = (r, a) => {
+  if (a === undefined){ r.label = WF[k].label + ' · ' + today(); r.thread.push({t:'gate', kind:'confirm', q:'This workflow is drawn the same way as the others; this mock-up stops here.', actions:['Finish']}); r.status='waiting'; return; }
+  r.thread.push({t:'answered', html:'You chose <b>Finish</b>'}); r.status='completed';
+});
+function today(){ return '31 Oct'; }
+function parseNum(v){ const t = String(v).trim().replace(/\s/g,''); if (!/^-?\d+([.,]\d{1,2})?$/.test(t)) return NaN; return Number(t.replace(',', '.')); }
+function later(r, fn, finishes){ r.status = 'running'; render(); setTimeout(() => { fn(); if (!finishes && r.status==='running') r.status = 'waiting'; render(); }, 650); }
+function startRun(wf, host){
+  const r = {id: ++RUN_SEQ, wf, label: WF[wf].label, status:'running', provider:'web', when: today(), host, thread:[]};
+  RUNS.unshift(r); SCRIPTS[wf](r); if (host === 'drawer') S.overlay = {type:'run', id:r.id}; render(); return r;
+}
+
+/* ---------- pages ---------- */
+function householdPage(key){
+  const pg = S.pages[key];
+  const panels = p0() ? pg.panels.filter(p => p.kind !== 'novia' && p.widget !== 'form') : pg.panels;
+  const n = panels.length;
+  return `<div class="pagehead"><h1>${esc(pg.title)}</h1>
+      ${p0() ? '' : `<div class="acts">${S.editing ? '<button class="btn primary sm" data-act="editdone">Done</button>' : '<button class="btn sm" data-act="edit">Edit page</button>'}</div>`}</div>
+    ${p0() ? '<div class="p0note"><b>Phase 0</b> draws the household’s pages read-only — Home, Money and Inventory, written with <code>upsert-page.mjs</code>. Workflow panels run as in Phase 1; tables are read-only. Editing pages, editable tables, forms, Novia and 🧠 Help arrive in Phase 1.</div>' : ''}
+    <div class="grid">${n ? panels.map((p,i) => panel(p, key, i, n)).join('') : `<div class="panel w6"><div class="empty">Your home page is empty — open a domain from the menu${p0()?'':', or add a panel'}.</div></div>`}
+    ${S.editing ? '<button class="addtile" data-act="addpanel">+ Add panel</button>' : ''}</div>`;
+}
+function domainPage(d){
+  const D = DOMAINS[d];
+  const wp = {id:'dw-'+d, kind:'workflow', w:'w6', title:`${D.label} workflows`, domain:d, by:'the registry'};
+  const tables = SOURCES.filter(s => s.domain === d && s.type !== 'output').map((s,i) => ({id:`dd-${d}-${i}`, kind:'data', w: s.type==='view'?'w3':'w6', title:s.label, source:s.id, widget: s.type==='entity'?'form': s.type==='view' && s.id==='spend_by_category' ? 'chart' : s.type==='view' && s.id==='budget_vs_spent' ? 'metric' : s.type==='view' ? 'list' : 'table', by:'the registry'}));
+  const panels = [wp].concat(p0() ? [] : tables);
+  return `<div class="pagehead"><h1>${D.label}</h1><span class="sub">Drawn from the registry</span>
+      ${p0() ? '' : `<div class="acts"><button class="btn sm" data-act="copypage" data-v="${d}">Copy to a new page</button></div>`}</div>
+    ${p0() ? '<div class="p0note"><b>Phase 0</b> draws a domain page’s workflow panel only; the data panels below it arrive in Phase 1.</div>' : ''}
+    <div class="grid">${panels.map((p,i) => { const e = S.editing; S.editing = false; const h = panel(p, 'd', i, panels.length); S.editing = e; return h; }).join('')}</div>`;
+}
+function domainsPage(){
+  return `<div class="pagehead"><h1>Domains</h1><span class="sub">Every domain in your brain</span></div>
+    <div class="panel"><div class="runs">${Object.entries(DOMAINS).map(([k,d]) => `<button class="runrow" data-act="go" data-v="d-${k}"><span class="lbl">${d.label}</span><span class="foot">${Object.values(WF).filter(w=>w.domain===k).length} workflows · ${d.tables.length} tables and views</span></button>`).join('')}</div></div>`;
+}
+function activityPage(which){
+  if (which === 'runs') return `<div class="pagehead"><h1>Runs</h1><span class="sub">Every run, by what it was about</span></div>
+    <div class="panel"><div class="runs">${RUNS.map(r => `<button class="runrow" data-act="openrun" data-v="${r.id}"><span class="lbl">${esc(r.label)}</span><span class="foot">${WF[r.wf].label} · ${r.when}</span>${statusPill(r)}${providerPill(r)}</button>`).join('')}</div></div>`;
+  if (which === 'schedules') return `<div class="pagehead"><h1>Schedules</h1></div><div class="panel"><div class="list"><div class="li"><span>Weekly stock check</span><span>Manage inventory · Mondays 08:00</span></div><div class="li"><span>Month-end summary</span><span>Edit the budget · last day, 20:00</span></div></div></div>`;
+  return `<div class="pagehead"><h1>Memory</h1><span class="sub">What the brain has learned, by domain</span></div><div class="panel"><div class="list">
+    <div class="li"><span>Inventory</span><span>“Bread, sliced” and “Bread” are the same item</span></div>
+    <div class="li"><span>Expenses</span><span>Repsol receipts are Transport</span></div>
+    <div class="li"><span>Budget</span><span>Amounts are in euros</span></div></div></div>`;
+}
+
+/* ---------- Novia region ---------- */
+function runNeedsWidth(){
+  if (S.route.startsWith('run-')) return true;
+  const pg = S.pages[S.route]; if (!pg) return false;
+  return pg.panels.some(p => p.kind === 'workflow' && RUNS.some(r => r.host === p.id && r.status !== 'completed'));
+}
+function noviaRegion(forPhone){
+  if (p0()) return '';
+  const auto = !forPhone && runNeedsWidth() && !S.noviaPeek;
+  if (!forPhone && (!S.noviaOpen || auto)) return `<aside class="novia closed" aria-label="Novia"><button class="vlabel" data-act="novia" title="Open Novia">Novia ›</button>${auto && S.noviaOpen ? '<span class="why">Stepped aside for the run</span>' : ''}</aside>`;
+  const cur = SESSIONS.find(s => s.id === S.noviaSession) || SESSIONS[0];
+  return `<aside class="novia" aria-label="Novia">
+    <div class="nh"><h2>Novia</h2><button class="btn sm" data-act="newsession" data-v="">+ New</button>${forPhone ? '' : '<button class="info" data-act="novia" aria-label="Collapse Novia" title="Collapse — the page widens">«</button>'}</div>
+    <div class="sessions">${SESSIONS.map(s => `<button data-act="opensession" data-v="${s.id}" aria-current="${s.id===cur.id}"><span>${esc(s.topic || s.msgs[0]?.text || 'New session')}</span><span class="foot">${s.when}</span></button>`).join('')}</div>
+    <div class="convo">${cur.msgs.map(m => m.gate ? noviaGate(m) : `<div class="bub ${m.me?'me':'nv'}">${m.html || esc(m.text)}</div>`).join('')}
+      ${cur.id==='s1' && !cur.proposed ? `<div class="chips"><button class="chip" data-act="suggest">Put the supplies running low on my home page</button></div>` : ''}</div>
+    <form class="compose" data-form="novia"><label for="nv-in" style="position:absolute;left:-9999px">Message Novia</label><input id="nv-in" placeholder="Message Novia…" autocomplete="off"><button class="btn sm primary" type="submit">Send</button></form>
+  </aside>`;
+}
+function noviaGate(m){
+  if (m.done) return `<div class="answered">${m.done}</div>`;
+  return `<div class="gate"><div class="q">Change the Home page?</div><div class="foot">Adds a <b>List</b> panel “Running low” from view <code>running_low</code>, after “Groceries this month”.</div><div class="list">${INVENTORY.filter(x=>x.low).slice(0,3).map(x=>`<div class="li"><span>${x.item}</span><span>${x.qty}</span></div>`).join('')}</div><div class="btnrow"><button class="btn primary sm" data-act="approvepage">Approve</button><button class="btn sm" data-act="rejectpage">Cancel</button></div></div>`;
+}
+
+/* ---------- overlays ---------- */
+function overlay(){
+  const o = S.overlay; if (!o) return '';
+  if (o.type === 'run'){ const r = RUNS.find(x => x.id === o.id);
+    return drawer(`${esc(r.label)} <span class="foot">· ${WF[r.wf].label}</span>`, `${r.provider==='slack' ? '<div class="foot">Started in Slack; answering here resumes the same run.</div>' : ''}${runView(Object.assign({}, r, {host:'drawer'}))}`); }
+  if (o.type === 'bell'){ const w = waiting();
+    return drawer('Needs you', w.length ? `<div class="runs">${w.map(r => `<button class="runrow" data-act="openrun" data-v="${r.id}"><span class="lbl">${esc(r.thread[r.thread.length-1].q || r.label)}</span><span class="foot">${WF[r.wf].label} · ${esc(r.label)}</span>${providerPill(r)}</button>`).join('')}</div><div class="foot">Each question opens inside its run.</div>` : '<div class="empty">Nothing is waiting for you.</div>'); }
+  if (o.type === 'drill'){ const rows = EXPENSES.filter(e => e.category === o.v);
+    return drawer(`${esc(o.v)} · October`, `<div class="foot">The rows behind the bar — table <code>PGD_Expenses</code>, filtered to category = ${esc(o.v)}.</div>${expensesTable(rows, false)}`); }
+  if (o.type === 'help') return drawer('What your brain can do', helpBody(), true);
+  if (o.type === 'settings') return modal('Settings', settingsBody());
+  if (o.type === 'add') return modal('Add a panel', addBody());
+  if (o.type === 'sheet') return drawer({pages:'Pages', domains:'Domains', activity:'Activity'}[o.v], `<div class="sheetnav">${menuItems(o.v).replace(/<hr>/g,'')}</div>`);
+  if (o.type === 'phonenovia') return drawer('Novia', `<div style="display:flex;flex-direction:column;height:100%;margin:-16px">${noviaRegion(true).replace('class="novia"','class="novia" style="display:flex;flex:1 1 auto;border:0"')}</div>`);
+}
+function drawer(title, body, tabs){
+  return `<div class="scrim" data-act="scrim"><div class="drawer" role="dialog" aria-modal="true" aria-label="${title.replace(/<[^>]+>/g,'')}" data-stop>
+    <div class="dh"><h2>${title}</h2><button class="btn sm quiet" data-act="close" aria-label="Close">✕</button></div>
+    ${tabs ? helpTabs() : ''}<div class="db">${body}</div></div></div>`;
+}
+function modal(title, body){
+  return `<div class="scrim center" data-act="scrim"><div class="modal" role="dialog" aria-modal="true" aria-label="${title}" data-stop>
+    <div class="drawer" style="width:100%;height:auto;box-shadow:none"><div class="dh"><h2>${title}</h2><button class="btn sm quiet" data-act="close" aria-label="Close">✕</button></div></div>
+    ${body}</div></div>`;
+}
+function helpTabs(){
+  return `<div class="tabs" role="tablist">${[['can','What it can do'],['pages','Building your pages'],['words','Words']].map(([k,l]) => `<button role="tab" aria-selected="${S.helpTab===k}" data-act="helptab" data-v="${k}">${l}</button>`).join('')}</div>`;
+}
+function helpBody(){
+  if (S.helpTab === 'can') return `<div class="foot">Drawn from your own brain’s registry — it changes as your brain does.</div>
+    ${Object.entries(DOMAINS).map(([k,d]) => `<div class="panel"><div class="phead"><h2>${d.label}</h2><span class="kind">Domain</span></div>
+      <div class="foot">Keeps: ${d.tables.map(t=>`<code>${t}</code>`).join(', ')}</div>
+      <div>${Object.entries(WF).filter(([,w])=>w.domain===k).map(([,w]) => `<div class="li" style="display:flex;justify-content:space-between;gap:10px;padding:3px 0"><span><b>${w.label}</b></span><span class="foot">${w.desc}</span></div>`).join('')}</div>
+      ${d.schedules.length ? `<div class="foot">Scheduled: ${d.schedules.join(', ')}</div>` : ''}</div>`).join('')}`;
+  if (S.helpTab === 'pages') return `<ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:8px">
+      <li><b>Edit page</b>, then <b>+ Add panel</b>.</li>
+      <li>Choose what the panel is about: <b>data</b> (a table or view, or a workflow’s latest output), a <b>workflow</b> (or all of a domain’s), or a <b>Novia topic</b>.</li>
+      <li>For data, choose how to show it — table, form, list, chart, metric or report. Only the ones that fit the data are offered.</li>
+      <li>Click a chart’s bar to see the rows behind it. ↻ on a report runs its workflow again.</li>
+      <li>Or ask Novia: “put the supplies running low on my home page”. She shows the change before it is made.</li></ol>`;
+  return `<dl class="words">${[['Domain','A kind of thing you keep track of.'],['Workflow','A routine the brain runs for you.'],['Run','One time a workflow ran.'],['Question','The brain needs your answer before it carries on.'],['Memory','What the brain has learned.'],['Novia','The brain’s builder — she makes and fixes workflows, pages and domains.'],['Page','A screen of panels you arrange.'],['Panel','One box on a page.'],['Widget','How a panel shows its data.']].map(([a,b]) => `<dt>${a}</dt><dd>${b}</dd>`).join('')}</dl>`;
+}
+function settingsBody(){
+  const t = S.settingsTab;
+  const entries = [['profile','Profile'],['security','Security'],['language','Language'],['dates','Dates & numbers'],['appearance','Appearance']].filter(([k]) => !p0() || k === 'profile');
+  const pane = {
+    profile:`<div class="fld"><label for="sp-n">Name</label><input id="sp-n" value="Javear"></div><div class="fld"><label for="sp-e">Email</label><input id="sp-e" value="from your sign-in" disabled></div><div><button class="btn sm">Sign out</button></div>`,
+    security:`<div class="fld"><label for="ss-p">Password</label><input id="ss-p" type="password" value="••••••••••"></div><div class="fld"><label for="ss-m">Two-step sign-in</label><select id="ss-m"><option>Passkey</option><option>Authenticator app</option></select></div><div class="foot">Signed in on: this browser · iPhone</div>`,
+    language:`<div class="fld"><label for="sl">Language</label><select id="sl"><option>English</option><option>Español</option></select></div>`,
+    dates:`<div class="fld"><label for="sd">Date format</label><select id="sd"><option>31 Oct 2026</option><option>31/10/2026</option><option>2026-10-31</option></select></div><div class="fld"><label for="sn">Numbers</label><select id="sn"><option>1.234,56</option><option>1,234.56</option></select></div><div class="fld"><label for="sc">Household currency</label><select id="sc"><option>Euro (€)</option><option>US dollar ($)</option></select></div><div class="fld"><label for="sz">Timezone</label><select id="sz"><option>Europe/Madrid</option></select></div>`,
+    appearance:`<div class="fld"><label for="sa">Theme</label><select id="sa"><option>Light</option><option>Dark</option></select></div><div class="fld"><label for="sw">Wallpaper</label><select id="sw"><option>None</option><option>Mountains</option></select></div>`,
+  }[t];
+  return `<div class="settings"><nav aria-label="Settings">${entries.map(([k,l]) => `<button data-act="settab" data-v="${k}" aria-current="${t===k}">${l}</button>`).join('')}</nav><div class="pane">${pane}<div><button class="btn primary sm" data-act="toast" data-v="Settings saved.">Save</button></div></div></div>`;
+}
+function addBody(){
+  const a = S.add;
+  const stepNames = a.kind === 'data' ? ['About','Data','Show as','Add'] : ['About','Choose','Add'];
+  const on = a.step;
+  let body = '';
+  if (a.step === 0) body = `<div class="opts">
+      <button class="opt" data-act="addkind" data-v="data"><b>Data</b><small>A table or view of a domain, or a workflow’s latest output, shown as a table, form, list, chart, metric or report</small></button>
+      <button class="opt" data-act="addkind" data-v="workflow"><b>Workflow</b><small>Start it, see its runs, step through a run in the panel</small></button>
+      <button class="opt" data-act="addkind" data-v="novia"><b>Novia topic</b><small>Her sessions on one subject</small></button></div>`;
+  else if (a.kind === 'data' && a.step === 1) body = Object.entries(DOMAINS).map(([k,d]) => `<div class="foot" style="font-weight:600">${d.label}</div><div class="opts">${SOURCES.filter(s=>s.domain===k).map(s => `<button class="opt" data-act="addsrc" data-v="${s.id}"><b>${s.label}</b><small>${s.type==='output' ? 'Latest output of '+WF[s.wf].label : s.type==='entity' ? 'Entity · records with their children' : (s.type==='view'?'View ':'Table ')+'<code>'+s.id+'</code>'}</small></button>`).join('')}</div>`).join('');
+  else if (a.kind === 'data' && a.step === 2){ const s = SOURCES.find(x=>x.id===a.source); const ok = widgetsFor(s);
+    body = `<div class="opts">${Object.entries(WIDGETS).map(([k,w]) => `<button class="opt" data-act="addwidget" data-v="${k}" ${ok.includes(k)?'':'disabled'} aria-pressed="${a.widget===k}"><b>${w.label}</b><small>${ok.includes(k) ? w.desc : 'Does not fit this data'}</small></button>`).join('')}</div>`; }
+  else if (a.kind === 'workflow' && a.step === 1) body = Object.entries(DOMAINS).map(([k,d]) => `<div class="foot" style="font-weight:600">${d.label}</div><div class="opts"><button class="opt" data-act="addwf" data-v="domain:${k}"><b>All ${d.label} workflows</b><small>One Start per workflow, their runs together</small></button>${Object.entries(WF).filter(([,w])=>w.domain===k).map(([n,w]) => `<button class="opt" data-act="addwf" data-v="${n}"><b>${w.label}</b><small>${w.desc}</small></button>`).join('')}</div>`).join('');
+  else if (a.kind === 'novia' && a.step === 1) body = `<div class="opts">${[...new Set(SESSIONS.map(s=>s.topic))].map(t => `<button class="opt" data-act="addtopic" data-v="${esc(t)}"><b>${esc(t)}</b><small>${SESSIONS.filter(s=>s.topic===t).length} session(s)</small></button>`).join('')}</div>`;
+  else { const p = draftPanel();
+    body = `<div class="fld"><label for="ap-t">Title</label><input id="ap-t" value="${esc(p.title)}" data-chg="addtitle"></div>
+      <div class="fld"><label for="ap-w">Width</label><select id="ap-w" data-chg="addw">${[['w2','1/3'],['w3','1/2'],['w4','2/3'],['w6','Full']].map(([v,l]) => `<option value="${v}" ${p.w===v?'selected':''}>${l}</option>`).join('')}</select></div>
+      <div class="foot">Preview</div><div class="grid">${panel(Object.assign({}, p, {w:'w6'}), 'preview', 0, 1)}</div>`; }
+  const last = a.step === stepNames.length - 1;
+  return `<div class="db"><div class="steps">${stepNames.map((n,i) => `<span class="${i===on?'on':''}">${i+1} ${n}</span>`).join('')}</div>${body}</div>
+    <div class="btnrow" style="padding:12px 16px;border-top:1px solid var(--line)"><span class="count"></span>${a.step ? '<button class="btn" data-act="addback">Back</button>' : ''}${last ? `<button class="btn primary" data-act="addfinish">Add to ${esc(S.pages[S.route].title)}</button>` : ''}</div>`;
+}
+function draftPanel(){
+  const a = S.add, id = 'n' + Date.now().toString(36);
+  if (a.kind === 'data'){ const s = SOURCES.find(x=>x.id===a.source); return {id, kind:'data', w:a.w || (a.widget==='table'?'w6':'w3'), title:a.title || s.label, source:s.id, widget:a.widget, by:'you, 31 Oct'}; }
+  if (a.kind === 'workflow'){ const dom = a.wf.startsWith('domain:') ? a.wf.slice(7) : null;
+    return {id, kind:'workflow', w:a.w || 'w3', title:a.title || (dom ? DOMAINS[dom].label + ' workflows' : WF[a.wf].label), workflow: dom ? null : a.wf, domain: dom, by:'you, 31 Oct'}; }
+  return {id, kind:'novia', w:a.w || 'w3', title:a.title || 'Novia · ' + a.topic, topic:a.topic, by:'you, 31 Oct'};
+}
+
+/* ---------- top-level render ---------- */
+function render(){
+  document.getElementById('stage').classList.toggle('is-phone', S.phone);
+  document.querySelectorAll('#seg-phase button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === S.phase));
+  document.querySelectorAll('#seg-view button').forEach(b => b.setAttribute('aria-pressed', (b.dataset.v === 'phone') === S.phone));
+  const r = S.route;
+  if (p0() && (r.startsWith('act-') || (S.pages[r] && !P0_PAGES.includes(r)))) S.route = 'home';
+  if (!runNeedsWidth()) S.noviaPeek = false;
+  const fullRun = S.route.startsWith('run-') ? RUNS.find(x => x.id == S.route.slice(4)) : null;
+  const main = fullRun ? '' : S.route.startsWith('d-') ? domainPage(S.route.slice(2)) : S.route === 'domains' ? domainsPage() : S.route.startsWith('act-') ? activityPage(S.route.slice(4)) : householdPage(S.route);
+  document.getElementById('app').innerHTML = `${header()}
+    <div class="body">${noviaRegion()}<main class="main" id="main">${fullRun ? `<div class="pagehead"><h1>${esc(fullRun.label)}</h1><span class="sub">${WF[fullRun.wf].label}</span><div class="acts"><button class="btn sm" data-act="go" data-v="home">Back</button></div></div><div class="panel">${runView(Object.assign({}, fullRun, {host:'drawer'}))}</div>` : main}</main></div>
+    <nav class="tabbar" aria-label="Sections"><button data-act="sheet" data-v="pages" aria-current="${section()==='pages'}">Pages</button><button data-act="sheet" data-v="domains" aria-current="${section()==='domains'}">Domains</button>${p0() ? '<button disabled>Activity · P1</button><button disabled>Novia · P1</button>' : `<button data-act="sheet" data-v="activity" aria-current="${section()==='activity'}">Activity</button><button data-act="phonenovia">Novia</button>`}</nav>
+    ${overlay()}
+    ${S.toast ? `<div class="toast" role="status">${esc(S.toast)}</div>` : ''}`;
+}
+function toast(t){ S.toast = t; render(); clearTimeout(toast.h); toast.h = setTimeout(() => { S.toast = null; render(); }, 2200); }
+function flash(id){ S.flash = id; setTimeout(() => { S.flash = null; render(); }, 1600); }
+function findPanel(id){ for (const k in S.pages){ const i = S.pages[k].panels.findIndex(p => p.id === id); if (i >= 0) return [k, i]; } return []; }
+
+/* ---------- events ---------- */
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-act]');
+  if (S.menu && !(el && el.dataset.act === 'menu')){ S.menu = null; if (!el){ render(); return; } }
+  if (!el) return;
+  if (el.dataset.act === 'scrim' && e.target.closest('[data-stop]')) return;
+  const v = el.dataset.v, act = el.dataset.act;
+  if (el.tagName === 'A') e.preventDefault();
+  const A = {
+    phase(){ S.phase = v; S.editing = false; S.overlay = null; },
+    view(){ S.phone = v === 'phone'; S.overlay = null; },
+    go(){ S.route = v; S.overlay = null; S.editing = false; S.menu = null; S.hush = true; location.hash = v; },
+    menu(){ if (S.menu === v){ S.menu = null; S.hush = true; } else S.menu = v; },
+    bell(){ S.overlay = {type:'bell'}; },
+    help(){ S.overlay = {type:'help'}; },
+    helptab(){ S.helpTab = v; },
+    settings(){ S.overlay = {type:'settings'}; },
+    settab(){ S.settingsTab = v; },
+    close(){ S.overlay = null; }, scrim(){ S.overlay = null; },
+    pop(){ S.pops[v] = !S.pops[v]; },
+    start(){ startRun(v, el.dataset.host || 'drawer'); return true; },
+    openrun(){ S.overlay = {type:'run', id:+v}; },
+    expand(){ const r = RUNS.find(x=>x.id==v); S.route = 'run-' + v; S.overlay = null; },
+    closerun(){ const r = RUNS.find(x=>x.id==v); r.host = null; },
+    answer(){ const r = RUNS.find(x=>x.id==v); SCRIPTS[r.wf](r, el.dataset.a); return true; },
+    gridsave(){ const r = RUNS.find(x=>x.id==v); const g = r.thread[r.thread.length-1]; if (Object.keys(g.bad).length){ toast('Fix the outlined amounts first — nothing was sent.'); return true; } SCRIPTS[r.wf](r, 'Save'); return true; },
+    refresh(){ const [k,i] = findPanel(v); const p = S.pages[k].panels[i]; const s = SOURCES.find(x=>x.id===p.source); startRun(s.wf, 'drawer'); return true; },
+    drill(){ S.overlay = {type:'drill', v}; },
+    novia(){ if (runNeedsWidth() && !S.noviaPeek && S.noviaOpen) S.noviaPeek = true; else { S.noviaOpen = !S.noviaOpen; S.noviaPeek = S.noviaOpen; saveNoviaOpen(); } },
+    opensession(){ S.noviaSession = v; S.noviaOpen = true; S.noviaPeek = true; saveNoviaOpen(); if (S.phone) S.overlay = {type:'phonenovia'}; },
+    newsession(){ const s = {id:'s'+Date.now(), topic: v || '', when:'now', msgs:[{me:false, text: v ? `New session on ${v}. What would you like to look at?` : 'What would you like to look at?'}]}; SESSIONS.unshift(s); S.noviaSession = s.id; S.noviaOpen = true; S.noviaPeek = true; saveNoviaOpen(); if (S.phone) S.overlay = {type:'phonenovia'}; },
+    asknovia(){ const [k,i] = findPanel(v); const t = k ? S.pages[k].panels[i].title : 'this panel'; const s = {id:'s'+Date.now(), topic:'', when:'now', msgs:[{me:true, text:`About the panel “${t}” on ${k ? S.pages[k].title : 'this page'}:`},{me:false, text:'I have its configuration and source. What would you like changed?'}]}; SESSIONS.unshift(s); S.noviaSession = s.id; S.noviaOpen = true; S.noviaPeek = true; saveNoviaOpen(); S.pops = {}; },
+    suggest(){ const s = SESSIONS.find(x=>x.id==='s1'); s.proposed = true; s.msgs.push({me:true, text:'Put the supplies running low on my home page'}); s.msgs.push({me:false, text:'Here is the change. Nothing is written until you approve it.'}); s.msgs.push({gate:true}); },
+    approvepage(){ const s = SESSIONS.find(x=>x.id==='s1'); s.msgs[s.msgs.length-1].done = 'You chose <b>Approve</b> · Home is now version 4'; const p = {id:'p5', kind:'data', w:'w2', title:'Running low', source:'running_low', widget:'list', by:'Novia, 31 Oct'}; S.pages.home.panels.push(p); S.route = 'home'; flash('p5'); },
+    rejectpage(){ const s = SESSIONS.find(x=>x.id==='s1'); s.msgs[s.msgs.length-1].done = 'You chose <b>Cancel</b> · nothing changed'; },
+    edit(){ S.editing = true; }, editdone(){ S.editing = false; },
+    mv(){ const [k,i] = findPanel(v); const a = S.pages[k].panels; const j = i + (+el.dataset.d); [a[i], a[j]] = [a[j], a[i]]; },
+    rm(){ const [k,i] = findPanel(v); S.pages[k].panels.splice(i,1); },
+    addpanel(){ S.add = {step:0}; S.overlay = {type:'add'}; },
+    addkind(){ S.add = {step:1, kind:v}; },
+    addsrc(){ S.add.source = v; S.add.step = 2; const ok = widgetsFor(SOURCES.find(x=>x.id===v)); if (ok.length === 1){ S.add.widget = ok[0]; S.add.step = 3; } },
+    addwidget(){ S.add.widget = v; S.add.step = 3; },
+    addwf(){ S.add.wf = v; S.add.step = 2; },
+    addtopic(){ S.add.topic = v; S.add.step = 2; },
+    addback(){ S.add.step--; if (S.add.kind==='data' && S.add.step===2 && widgetsFor(SOURCES.find(x=>x.id===S.add.source)).length===1) S.add.step = 1; },
+    addfinish(){ const p = draftPanel(); S.pages[S.route].panels.push(p); S.overlay = null; S.editing = false; flash(p.id); },
+    newpage(){ const k = 'page' + Object.keys(S.pages).length; S.pages[k] = {title:'New page', panels:[]}; S.route = k; S.editing = true; S.add = {step:0}; S.overlay = {type:'add'}; },
+    copypage(){ const d = DOMAINS[v]; const k = 'copy-' + v; S.pages[k] = {title:d.label, panels:[{id:'c'+Date.now(), kind:'workflow', w:'w6', title:d.label+' workflows', domain:v, by:'you, 31 Oct'}].concat(SOURCES.filter(s=>s.domain===v && s.type!=='output').map((s,i)=>({id:'c'+i+Date.now(), kind:'data', w:'w3', title:s.label, source:s.id, widget: s.type==='entity'?'form':s.type==='view'?'list':'table', by:'you, 31 Oct'})))}; S.route = k; toast(`Copied ${d.label} to a page of your own — rearrange it with Edit page.`); },
+    expsave(){ const n = Object.keys(S.expEdits).length; if (!n){ toast('Nothing to save.'); return true; } Object.entries(S.expEdits).forEach(([key,val]) => { const [id,col] = key.split(':'); const e = EXPENSES.find(x=>x.id==id); e[col] = col==='amount' ? parseNum(val) : val; }); S.expEdits = {}; toast(`Saved ${n} change${n>1?'s':''} — one write, only the changed rows.`); return true; },
+    expreset(){ S.expEdits = {}; },
+    toast(){ toast(v); S.overlay = null; return true; },
+    sheet(){ S.overlay = {type:'sheet', v}; },
+    phonenovia(){ S.overlay = {type:'phonenovia'}; },
+  };
+  if (A[act]){ const done = A[act](); if (!done) render(); }
+});
+document.addEventListener('keydown', e => {
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('g[data-act]')){ e.preventDefault(); e.target.dispatchEvent(new MouseEvent('click', {bubbles:true})); }
+  if (e.key === 'Escape' && (S.overlay || S.menu)){ S.overlay = null; S.menu = null; render(); }
+});
+document.addEventListener('input', e => {
+  const t = e.target;
+  if (t.dataset.grid){ const [rid, bid] = t.dataset.grid.split(':'); const r = RUNS.find(x=>x.id==rid); const g = r.thread[r.thread.length-1]; const b = BUDGET.find(x=>x.id==bid);
+    const n = parseNum(t.value);
+    if (Number.isNaN(n)){ g.bad[bid] = 'A number, e.g. 412,50'; } else { delete g.bad[bid]; }
+    if (!Number.isNaN(n) && n === b.amt) delete g.values[bid]; else g.values[bid] = t.value;
+    t.classList.toggle('bad', !!g.bad[bid]); t.classList.toggle('changed', g.values[bid] !== undefined && !g.bad[bid]);
+    const c = Object.keys(g.values).length; const el = document.getElementById('grid-count-'+rid); if (el) el.textContent = c ? `${c} change${c>1?'s':''}` : 'No changes yet';
+  }
+  if (t.dataset.exp){ const [id,col] = t.dataset.exp.split(':'); const e0 = EXPENSES.find(x=>x.id==id); const orig = col==='amount' ? e0.amount.toFixed(2) : e0.merchant;
+    if (t.value === orig) delete S.expEdits[t.dataset.exp]; else S.expEdits[t.dataset.exp] = t.value;
+    t.classList.toggle('changed', S.expEdits[t.dataset.exp] !== undefined);
+    const c = Object.keys(S.expEdits).length; const el = document.getElementById('exp-count'); if (el) el.textContent = c ? `${c} change${c>1?'s':''}` : 'Edit a cell to change it';
+  }
+});
+document.addEventListener('focusout', e => { if (e.target.dataset.grid){ const [rid] = e.target.dataset.grid.split(':'); const r = RUNS.find(x=>x.id==rid); const g = r.thread[r.thread.length-1]; const bid = e.target.dataset.grid.split(':')[1]; if (g.bad[bid]) render(); } });
+document.addEventListener('change', e => {
+  const t = e.target, c = t.dataset.chg; if (!c) return;
+  if (c === 'width'){ const [k,i] = findPanel(t.dataset.v); S.pages[k].panels[i].w = t.value; render(); }
+  if (c === 'recipe'){ S.recipeIx = +t.value; render(); }
+  if (c === 'addtitle'){ S.add.title = t.value; }
+  if (c === 'addw'){ S.add.w = t.value; render(); }
+});
+document.addEventListener('submit', e => {
+  e.preventDefault(); const f = e.target, kind = f.dataset.form;
+  if (kind === 'choice'){ const r = RUNS.find(x=>x.id==f.dataset.v); SCRIPTS[r.wf](r, new FormData(f).get('c')); }
+  if (kind === 'text'){ const r = RUNS.find(x=>x.id==f.dataset.v); SCRIPTS[r.wf](r, 'text'); }
+  if (kind === 'cmd'){ const q = f.querySelector('input').value.toLowerCase().trim();
+    const hit = Object.entries(WF).find(([,w]) => q && w.label.toLowerCase().split(' ').some(word => word.length > 3 && q.includes(word)));
+    if (hit){ S.cmdTip = null; startRun(hit[0], 'drawer'); }
+    else { S.cmdTip = 'No workflow matched. Try “edit the budget” or “process a receipt” — or ask Novia in her panel.'; render(); setTimeout(() => { S.cmdTip = null; render(); }, 3000); } }
+  if (kind === 'novia'){ const inp = f.querySelector('input'); const txt = inp.value.trim(); if (!txt) return;
+    const s = SESSIONS.find(x=>x.id===S.noviaSession); s.msgs.push({me:true, text:txt});
+    if (/running low|home page/i.test(txt) && s.id==='s1' && !s.proposed){ s.proposed = true; s.msgs.push({me:false, text:'Here is the change. Nothing is written until you approve it.'}, {gate:true}); }
+    else s.msgs.push({me:false, text:'In the real app I would answer here. In this mock-up, try the suggestion in the Shopping list session.'});
+    render(); }
+});
+document.addEventListener('mouseout', e => { if (S.hush && e.target.closest && e.target.closest('.menus') && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('.menus'))){ S.hush = false; document.querySelector('.top')?.classList.remove('hush'); } });
+const routeOk = h => S.pages[h] || h === 'domains' || (h.startsWith('d-') && DOMAINS[h.slice(2)]) || h.startsWith('act-');
+window.addEventListener('hashchange', () => { const h = location.hash.slice(1); if (h && h !== S.route && routeOk(h)){ S.route = h; render(); } });
+(() => { const h = location.hash.slice(1); if (h && routeOk(h)) S.route = h; render(); })();
+</script>
+</body>
+</html>

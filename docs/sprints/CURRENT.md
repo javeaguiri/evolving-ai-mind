@@ -28,7 +28,7 @@ provider, and that a grid answers the bulk-edit ceiling Slack cannot.
 
 | # | Item |
 |---|---|
-| **0** | **A detailed design of the web app — first, and approved before any build (Javear, 2026-10-18).** `docs/arch-home-brain.md` is a v0.1 proposal: layout, regions, flows and phasing at sketch depth. The detailed design takes it to buildable for Phase 0 and Phase 1, as `docs/arch-web-app.md` (the Home Brain doc keeps the product direction and the tenancy model). It settles: **hosting** and how the site reaches PROC without the internal API key; **sign-in** for one user; **framework**; **result delivery** (polling vs push); **pages and navigation** at phone and desktop width; **every gate type's web rendering** from the provider-neutral `dialog`, including the editable grid (§6.4's grid hint); the **API surface** in `openapi.yaml` terms; **error, empty and loading states**; how a **Slack-started run answered on the web** shows it (§6.2); and **what Phase 0 builds versus what Phase 1 adds**. Wireframes are part of it |
+| **0** | ✅ DONE — approved 2026-10-31 (v0.5). **A detailed design of the web app — first, and approved before any build (Javear, 2026-10-18).** `docs/arch-home-brain.md` is a v0.1 proposal: layout, regions, flows and phasing at sketch depth. The detailed design takes it to buildable for Phase 0 and Phase 1, as `docs/arch-web-app.md` (the Home Brain doc keeps the product direction and the tenancy model). It settles: **hosting** and how the site reaches PROC without the internal API key; **sign-in** for one user; **framework**; **result delivery** (polling vs push); **pages and navigation** at phone and desktop width; **every gate type's web rendering** from the provider-neutral `dialog`, including the editable grid (§6.4's grid hint); the **API surface** in `openapi.yaml` terms; **error, empty and loading states**; how a **Slack-started run answered on the web** shows it (§6.2); and **what Phase 0 builds versus what Phase 1 adds**. Wireframes are part of it |
 | **1** | **The web provider, end to end — Phase 0.** Spec first in `docs/openapi.yaml`: `GET /gates`, `POST /gates/{runId}/responses`, `GET /inbox` (§4.7). `provider: 'web'` routed by `callback.provider` (§4.6). A site shell that lists waiting gates and answers them. Results reach the site rather than Slack for a web-started run |
 | **2** | **A `form` gate as an editable grid** — the shape Slack could not render. Open question §6.4 (the grid hint: row key and column label on the `human_gate` contract) is settled here, and Sprint 13's field `group` heading folds into it |
 | **3** | **`manage_budget` (= `edit_budget`, 357 v7) as the Phase 0 workflow** — one column, ~21 rows, the grid's natural first consumer. Its four Sprint 13 findings go to Novia as findings: every save writes all 21 rows; amounts are `text`; `currency: 'USD'` hardcoded in a euro household; grouping by label prefix |
@@ -46,7 +46,7 @@ state changes, not at close.**
 
 | # | Status | Criterion | Scope | Threshold |
 |---|---|---|---|---|
-| **AC0** | 🟡 v0.3 not accepted (Javear, 2026-10-31); **v0.4 of §4 written 2026-10-31** — `arch-home-brain`'s console layout, pages of panels (workflow, data, Novia), widgets as data representations, workflows stepped through as in Slack, reports refreshed by re-running, 🧠 Help apart from ⚙ Settings, ceilings owned by the renderer (§5.4); **mock-up v0.4** at <https://claude.ai/artifact/V13D3yERqnvQDkm8Xsuu8z>; awaiting Javear's review | `docs/arch-web-app.md` covers every point in scope item 0, with wireframes, and Javear approves it before Phase 0 code starts | [0](#scope) | Approval |
+| **AC0** | ✅ **Approved (Javear, 2026-10-31)** — `arch-web-app.md` v0.5: v0.4's pages of panels (workflow, data, Novia), widgets as data representations, workflows stepped through as in Slack, reports refreshed by re-running, 🧠 Help apart from ⚙ Settings, ceilings owned by the renderer (§5.4); v0.5's Pages/Domains/Activity menus across the top, Novia on the left, Phase 0 drawing the household's pages read-only; **mock-up v0.5** at <https://claude.ai/artifact/V13D3yERqnvQDkm8Xsuu8z> | `docs/arch-web-app.md` covers every point in scope item 0, with wireframes, and Javear approves it before Phase 0 code starts | [0](#scope) | Approval |
 | ~~**AC1**~~ | ~~⬜~~ — **moved out: Sprint 14 is design only (Javear, 2026-10-30)**; to the web build sprint | A run started from the web site suspends at a gate, the gate appears on the site, and answering it there resumes the run to completion — no Slack involved | [1](#scope) | Binary, live |
 | ~~**AC2**~~ | ~~⬜~~ — **moved out with AC1 (Javear, 2026-10-30)** | `manage_budget` edits all its amounts in one editable grid on the site, grouped by budget type, and one save writes **only the changed rows**, as numbers, in the household's currency | [2](#scope), [3](#scope) | Binary, live |
 | ~~**AC3**~~ | ~~⬜~~ — **moved out with AC1 (Javear, 2026-10-30)** | The site requires sign-in, and no request from the browser carries the internal API key | [4](#scope) | Binary |
@@ -80,6 +80,28 @@ and these ACs are right.
 | Removing the Slack leaks in `arch-home-brain.md` §3.2 | Phase 1, except where Phase 0 needs one gone |
 
 ## Session Notes
+
+### Session 8 — 2026-10-31 — v0.5 approved: AC0 met
+
+**Javear on v0.4:** command bar kept apart from Novia, as designed. Phase 0 should not ship an empty
+Home: build three pages — Home, Money, Inventory — as fixed pages until Phase 1 brings the editor.
+A Novia topic is set only from its panel, and the user keeps the session on it; deleting, moving and
+adding sessions to a topic come later (backlog). Desktop: Novia to the left of the page panels, and
+the navigator's Pages / Domains / Activity as menus across the top, opening on hover.
+
+**Agreed (Javear):** the three pages are `PGC_Page` rows written by `upsert-page.mjs` from a
+household file outside the system seeds, drawn read-only — so Phase 0 builds every widget but
+`form`, tables read-only, plus `GET /sources/{source}/rows` and `GET /outputs/{workflow}`; the page
+editor stays Phase 1. 🏠 always goes Home. Menus open on hover and on click. Novia collapses with «,
+steps aside while a run needs the width, and is remembered on the device. `set_session_topic`
+dropped.
+
+**Written:** `arch-web-app.md` v0.5 (status Approved) — §2.3, §2.5, §3.1/3.2, §4.1 rewritten, §4.2
+phases per widget, §4.5, §4.8, §10, §12 Q4 removed, §13; `arch-data.md` §4.3.8 and
+`arch-home-brain.md` §4.1, §4.3 to match; backlog item for topic management. **Mock-up v0.5**,
+republished at the same link, source `docs/web-app-mockup/console-v0.5.html`.
+
+**Javear: "that will complete the design of the web app"** → AC0 ✅. Next: close Sprint 14.
 
 ### Session 7 — 2026-10-31 — navigation v0.4: panels, widgets, workflows as in Slack
 
