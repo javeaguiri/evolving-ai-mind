@@ -46,7 +46,7 @@ state changes, not at close.**
 
 | # | Status | Criterion | Scope | Threshold |
 |---|---|---|---|---|
-| **AC0** | 🟡 v0.3 not accepted (Javear, 2026-10-31); **v0.4 of §4 written 2026-10-31** — `arch-home-brain`'s console layout, pages of panels (workflow, data, Novia), widgets as data representations, workflows stepped through as in Slack, reports refreshed by re-running, 🧠 Help apart from ⚙ Settings, ceilings owned by the renderer (§5.4); mock-up v0.4 to follow; awaiting Javear's review | `docs/arch-web-app.md` covers every point in scope item 0, with wireframes, and Javear approves it before Phase 0 code starts | [0](#scope) | Approval |
+| **AC0** | 🟡 v0.3 not accepted (Javear, 2026-10-31); **v0.4 of §4 written 2026-10-31** — `arch-home-brain`'s console layout, pages of panels (workflow, data, Novia), widgets as data representations, workflows stepped through as in Slack, reports refreshed by re-running, 🧠 Help apart from ⚙ Settings, ceilings owned by the renderer (§5.4); **mock-up v0.4** at <https://claude.ai/artifact/V13D3yERqnvQDkm8Xsuu8z>; awaiting Javear's review | `docs/arch-web-app.md` covers every point in scope item 0, with wireframes, and Javear approves it before Phase 0 code starts | [0](#scope) | Approval |
 | ~~**AC1**~~ | ~~⬜~~ — **moved out: Sprint 14 is design only (Javear, 2026-10-30)**; to the web build sprint | A run started from the web site suspends at a gate, the gate appears on the site, and answering it there resumes the run to completion — no Slack involved | [1](#scope) | Binary, live |
 | ~~**AC2**~~ | ~~⬜~~ — **moved out with AC1 (Javear, 2026-10-30)** | `manage_budget` edits all its amounts in one editable grid on the site, grouped by budget type, and one save writes **only the changed rows**, as numbers, in the household's currency | [2](#scope), [3](#scope) | Binary, live |
 | ~~**AC3**~~ | ~~⬜~~ — **moved out with AC1 (Javear, 2026-10-30)** | The site requires sign-in, and no request from the browser carries the internal API key | [4](#scope) | Binary |
@@ -100,7 +100,12 @@ its ceiling — Slack pages lists itself and picks one row of an oversized grid.
 workflows as in Slack, domain pages, Novia, 🧠 Help, ⚙ Settings, routes), §2.3 `PGC_Page.panels`,
 §2.5 session topics, §2.6 a workflow's latest output, §3 `GET /outputs/{workflow}`, §5.4 ceilings
 owned by the renderer, ripples in §6, §9, §10, §12, §13; `arch-data.md` §4.3.8 and
-`arch-home-brain.md` §4.2, §4.4 to match.
+`arch-home-brain.md` §4.2, §4.4 to match. **Mock-up v0.4**, a new standalone page (the v0.2 canvas
+artifact cannot take a page of its own): <https://claude.ai/artifact/V13D3yERqnvQDkm8Xsuu8z>, source
+`docs/web-app-mockup/console-v0.4.html`.
+
+**Next session starts here:** Javear's review of v0.4 (doc §4 and mock-up) → AC0 approval → close
+Sprint 14 → scope Sprint 15 (Novia).
 
 ### Session 6 — 2026-10-30 — design-only sprint; navigation v0.3; Node's October CVEs
 
