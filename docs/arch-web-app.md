@@ -3,11 +3,12 @@
 <!-- Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). -->
 <!-- See LICENSE file in the project root for full license terms. -->
 
-Version: 0.3
+Version: 0.4
 Status: **DRAFT for approval — Sprint 14 AC0.** The four platform choices in §1 are **tentative**
 (Javear, 2026-10-22: "go tentatively with the suggestions"). No Phase 0 code starts before this
 document is approved.
-Last updated: 2026-10-30 (v0.3, §4 rewritten again on Javear's review — one kind of thing per control: ☰ menu with Your pages / Workflows / Your brain kept apart, workflows reached by name with labelled runs, Novia separate from workflows, Settings behind the brain-and-gear icon; §2.4 run labels)
+Last updated: 2026-10-31 (v0.4, §4 rewritten on Javear's review — back to `arch-home-brain.md`'s console: navigator, page of panels, Novia on the right; pages hold panels of three kinds (workflow, data, Novia), a widget is a data representation inside a data panel; workflows stepped through as in Slack; reports refreshed by re-running their workflow; 🧠 Help apart from ⚙ Settings; §2.5 session topics, §2.6 workflow output, §5.4 ceilings owned by the renderer)
+Previously: 2026-10-30 (v0.3 — ☰ menu, labelled runs, Novia separate; §2.4 run labels)
 Previously: 2026-10-25 (v0.2 — pages of widgets, one Ask, ⚙ for the machinery; §2.3 `PGC_Page`)
 
 **Working mock-up:** <https://claude.ai/artifact/CiBwcLPCVTH3YfKt85L1ro> — the wireframes for this
@@ -81,7 +82,7 @@ enqueued to the results queue as today; for the web the row **is** the delivery.
 
 `enqueueCallback` (`sqs-callback.mjs`) becomes the single delivery point: write the row through
 SERV, then enqueue to `SYSSQSSlackResults` when `callback.provider` is `slack`. A run with no
-callback (a scheduled run) writes nothing; its gates still appear in Needs you (§3.1), which reads
+callback (a scheduled run) writes nothing; its gates still appear in 🔔 Needs you (§3.1), which reads
 runs, not the inbox.
 
 ### 2.2 Gate identity — `gate_id`
@@ -104,8 +105,8 @@ This is an Execution change in `run-workflow.mjs`, `step-executor.mjs`, `callbac
 ### 2.3 `PGC_Page` — the household's pages
 
 One row per page version, as `PGC_Workflow` keeps its versions. An evolving artifact (§4.2): written
-by the user from the widget menu or by Novia's gated `propose_page_change`, seeded only with a
-generic Home.
+by the user from *+ Add panel* or by Novia's gated `propose_page_change`, seeded only with a
+generic, empty Home.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -113,17 +114,18 @@ generic Home.
 | page_key | text | Stable identity across versions; the `{pageId}` in `/p/{pageId}` |
 | version | integer | Unique with `page_key`; the latest is drawn |
 | title | jsonb | A string or a language map (§13) |
-| order | integer | Position in the menu's *Your pages*; Home is `0` |
-| widgets | jsonb | Ordered `[{ id, type, width, title?, config }]`; `type` is a widget type of §4.2, `config` its schema |
+| order | integer | Position in the navigator's *Pages*; Home is `0` |
+| panels | jsonb | Ordered `[{ id, kind, width, title?, config }]`; `kind` is `workflow`, `data` or `novia` (§4.2). A data panel's `config` names its `source` and `widget` and carries that widget type's options |
 | created_by | text | `seed`, `user`, `novia` |
 | created_at | timestamptz | |
 
-A widget's `config` is validated against its type's schema on write, as L0 validates a step against
-its `PGC_StepType` contract; an unknown type or key is refused, not stored.
+A panel's `config` is validated on write against its kind's schema and, for a data panel, its widget
+type's — as L0 validates a step against its `PGC_StepType` contract; an unknown kind, widget or key
+is refused, not stored.
 
 ### 2.4 Run labels
 
-A run is listed by what it was about — *Mercadona · 17 Oct* — not by its id or start time (§4.4).
+A run is listed by what it was about — *Mercadona · 17 Oct* — not by its id or start time (§4.3).
 
 - **Declared by the workflow**, as `display.run_label` (§6.3): a template in the engine's `{{…}}`
   syntax over the run's `local_state`. An evolving artifact — Novia writes it when she builds or
@@ -138,6 +140,26 @@ A run is listed by what it was about — *Mercadona · 17 Oct* — not by its id
 
 This is an Execution change in `run-workflow.mjs` and a column on `PGC_WorkflowRun`
 (`arch-data.md` §4.3.8).
+
+### 2.5 Session topics
+
+A Novia panel (§4.2) lists the sessions on one topic, so a session carries one:
+`PGC_Session.topic`, text, nullable.
+
+- **Set from the panel.** *New* in a Novia panel starts a session with the panel's `topic`.
+- **Set by Novia.** For a session begun elsewhere — her region, Slack — she names the topic with
+  `set_session_topic`, a tool that changes only the label and so is not gated. A session with no
+  topic is listed in her region by its first message.
+
+Phase 1; a column on `PGC_Session` (`arch-data.md` §4.3.8) and a Novia tool.
+
+### 2.6 A workflow's latest output
+
+A `report` widget (§4.2) shows the output of a workflow's latest **completed** run: the payload of
+that run's last `HUMAN_NOTIFICATION` in `PGC_UiMessage`, whichever provider ran it, with the run's
+label and completion time. Nothing new is stored — the inbox already holds every message — so the
+report outlives the run, and ↻ Refresh is an ordinary new run (§4.3). Inbox retention (§12) must keep
+the latest completed run's messages for every workflow a report names.
 
 ---
 
@@ -154,10 +176,10 @@ before implementation. Errors are `{ error: { code, message, fields? } }`.
 | `GET /gates/{runId}` | — | `200` one gate as above, or `404 gate_not_waiting` | Same read, one run |
 | `POST /gates/{runId}/responses` | `{ gateId, action, formValues?, inputValue?, listGroup?, selectedValue? }` | `202 { runId }`; `409 gate_moved` when `gateId` is not the waiting gate; `422 invalid_fields` with `fields` when a `number` field fails the shared rule — the run is not resumed | Validates, then enqueues `WORKFLOW_STEP resume_gate` with the run's own callback — the answer never re-points a run at another provider |
 | `GET /inbox` | `?after=<id>&run=<id>&limit=` | `200 { messages: [...], cursor }` | `GET /proc/inbox`: the user's web messages, plus every message of runs the user answered from the web |
-| `POST /runs` | `{ workflow }` | `202 { runId }`; `404 workflow_not_found` | Starts the named workflow — no intent classification — with `callback: { provider: 'web', channel: <sub>, threadId: <runId>, locale }`. The run page (§4.4) is its thread |
-| `GET /runs` | `?workflow=&status=&limit=&before=` | `200 { runs: [{ runId, workflowName, label, status, startedAt }], cursor }`, newest first | `GET /proc/runs`: `PGC_WorkflowRun` with explicit `columns`; `label` per §2.4. Feeds `workflow_runs` and Needs you |
-| `GET /pages` | — | `200 { pages: [{ pageKey, version, title, order, widgets }] }`, latest version of each, `title` resolved to the caller's locale | `GET /proc/pages`. Phase 0 returns Home only |
-| `GET /workflows` | — | `200 { domains: [{ domain, label, workflows: [{ name, label, description }] }] }` | The menu's *Workflows* group — the `workflows` part of §3.2's `GET /domains`, available from Phase 0 |
+| `POST /runs` | `{ workflow }` | `202 { runId }`; `404 workflow_not_found` | Starts the named workflow — no intent classification — with `callback: { provider: 'web', channel: <sub>, threadId: <runId>, locale }`. The run (§4.3) is its thread |
+| `GET /runs` | `?workflow=&domain=&status=&limit=&before=` | `200 { runs: [{ runId, workflowName, label, status, startedAt }], cursor }`, newest first | `GET /proc/runs`: `PGC_WorkflowRun` with explicit `columns`; `label` per §2.4. Feeds workflow panels and the run list in 🔔 |
+| `GET /pages` | — | `200 { pages: [{ pageKey, version, title, order, panels }] }`, latest version of each, `title` resolved to the caller's locale | `GET /proc/pages`. Phase 0 returns Home only |
+| `GET /workflows` | — | `200 { domains: [{ domain, label, workflows: [{ name, label, description }] }] }` | The navigator's *Domains* and each domain page's workflow panel in Phase 0 — the `workflows` part of §3.2's `GET /domains` |
 | `GET /me` | — | `200 { name, email, locale, timezone }` | The token's claims; `locale` and `timezone` from the user's profile, defaulting to the household's (§13) |
 
 `WORKFLOW_ERROR` reaches the browser summarised by `WebApiFunction`, as `callback.mjs` summarises it
@@ -165,8 +187,7 @@ for Slack; the summary function is shared, not copied.
 
 ### 3.2 Phase 1
 
-**Navigation is data.** `GET /domains` returns what the navigator and a domain page's action list
-draw, already resolved to the caller's locale (as a `dialog` is):
+**Navigation is data.** `GET /domains` returns what the navigator and a domain page draw, already resolved to the caller's locale (as a `dialog` is):
 
 ```json
 { "domains": [
@@ -182,12 +203,14 @@ draw, already resolved to the caller's locale (as a `dialog` is):
 `Intl.Collator` in the user's locale. `?labels=all` returns the full language maps instead — for an
 editor of labels, never for drawing.
 
-**Pages and widget data.** `PUT /pages/{pageKey}` writes a new version from the widget menu (`409`
-when the base version moved, `422` naming the widget whose config fails its schema);
-`DELETE /pages/{pageKey}` (never Home). A data widget reads
-`GET /sources/{source}/rows?filter=&order_by=&columns=&limit=` — the same PROC `records` read as
-All data, through the registry's edit policy and `display` metadata, so a widget sees nothing a
-domain page could not.
+**Pages and panel data.** `PUT /pages/{pageKey}` writes a new version from *+ Add panel* (`409`
+when the base version moved, `422` naming the panel whose config fails its schema);
+`DELETE /pages/{pageKey}` (never Home). A data panel reads
+`GET /sources/{source}/rows?filter=&order_by=&columns=&limit=` — the same PROC `records` read as a
+domain page, through the registry's edit policy and `display` metadata, so a panel sees nothing a
+domain page could not. A `report` widget reads `GET /outputs/{workflow}` — `200 { runId, label,
+completedAt, payload }` from §2.6, or `404 no_output` before the first completed run. A Novia panel
+reads `GET /novia/sessions?topic=`.
 
 Adds `arch-home-brain.md` §4.7's remaining resources — `GET /domains`, `/domains/{domain}/schema`,
 `/domains/{domain}/records[/{id}]`, `GET /runs/{runId}` (one run's steps, for Activity), the Novia
@@ -198,144 +221,172 @@ document's entity save (§6.4).
 
 ## 4. Pages and navigation
 
-**Every control in the shell does one kind of thing.** Five kinds, never mixed: **where you go**
-(the menu), **what you look at** (a page), **a workflow and its runs**, **a conversation with
-Novia**, and **how the app is set up for you** (Settings). Preset and custom pages sit in separate
-groups of the menu; nothing in Settings is a page, and nothing in the menu is a setting. The app is
-still a single-page app in the technical sense (§1); this section decides what the user sees.
+**Two modes, as `arch-home-brain.md` §4.1 sets them.** In **Navigate** the app looks into the data
+layers and lets the user change data more directly than Slack can — laid out by the app from REST
+JSON and the registry. In **Execute** a workflow or a Novia conversation is stepped through as it is
+in Slack: the backend pushes markdown and gates, and the app displays them. A page holds both, in
+separate panels — never a workflow's questions spread across a page.
 
 ### 4.1 The shell
 
 ```
 Desktop
-┌──────────────────────────────────────────────────────────────────────────┐
-│ ☰  Home brain · Home                         ! Needs you 1   Novia   🧠⚙ │
-├──────────────────────────────────────────────────────────────────────────┤
-│ ┌ Needs you (1) ───────────────┐ ┌ Process receipts ───────── [ Start ] ┐ │
-│ │ Budget · Edit amounts        │ │ Mercadona · 17 Oct                   │ │
-│ │ waiting 3 min       [ Open ] │ │ Burger King · 12 Oct                 │ │
-│ └──────────────────────────────┘ │ Pharmacy · 11 Oct                    │ │
-│                                  └──────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│ ◉ Home brain   Home                    [ Run a workflow…            ]     🔔 1    🧠    ⚙ │
+├───────────────┬─────────────────────────────────────────────────────────┬────────────────┤
+│ PAGES         │ ┌ Spending by category ───────── ⓘ ┐ ┌ Budget ────────── ⓘ ┐ │ NOVIA        ‹ │
+│  ▸ Home       │ │ ▇▇▇▇▇▇ Groceries                 │ │ [ Edit the budget ] │ │ Shopping list  │
+│  ▸ Money      │ │ ▇▇▇▇ Transport                   │ │ ▸ October · 4 edits │ │ Stock alerts   │
+│  + New page   │ │ ▇▇ Eating out    (click a bar)   │ │ ▸ September         │ │ + New          │
+│ DOMAINS       │ └──────────────────────────────────┘ └─────────────────────┘ │ ────────────── │
+│  ▸ Inventory  │ ┌ Grocery list ───────────────── ↻ Refresh ─ ⓘ ┐             │ You: why is …  │
+│  ▸ Budget     │ │ Milk ×2 · Bread · Olive oil                    │             │ Novia: …       │
+│  ▸ Expenses   │ │ Updated 17 Oct, from Manage inventory          │             │                │
+│ ACTIVITY      │ └────────────────────────────────────────────────┘             │ [ message… ]   │
+│  ▸ Runs       │                                                                │                │
+│  ▸ Schedules  │                                                                │                │
+│  ▸ Memory     │                                                                │                │
+└───────────────┴─────────────────────────────────────────────────────────┴────────────────┘
 
-The menu (☰), open                      Settings (🧠⚙), open
-┌──────────────────────────────┐        ┌──────────────────────────────┐
-│ YOUR PAGES                   │        │ Profile        name, sign out│
-│   Home                       │        │ Security       password, MFA │
-│   Stocks                     │        │ Language                     │
-│   + New page                 │        │ Dates & numbers              │
-│ WORKFLOWS                    │        │ Appearance     wallpaper     │
-│   Receipts                   │        └──────────────────────────────┘
-│     Process receipts         │
-│   Budgets                    │        Phone
-│     Edit the budget          │        ┌──────────────────────┐
-│ YOUR BRAIN                   │        │ ☰  Home      Novia 🧠⚙│
-│   How your brain works       │        ├──────────────────────┤
-│   Activity                   │        │ Needs you (1)        │
-│   All data                   │        │ Process receipts     │
-│   Memory                     │        │  (one column)        │
-└──────────────────────────────┘        └──────────────────────┘
+Phone
+┌────────────────────────┐
+│ ☰  Home    🔔 1  🧠  ⚙ │
+├────────────────────────┤
+│ Spending by category   │
+│ ▇▇▇▇▇▇ ▇▇▇▇ ▇▇         │
+│ Budget                 │
+│ [ Edit the budget ]    │
+│ ▸ October · 4 edits    │
+│ Grocery list        ↻  │
+├────────────────────────┤
+│ Pages  Domains  Novia  │
+└────────────────────────┘
 ```
 
-| Control | Kind | Contents |
-|---|---|---|
-| **☰ Menu** (left) | Where you go | Three groups, always in this order. **Your pages** — Home first, then the household's own pages in their `order`, then *+ New page*. **Workflows** — every workflow with `display.menu` not `false`, grouped by domain; each opens its workflow page (§4.4). **Your brain** — the preset system pages (§4.5), the same in every household and never edited. On a desktop the menu can be pinned open as a left rail; on a phone it slides over the page |
-| **Title** | — | The open page's title. A household page's title is the household's; a preset page's is an app word |
-| **Needs you** | Where you go | A count of waiting questions, shown only when there are some; opens the oldest question. The same list is the `needs_you` widget |
-| **Novia** | A conversation | Opens the Novia drawer (§4.6) over any page. Only Novia answers there — a workflow is never started from it by routing |
-| **🧠⚙ Settings** (right) | How the app is set up | The brain-and-gear icon. Profile, Security, Language, Dates & numbers, Appearance (§4.7). Holds no page and no data |
-| **Page body** | What you look at | The page's widgets in a responsive grid: each widget declares a width (`1/3`, `1/2`, `full`); a phone stacks them in order, full width |
+Page, domain and panel names above are illustrative; all of them are data.
 
-### 4.2 Pages and widgets
-
-A **page** is an evolving artifact: a row holding its title and an ordered list of widgets, each
-with its configuration. A **widget type** is system code — a React component and its config
-schema, the rule `step-executor.mjs` follows for step types: a new kind of widget is a code change;
-which widgets a page shows, over which data, is data. **Preset pages** (§4.5) are not rows: they
-are app pages drawn from the registry, so a household cannot break one by editing it.
-
-| Widget type | Shows | Configuration | Phase |
-|---|---|---|---|
-| `needs_you` | Waiting questions, oldest first, each opening the question | — | 0 |
-| `workflow_runs` | One workflow's runs by their **run label** (§2.4), newest first, each opening the run; a *Start* button. Empty: *"You don't have any {workflow} runs yet — they will be shown here."* | `workflow`, `limit`, `status` | 0 |
-| `table` | A table or view as a grid, editable where the edit policy allows (§6) | `source`, `filter`, `columns`, `order_by`, `limit` | 1 |
-| `list` | Rows as compact cards — *Olive oil · 1 left* | `source`, `filter`, `title_column`, `detail_columns`, `limit` | 1 |
-| `metric` | One number, optionally against a second — *€312 of €400* | `source`, `value_column`, `compare_column`, `format` | 1 |
-| `chart` | Bars or a line over a source's rows | `source`, `kind`, `category_column`, `value_columns` | 1 |
-| `actions` | Buttons that start workflows — *Edit the budget*, *Add a receipt* | `workflows` | 1 |
-| `activity` | Recent runs across workflows, a domain's or all, each by its run label | `domain`, `limit` | 1 |
-| `note` | Text the household writes | `markdown` | 1 |
-
-**A widget reads data, never computes it.** `source` names a registered table or **view**; *running
-low* is a view over inventory with its reorder rule, *budget vs spent* a view joining budgets to the
-month's expenses (§6.2). The widget filters, sorts, limits and formats through the registry's
-`display` metadata (§6.3) — it holds no domain arithmetic and no domain words of its own: every
-label is the registry's, the workflow's, or the page author's. A widget whose source no longer
-exists draws a *source missing* frame naming it, rather than disappearing.
-
-**Who makes pages.** The user, from a widget menu — **+** on a page opens the catalog, a widget is
-configured in a short form (source, then the type's options), and widgets are reordered with up and
-down controls; drag-and-drop layout comes later. Or **Novia**: *"put the supplies running low on my
-home page"* becomes a gated `propose_page_change`, shown as a preview of the page before it is
-written. Either way the page row is versioned like a workflow.
-
-**Seeded.** Home ships as a seed with `needs_you` only; nothing domain-specific is seeded
-(`CLAUDE.md`, system artifacts stay generic). The first time a workflow runs from the web, its
-`workflow_runs` widget is offered for Home. Phase 0 draws Home from the seed, so the page model is
-in place from the first build and Phase 1 only adds widget types.
-
-### 4.3 Explaining the system
-
-A new user meets words the brain uses for itself. Three devices, each from data rather than hand
-copy.
-
-| Device | What it does |
+| Control | Contents |
 |---|---|
-| **One vocabulary** | Six words, used the same everywhere — in the app, in Novia's replies, in errors. *Domain*: a kind of thing you keep track of. *Workflow*: a routine the brain runs for you. *Question*: the brain needs your answer before it carries on (a gate). *Run*: one time a workflow ran. *Memory*: what the brain has learned. *Novia*: the brain's builder — she makes and fixes workflows, pages and domains. The definitions are catalog keys (§13); a term's first use on a screen carries a dotted underline |
-| **ⓘ on every widget and term** | Opens on hover **and** on tap — a phone has no hover. A term shows its definition. A widget shows where its data comes from, from its config and the registry: *"Items from Inventory below their reorder level · view `running_low` · added by Novia, 24 Oct · Ask Novia to change this"* |
-| **How your brain works** | A preset page under *Your brain*, generated from the household's registry, never written by hand: each domain with its tables, the workflows that act on it, what is scheduled, what it remembers, what is waiting. It describes *this* brain, so it stays true as the brain evolves |
+| **Navigator** (left) | **Pages** — Home, then the household's own pages in their `order`, then *+ New page*. **Domains** — every domain from the registry, each opening its domain page (§4.4). **Activity** — Runs, Schedules, Memory. Pinned on a desktop and collapsible to icons; on a phone, the *Pages* and *Domains* tabs |
+| **Command bar** | Phase 1. Free text that starts a workflow — the web's `/mind`, sent as `CLASSIFY_INTENT`; the run opens in the run drawer (§4.3). It never reaches Novia, who has her own region |
+| **🔔 Needs you** | The count of questions waiting on a person, across every run and provider, shown only when there are some. Opens the list; each item opens the question **inside its run** (§4.3) |
+| **🧠 Help** | What the brain can do and how pages are built (§4.6) |
+| **⚙ Settings** | The user's own settings (§4.7) |
+| **Page body** | The page's panels in a responsive grid; each panel declares a width (`1/3`, `1/2`, `2/3`, `full`); a phone stacks them in order, full width |
+| **Novia** (right) | Her sessions and the open conversation (§4.5). Collapsible to a strip on a desktop; the *Novia* tab on a phone |
 
-### 4.4 Workflows and their runs
+### 4.2 Pages, panels and widgets
 
-A workflow is reached by name, from the menu or a widget — never by guessing from typed text. Its
-runs are told apart by what they were about, not by when they started.
+Two levels. **A page holds panels; a panel holds what its kind allows.** The user never assembles
+widgets into panels: adding a panel is one choice — what it is about — and then, for data, how to
+show it.
+
+| Term | What it is | Code or data |
+|---|---|---|
+| **Page** | A title and an ordered list of panels | Data — a `PGC_Page` row (§2.3), an evolving artifact |
+| **Panel** | The frame on a page: title, width, ⓘ, *Ask Novia about this*, and one **kind** | The kinds are system code; which panels a page has, configured how, is data |
+| **Widget** | A representation of data inside a panel — a table, form, list, chart, metric or report | A widget type is system code — a React component and its config schema — the rule `step-executor.mjs` follows for step types |
+
+**Panel kinds.**
+
+| Kind | About | Shows | Config | Phase |
+|---|---|---|---|---|
+| **Workflow** | One workflow, or every workflow of a domain | A *Start* button per workflow (its `display.label`); its runs by **run label** (§2.4), newest first; the active run stepped through in place (§4.3). With `show_output`, the latest output as a `report` widget above the runs | `workflow` or `domain`, `limit`, `show_output` | 0 (on domain pages), 1 (on household pages) |
+| **Data** | A table or view of a domain, or a workflow's latest output | Exactly one widget | `source`, `widget`, the widget's options | 1 |
+| **Novia** | A topic | Her sessions on that topic (§2.5), newest first; opening one continues it in the panel; *New* starts a session on the topic | `topic` | 1 |
+
+**Widget types.**
+
+| Widget | Source | Shows | Options |
+|---|---|---|---|
+| `table` | Table or view | A grid, editable where the edit policy allows; an optional totals row (§6) | `columns`, `filter`, `order_by`, `limit` |
+| `form` | Entity or table | One record as a form, child collections inline beneath it (§6.2's document); a record picker above | `picker_column` |
+| `list` | Table or view | Compact rows — *Olive oil · 1 left*; a row opens its record | `title_column`, `detail_columns`, `filter`, `limit` |
+| `chart` | Table or view | Bars, a line or a pie; click-through (below) | `kind`, `category_column`, `value_columns`, `filter` |
+| `metric` | Table or view | One number, optionally against a second — *€312 of €400* | `value_column`, `compare_column` |
+| `report` | A workflow's latest output (§2.6) | The markdown that workflow produced, with when and from which run; **↻ Refresh** runs the workflow again (§4.3) | `workflow` |
+
+**A widget reads data, never computes it.** A table, view or entity source is read through the
+registry; *running low* is a view over inventory with its reorder rule, *budget vs spent* a view
+joining budgets to the month's expenses (§6.2). The widget filters, sorts, limits and formats
+through the registry's `display` metadata (§6.3) and holds no domain arithmetic and no domain words
+of its own: every label is the registry's, the workflow's, or the page author's. **A report's source
+is always a workflow**, because formatted content is composed in `/proc` — the app never writes a
+report. A panel whose source no longer exists draws a *source missing* frame naming it, rather than
+disappearing.
+
+**Click-through.** A chart's bar, slice or point opens a drawer with a `table` widget over the same
+source, filtered to the clicked category (and series, when there are several value columns): the
+rows behind the mark. A row in a `table` or `list` opens its record in a `form` widget. Both come
+from the widget's own config, with no domain knowledge; a specialised drill (a year into its
+months) is a widget option, added as system code when a page needs it.
+
+**Adding a panel.** *Edit page* → **+ Add panel** → what it is about: a domain's table or view, a
+workflow, a domain's workflows, or a Novia topic. For data, the widget next — only the widgets that
+fit the source are offered (a `chart` needs a numeric column, a `form` an entity or table) — then
+its options, a preview, and *Add*. Panels are reordered with up and down controls and sized by
+width; drag-and-drop layout comes later. Or **Novia**: *"put the supplies running low on my home
+page"* becomes a gated `propose_page_change`, shown as a preview of the page before it is written.
+Either way the page row is versioned like a workflow.
+
+**Seeded.** Home ships as a seed with no panels; nothing domain-specific is seeded (`CLAUDE.md`,
+system artifacts stay generic). An empty Home says *"Your home page is empty — open a domain from
+the menu, or add a panel."* (Phase 0: *open a domain from the menu*.)
+
+### 4.3 Workflows — stepped through as in Slack
 
 | Surface | Design |
 |---|---|
-| **Workflow page** | `/w/{workflow}`: the workflow's label and description, *Start*, and its `workflow_runs` widget full width. Starting sends `POST /runs` with the workflow's name |
-| **Run label** | Each run shows the label its workflow declares (§2.4) — *Mercadona · 17 Oct*. Until the label's values exist, and for a workflow that declares none, the run shows the workflow's label and its start date |
-| **Run page** | `/runs/{runId}`: the run's messages and questions in order, answerable in place — what Slack shows as a thread. *Ask Novia about this* carries the run id |
+| **The run** | What Slack shows as a thread: the run's messages and questions in order, each question answered in place, the next step's output appearing below it. The backend sends what it sends Slack (§5); only the rendering differs, without Slack's limits (§5.4) |
+| **Where a run is shown** | In the workflow panel that started it, which widens to `full` while the run is active; **⤢** opens it as the run page, `/runs/{runId}`. A run started anywhere else — from Slack, the command bar, Novia, a schedule, a report's Refresh — opens in the **run drawer** over the page, from 🔔 or from its label in a list |
+| **History** | A workflow panel lists its runs by label (§2.4); opening a finished run shows its thread, read-only. *Ask Novia about this* carries the run id |
 | **Empty** | *"You don't have any {workflow} runs yet — they will be shown here."* with *Start* |
+| **Refreshing a report** | ↻ starts the report's workflow (`POST /runs`). A run that stops at a question opens in the run drawer; when it completes, the report redraws from the new output, under *Updated {date}, from {run label}* |
 
-### 4.5 Your brain — the preset pages
+A question is only ever shown inside its run. 🔔 is a way to reach it, not a second place it lives.
 
-The system's own pages, the same for every household, drawn from the registry and never edited.
-They sit in the menu's third group so they never mix with the household's pages.
+### 4.4 Domain pages
 
-| Route | Page | Phase |
-|---|---|---|
-| `/brain/how-it-works` | How your brain works (§4.3) | 1 |
-| `/brain/activity`, `/brain/activity/{runId}` | Every run of every workflow by its run label, filterable by domain and status; one run opens its run page | 1 |
-| `/brain/data`, `/brain/data/{domain}` | **All data** — every domain, from the registry, with its records in the §6 views; the place for anything not yet on a page | 1 |
-| `/brain/memory` | What the brain remembers, by domain | 1 |
+Each domain has a page, `/d/{domain}`, drawn from the registry rather than stored — a household
+cannot break one by editing it. First a workflow panel over the domain's workflows (`display.menu`
+not `false`), then a data panel for each table and registered view, with the widget its
+`display.view` names (`table` when none). This is where anything not yet on a household page is
+found. **Phase 0 draws the workflow panel only**; Phase 1 adds the data panels and *Copy to a new
+page*, which turns the domain page into a household page the user can rearrange.
 
-The workflow list is the menu's *Workflows* group, not a preset page.
+### 4.5 Novia
 
-### 4.6 Novia — a conversation of her own
-
-Novia is reached only from her button, and only she answers in her drawer.
+Novia has the right-hand region, and only she answers there.
 
 | Behaviour | Design |
 |---|---|
-| **Drawer** | Opens over the page from the right (a full-screen sheet on a phone), so the page stays in view. Deep-linkable as `?novia=<sessionId>` on any route. Her past sessions at its head |
+| **Region** | Her sessions at its head, newest first, each named by its topic (§2.5); opening one shows the conversation. Deep-linkable as `?novia=<sessionId>` on any route |
+| **Novia panels** | A panel on a page holds one topic's sessions (§4.2), for a subject the household returns to |
 | **Messages** | `MINDS_EYE` / `MINDS_EYE_RESUME`, as `/novia` in Slack; her gated actions render with the gate components of §5 |
-| **Ask Novia about this** | From any widget, record, run or question: opens the drawer with the item's identifiers (widget config, run id, record) in the opening message |
-| **Starting a workflow** | She may start one for the user; the run is then a run like any other, on its workflow page |
+| **Ask Novia about this** | From any panel, record, run or question: opens her region with the item's identifiers (panel config, run id, record) in the opening message |
+| **Starting a workflow** | She may start one for the user; it is then a run like any other, in the run drawer and its workflow's history |
 | **Phase** | 1 |
 
-### 4.7 Settings — how the app is set up for you
+### 4.6 🧠 Help — what the brain can do
 
-Behind the brain-and-gear icon. Each entry is a form; none is a page of data.
+A drawer over the page. Where it describes the brain it is generated from the household's registry,
+never written by hand, so it stays true as the brain evolves; where it describes the app it is
+catalog text (§13).
+
+| Section | Holds |
+|---|---|
+| **What your brain can do** | Each domain with its tables and views, the workflows that act on it, what is scheduled, what it remembers |
+| **Building your pages** | Adding a panel, the three kinds, choosing a widget, click-through, refreshing a report, asking Novia to build a page |
+| **Words** | Nine words, used the same everywhere — in the app, in Novia's replies, in errors. *Domain*: a kind of thing you keep track of. *Workflow*: a routine the brain runs for you. *Run*: one time a workflow ran. *Question*: the brain needs your answer before it carries on (a gate). *Memory*: what the brain has learned. *Novia*: the brain's builder — she makes and fixes workflows, pages and domains. *Page*: a screen of panels you arrange. *Panel*: one box on a page. *Widget*: how a panel shows its data. A term's first use on a screen carries a dotted underline |
+
+**ⓘ on every panel and term** opens on hover **and** on tap — a phone has no hover. A term shows its
+definition. A panel shows where its data comes from, from its config and the registry: *"Items from
+Inventory below their reorder level · view `running_low` · added by Novia, 24 Oct · Ask Novia to
+change this"*.
+
+### 4.7 ⚙ Settings — the user's own
+
+Each entry is a form; none is a page of data.
 
 | Entry | Holds | Phase |
 |---|---|---|
@@ -352,17 +403,15 @@ Client-side; every page has a deep link.
 | Route | Page | Phase |
 |---|---|---|
 | (Cognito managed login) | Sign-in, then back to the page asked for | 0 |
-| `/` | The first page — Home | 0 |
+| `/` | Home | 0 |
 | `/p/{pageId}` | A household page | 1 |
-| `/w/{workflow}` | A workflow page (§4.4) | 0 |
-| `/runs/{runId}` | A run page (§4.4) | 0 |
-| `/gates/{runId}` | **Question** — the workflow's name and the gate, full width; Back returns to the page it came from | 0 |
-| `/brain/…` | The preset pages (§4.5) | 1 |
+| `/d/{domain}` | A domain page (§4.4) | 0 |
+| `/runs/{runId}` | A run page (§4.3) | 0 |
+| `/activity/runs`, `/activity/schedules`, `/activity/memory` | Every run by its label, filterable by domain and status; the schedules; what the brain remembers, by domain | 1 |
 | `/settings/{entry}` | Settings (§4.7) | 0 (Profile), 1 |
-| `?novia=<sessionId>` | The Novia drawer, over any route | 1 |
-
-The mock-up (v0.2) still draws the earlier shell — page tabs, one Ask, ⚙ for the machinery; it is
-redrawn to this section as v0.3.
+| `?run=<runId>` | The run drawer, over any route | 0 |
+| `?novia=<sessionId>` | Novia's region, open on a session | 1 |
+| `?help=<section>` | The Help drawer | 1 |
 
 ---
 
@@ -436,11 +485,35 @@ is the workflow's, in the message.
 
 `optional: false` is enforced before sending; `resumeGate`'s own check stays the authority.
 
+### 5.4 Ceilings belong to the renderer
+
+A workflow gives a gate its whole set, once, and never pages for a provider. Each renderer draws the
+set within its own limits — the rule §1.5 of `architecture.md` states for the Slack block ceiling.
+
+| Gate content | Web | Slack |
+|---|---|---|
+| A long `list`, `list_selection`, `review_object` or markdown | The whole set; a table scrolls, sorts and filters in the browser | **Slack pages the gate itself**: one slice per message with *‹ Prev* / *Next ›*. A page click redraws the slice from the run's waiting gate, rebuilt by `buildDialog` through `GET /proc/gates/{runId}` (§3.1); the answer is the one an unpaged gate sends |
+| A `form` with grid hints (§5.2) past Slack's ceiling | The whole grid, one Save | **Pick one row**: the row headers as a list; picking opens a modal with that row's fields (a modal holds 100 blocks and takes `number` inputs); its Save answers the gate with that row's fields only |
+| A `form` without grid hints past Slack's ceiling | The whole form | Not drawable — L1 refuses it, as today, because nothing in the form says where to split it |
+
+**What a workflow may receive.** An answer to a gridded form may carry a subset of its rows; a row
+absent from `formValues` is unchanged, and so is a row whose values equal the fields' defaults. The
+workflow writes only the rows that changed — what Sprint 14's grid needs anyway — and the rule is
+contract text on the `human_gate` `PGC_StepType`, where Novia reads it.
+
+**Workflows that page today** keep working: their pager is ordinary steps. Novia removes it as she
+next works on each one.
+
+This is an Execution change in `callback.mjs` and `interactive.mjs` (the Slack pager and the
+pick-one modal), contract text on `human_gate`, and a Validation change in `simulation-engine.mjs`:
+L1's gate-size check stops applying to lists and gridded forms and stays for a form without grid
+hints.
+
 ---
 
 ## 6. Domain views — records outside any workflow (Phase 1)
 
-All data (§4.5) and the `table` widget (§4.2) read and write records through the REST resources (§3.2) — `WebApiFunction` →
+Domain pages (§4.4) and data panels (§4.2) read and write records through the REST resources (§3.2) — `WebApiFunction` →
 PROC `records` → SERV — and **never through a workflow**. React decides the widgets. It decides
 them from the registry, **never from a domain name**: a new rendering behaviour is a new view type
 in the app (system code), and which domain uses it is registry data — the rule `step-executor.mjs`
@@ -470,7 +543,8 @@ than guesses around.
 | **Document** | One entity — a recipe | The root record as a form; each child collection inline beneath it, as a sub-grid (ingredients) or an ordered list (steps, by `step_number`); **one Save** writes the whole entity | An entity in `PGC_EntitySchema` with joined children |
 | **List** | Browsing a large table read-mostly | Cards or rows, opening a record | — |
 
-A specialised need — a portfolio chart, a calendar — is a **new view type**, chosen by the registry.
+Grid is the `table` widget, Document the `form` widget, List the `list` widget (§4.2). A specialised
+need — a portfolio chart, a calendar — is a **new widget type**, chosen by the registry.
 Computed values (market value = quantity × price) come from a database view registered like a
 table and shown read-only, never from arithmetic in the app.
 
@@ -483,11 +557,11 @@ registry fact.
 
 | Key | Level | Meaning |
 |---|---|---|
-| `view` | Table, entity | `grid`, `document`, `list`, or a specialised view type |
+| `view` | Table, entity | The widget a domain page draws for it: `table`, `form`, `list`, or a specialised widget type |
 | `label` | Domain, table, entity, workflow | What a person reads instead of the identifier — a string or a language map (§13) |
 | `description` | Domain, workflow | One line under the label in menus — a string or a language map |
 | `icon` | Domain, workflow | A name from the app's own icon set; an unknown name draws the default |
-| `order`, `menu` | Domain, workflow | Position in All data, the menu's *Workflows* group and an `actions` widget's picker; `menu: false` keeps a workflow out of them |
+| `order`, `menu` | Domain, workflow | Position in the navigator's *Domains* and in workflow panels; `menu: false` keeps a workflow out of them |
 | `run_label` | Workflow | How one run is named in lists — a `{{…}}` template over the run's `local_state` (§2.4) |
 | `columns` | Table | Order, and per column: `label` (string or language map), `hidden`, `width` |
 | `format` | Column | `currency` with `currency_column` (the row's own currency column) or a fixed code; `percent`; `date` |
@@ -628,7 +702,7 @@ for every message, Slack's included; that is how a Slack-started run also appear
 
 | Case | Behaviour |
 |---|---|
-| **Slack-started run, gate answered on the web** | The response is enqueued with the run's own callback (Slack). The next gate and the results post to the Slack thread as always, and through the inbox they also appear in Needs you and on the run's page on the web. The Slack message's buttons stay live; a click there is refused by `gate_id` (§2.2) and `interactive.mjs` answers *"Already answered elsewhere."* ephemerally |
+| **Slack-started run, gate answered on the web** | The response is enqueued with the run's own callback (Slack). The next gate and the results post to the Slack thread as always, and through the inbox they also appear in 🔔 and in the run on the web. The Slack message's buttons stay live; a click there is refused by `gate_id` (§2.2) and `interactive.mjs` answers *"Already answered elsewhere."* ephemerally |
 | **Web-started run** | No Slack message exists, so it can only be answered on the web |
 | **Phase 1** | A `GATE_RESOLVED` callback updates the Slack message to show it was answered on the web, so the stale buttons disappear rather than refuse |
 
@@ -638,14 +712,14 @@ for every message, Slack's included; that is how a Slack-started run also appear
 
 | State | What the user sees |
 |---|---|
-| **Loading** | Skeleton widgets on the page and rows on a run page; a gate shows its frame and a spinner in the button row |
-| **Empty** | Needs you: *Nothing is waiting for you.* A workflow with no runs: *"You don't have any {workflow} runs yet — they will be shown here."* with *Start*. A data widget with no rows: its own title and *Nothing here yet*. A new page: the widget menu, open |
-| **Run working** | A *Working…* line at the foot of the run page after *Start* or an answer, until the next message arrives |
+| **Loading** | Skeleton panels on the page and rows in a run; a gate shows its frame and a spinner in the button row |
+| **Empty** | 🔔: *Nothing is waiting for you.* A workflow with no runs: *"You don't have any {workflow} runs yet — they will be shown here."* with *Start*. A data panel with no rows: its own title and *Nothing here yet*. A report before its first run: *Not run yet* with ↻. Home with no panels: §4.2. A new page: *+ Add panel*, open |
+| **Run working** | A *Working…* line at the foot of the run after *Start*, ↻ or an answer, until the next message arrives |
 | **Answer sent** | The gate collapses to a one-line record — *You chose Save · 3 changes* — and its inputs are disabled; the next gate or message follows below |
 | **Gate moved (`409`)** | *This was answered elsewhere.* The gate reloads from `GET /gates/{runId}` |
 | **Invalid fields (`422`)** | The offending cells outlined, each with its message; nothing is sent to the run |
-| **Workflow error** | The summarised error on the run page, with *Ask Novia about this* carrying the run id |
-| **Source missing** | A widget whose `source` is gone draws a frame naming it and offers *Ask Novia about this*; the rest of the page draws normally |
+| **Workflow error** | The summarised error in the run, with *Ask Novia about this* carrying the run id |
+| **Source missing** | A panel whose `source` is gone draws a frame naming it and offers *Ask Novia about this*; the rest of the page draws normally |
 | **Offline / API failure** | A banner, *Can't reach the home brain — retrying*; polling backs off; typed values are kept |
 | **Signed out** | The token is refreshed silently; when that fails, the user returns to sign-in and then to the same page |
 
@@ -656,15 +730,15 @@ for every message, Slack's included; that is how a Slack-started run also appear
 | | Phase 0 — prove the seam | Phase 1 — the console |
 |---|---|---|
 | **Infrastructure** | S3 + CloudFront, Cognito pool and one user, `WebApiFunction`, the web routes, `deploy-web.mjs` | WebSocket only if polling is felt |
-| **PROC** | `PGC_UiMessage` and `enqueueCallback` writing it; `gate_id`; run labels (§2.4); `PGC_Page` with the seeded Home; `GET /proc/gates`, `GET /proc/inbox`, `GET /proc/pages`, `GET /proc/runs`, starting a named workflow | Navigate reads (§3.2), the edit policy and `PGC_RecordEdit`, the `arch-home-brain.md` §3.2 Slack leaks removed |
-| **Contract** | `row`, `column`, `group` on the `human_gate` contract | — |
-| **Pages** | Sign-in, the ☰ menu (Your pages, Workflows), Home from the seeded `PGC_Page` (`needs_you`), workflow pages with `workflow_runs` and *Start*, run pages, Question, Settings › Profile; every gate type of §5.2 | Household pages and the widget menu, the Phase 1 widget types of §4.2, Your brain (How your brain works, Activity, All data, Memory), the Novia drawer, the rest of Settings, ⓘ on widgets and terms, *Ask Novia about this*, Novia's `propose_page_change` |
-| **Slack** | `gate_id` on buttons; the ephemeral "already answered" | `GATE_RESOLVED` message update |
+| **PROC** | `PGC_UiMessage` and `enqueueCallback` writing it; `gate_id`; run labels (§2.4); `PGC_Page` with the seeded Home; `GET /proc/gates`, `GET /proc/inbox`, `GET /proc/pages`, `GET /proc/runs`, starting a named workflow | Navigate reads (§3.2), `GET /proc/outputs` (§2.6), session topics (§2.5), the edit policy and `PGC_RecordEdit`, the `arch-home-brain.md` §3.2 Slack leaks removed |
+| **Contract** | `row`, `column`, `group` on the `human_gate` contract | A gridded form's answer may carry a subset of rows (§5.4) |
+| **Pages** | Sign-in; the shell — navigator (Pages, Domains), 🔔, ⚙; Home from the seeded `PGC_Page`; domain pages with their workflow panel — *Start*, runs by label, the run stepped through in place; the run page and run drawer; Settings › Profile; every gate type of §5.2 | Household pages and *+ Add panel*; data panels with every widget type, click-through and report Refresh; workflow panels on household pages; Novia's region and Novia panels; 🧠 Help; Activity; the command bar; the rest of Settings; ⓘ on panels and terms; *Ask Novia about this*; Novia's `propose_page_change` |
+| **Slack** | `gate_id` on buttons; the ephemeral "already answered" | `GATE_RESOLVED` message update; the Slack pager and pick-one modal (§5.4), with L1's gate-size check narrowed |
 | **Domain views** | — | Grid and document views, cell editors, `display` metadata (§6); SERV batch and entity writes with version checks (§6.4) |
 | **First workflow** | `manage_budget` (357): month pick, then one grid grouped by budget type, after Novia's four corrections | — |
 
-Phase 0 builds every gate type because Needs you shows every waiting gate, whichever provider
-started its run.
+Phase 0 builds every gate type because 🔔 reaches every waiting gate, whichever provider started
+its run.
 
 ---
 
@@ -678,7 +752,7 @@ The threat model is `docs/arch-security.md`; these are the site's own controls.
 | **Identity** | The user is the token's `sub`, verified by the API Gateway authorizer. `WebApiFunction` passes it to PROC as the principal (`arch-security.md` S5); no request body field names a user |
 | **Markdown** | `/proc` markdown is LLM-written and may carry injected content. It is rendered **without raw HTML** and **without remote images** — an image URL can carry data out the moment it renders. Links open in a new tab with `rel="noopener noreferrer"` |
 | **Content Security Policy** | Sent by CloudFront: scripts and styles from the site's own origin only, `connect-src` the site's origin and the Cognito domain, `img-src` the site's origin and `data:`, `frame-ancestors 'none'` |
-| **Object-level checks** | Every resource taking an id — a gate, a run, a page, a Novia session, later a record — is checked against the principal in PROC, never trusted from the URL |
+| **Object-level checks** | Every resource taking an id — a gate, a run, a page, an output, a Novia session, later a record — is checked against the principal in PROC, never trusted from the URL |
 | **Dependencies** | Lockfile committed; `npm audit` in `deploy-web.mjs` stops a deploy with a high-severity finding |
 | **No CSRF surface** | Requests authenticate with a bearer header, not a cookie |
 
@@ -690,17 +764,11 @@ The threat model is `docs/arch-security.md`; these are the site's own controls.
    strict Content Security Policy from CloudFront. The alternative is a cookie session held by
    `WebApiFunction`, which keeps every token out of script reach at the cost of validating the JWT
    in the function rather than in API Gateway.
-2. **Inbox retention** (`arch-home-brain.md` §6.5) — how long `PGC_UiMessage` keeps a row.
+2. **Inbox retention** (`arch-home-brain.md` §6.5) — how long `PGC_UiMessage` keeps a row; the
+   latest completed run of every workflow a report names is kept regardless (§2.6).
 3. **Custom domain** — the CloudFront default domain serves Phase 0; a household domain needs an
    ACM certificate in `us-east-1` and a DNS record.
-4. **Gate-size validation** (`arch-home-brain.md` §6.3) — the L1 field-count check enforces Slack's
-   ceiling; a workflow meant for the web grid can exceed it. Whether the check reads the run's
-   provider or stays at the lowest ceiling is decided before `manage_budget` grows past it.
-5. **Typed requests to workflows.** v0.3 starts a workflow by name only; Novia's drawer is the one
-   place to type. Whether the web also offers Slack's `/mind` — free text routed to a workflow by
-   `CLASSIFY_INTENT` — and where it would sit without mixing with Novia, is open.
-6. **Navigation layout** (Javear, 2026-10-30, still considering): v0.3 separates preset pages,
-   household pages, workflows and settings; the layout is not yet approved.
+4. **Navigation layout** — v0.4 (§4) awaits Javear's review.
 
 ---
 
@@ -716,8 +784,8 @@ language a matter of adding catalogs and language maps, not rewriting the app.
 | **Formatting through `Intl`** | Numbers, dates, currency and sorting (`Intl.NumberFormat`, `DateTimeFormat`, `Collator`) with the user's locale and timezone — never `toLocaleString()` without a locale, never a literal symbol. Number entry accepts the locale's decimal separator (the shared rule already accepts a comma) |
 | **The `dialog` stays plain strings** | PROC resolves language maps before a gate is sent (`arch-home-brain.md` §7.2), so §5's components never see one |
 | **System messages by key** | A notification or error carrying `messageKey` and `params` is rendered from the catalog; its `message` text is the fallback |
-| **Fixed words** | The menu's group names (Your pages, Workflows, Your brain), the preset pages (How your brain works, Activity, All data, Memory), the Settings entries (Profile, Security, Language, Dates & numbers, Appearance), Novia, Start, the six vocabulary terms and their definitions (§4.3) — app words, catalog keys like any other. Page titles are the household's, stored as language maps |
-| **Data-driven menus** | All data, the workflow list and the `actions` picker come from `GET /domains` (§3.2) with `label` already in the user's language; the app draws them and never translates a name itself |
+| **Fixed words** | The navigator's groups (Pages, Domains, Activity) and Activity's entries (Runs, Schedules, Memory), the Help sections, the Settings entries (Profile, Security, Language, Dates & numbers, Appearance), the panel kinds and widget names, Novia, Start, Refresh, the nine vocabulary terms and their definitions (§4.6) — app words, catalog keys like any other. Page titles are the household's, stored as language maps |
+| **Data-driven menus** | The navigator's Domains, domain pages and workflow panels come from `GET /domains` (§3.2) with `label` already in the user's language; the app draws them and never translates a name itself |
 | **Registry labels** | `display.label` and column labels may be language maps. PROC picks the user's locale, then the household's, then the first entry, then a humanised identifier (`budgets_expenses` → *Budgets expenses*); the fallback is marked in the response (`labelFallback: true`) so missing translations can be listed |
 | **Layout** | `lang` set on the document from the locale; CSS logical properties (`margin-inline`, `padding-inline-start`) so a right-to-left language is not ruled out; no text baked into images |
 | **User content** | Shown as entered, never machine-translated without being asked |

@@ -118,7 +118,7 @@ Small and enumerable. Each becomes a provider-neutral name:
 
 ### 4.2 Layout
 
-The buildable shell — menu, pages, workflows and their runs, Novia, Settings — is `docs/arch-web-app.md` §4; the sketch below is the original direction.
+The buildable shell — navigator, pages of panels, workflows and their runs, Novia, Help and Settings — is `docs/arch-web-app.md` §4, which follows this layout.
 
 Desktop:
 
@@ -207,8 +207,9 @@ belongs on the `human_gate` `PGC_StepType` contract so Novia emits it. Slack ign
 stacks the fields as it does today. The row-id encoding in the field `name` stays workflow-local,
 as Sprint 13 requires.
 
-**Ceilings are per provider.** A message caps a Slack form at 50 blocks; the web has no comparable
-ceiling. The pager pattern stays for sets too large for any screen.
+**Ceilings are per provider, and belong to the renderer.** A message caps a Slack form at 50 blocks;
+the web has no comparable ceiling. A workflow gives a gate its whole set and never pages; Slack pages
+or picks one row itself (`arch-web-app.md` §5.4).
 
 ### 4.5 Components
 

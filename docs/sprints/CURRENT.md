@@ -46,7 +46,7 @@ state changes, not at close.**
 
 | # | Status | Criterion | Scope | Threshold |
 |---|---|---|---|---|
-| **AC0** | 🟡 v0.3 of §4 written 2026-10-30 on Javear's review (☰ menu with Your pages / Workflows / Your brain apart, labelled runs, Novia separate, Settings behind the brain-and-gear icon); mock-up still v0.2; Javear still considering the navigation | `docs/arch-web-app.md` covers every point in scope item 0, with wireframes, and Javear approves it before Phase 0 code starts | [0](#scope) | Approval |
+| **AC0** | 🟡 v0.3 not accepted (Javear, 2026-10-31); **v0.4 of §4 written 2026-10-31** — `arch-home-brain`'s console layout, pages of panels (workflow, data, Novia), widgets as data representations, workflows stepped through as in Slack, reports refreshed by re-running, 🧠 Help apart from ⚙ Settings, ceilings owned by the renderer (§5.4); mock-up v0.4 to follow; awaiting Javear's review | `docs/arch-web-app.md` covers every point in scope item 0, with wireframes, and Javear approves it before Phase 0 code starts | [0](#scope) | Approval |
 | ~~**AC1**~~ | ~~⬜~~ — **moved out: Sprint 14 is design only (Javear, 2026-10-30)**; to the web build sprint | A run started from the web site suspends at a gate, the gate appears on the site, and answering it there resumes the run to completion — no Slack involved | [1](#scope) | Binary, live |
 | ~~**AC2**~~ | ~~⬜~~ — **moved out with AC1 (Javear, 2026-10-30)** | `manage_budget` edits all its amounts in one editable grid on the site, grouped by budget type, and one save writes **only the changed rows**, as numbers, in the household's currency | [2](#scope), [3](#scope) | Binary, live |
 | ~~**AC3**~~ | ~~⬜~~ — **moved out with AC1 (Javear, 2026-10-30)** | The site requires sign-in, and no request from the browser carries the internal API key | [4](#scope) | Binary |
@@ -80,6 +80,27 @@ and these ACs are right.
 | Removing the Slack leaks in `arch-home-brain.md` §3.2 | Phase 1, except where Phase 0 needs one gone |
 
 ## Session Notes
+
+### Session 7 — 2026-10-31 — navigation v0.4: panels, widgets, workflows as in Slack
+
+**Javear on v0.3:** further from what he wants; `arch-home-brain.md`'s layout is closer. 🧠 is
+help — what the brain can do, how to configure pages — not settings; ⚙ is the user's settings.
+A widget is a representation of data (table, graph, report, form) over a domain, table or view,
+never tied to a step or gate type, and a workflow's questions must not be spread across a page:
+workflows run as in Slack, from a panel that starts them and shows their history. Reports a
+workflow produces stay on the page and refresh by re-running it. The web should fix Slack's display
+limits, such as unnecessary paging.
+
+**Agreed (Javear):** (1) two levels — a page holds panels of three kinds (workflow, data, Novia); a
+widget is the representation inside a data panel; nesting fixed by the kind, never assembled by the
+user. (2) One workflow, not two versions: the gate carries the whole set and each renderer handles
+its ceiling — Slack pages lists itself and picks one row of an oversized grid.
+
+**Written:** `arch-web-app.md` v0.4 — §4 rewritten (shell, pages/panels/widgets, click-through,
+workflows as in Slack, domain pages, Novia, 🧠 Help, ⚙ Settings, routes), §2.3 `PGC_Page.panels`,
+§2.5 session topics, §2.6 a workflow's latest output, §3 `GET /outputs/{workflow}`, §5.4 ceilings
+owned by the renderer, ripples in §6, §9, §10, §12, §13; `arch-data.md` §4.3.8 and
+`arch-home-brain.md` §4.2, §4.4 to match.
 
 ### Session 6 — 2026-10-30 — design-only sprint; navigation v0.3; Node's October CVEs
 
