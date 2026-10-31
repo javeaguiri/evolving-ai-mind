@@ -243,28 +243,23 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 
 ## Current State
 
-Sprints 7–13: see `docs/sprints/sprint-07.md` through `docs/sprints/sprint-13.md` (outcome, validation, retro).
+Sprints 7–14: see `docs/sprints/sprint-07.md` through `docs/sprints/sprint-14.md` (outcome, validation, retro).
 
-**Sprint 13 closed 2026-10-18 → 10 sessions, branch `sprint/13-bulk-record-edit`. 1177 → 1184 unit tests.** Editing a list of records. **One AC met, five moved, one folded** — and the engine work that shipped was again mostly unscoped, every piece of it surfaced by a run Javear made.
+**Sprint 14 closed 2026-10-31 → 8 sessions, branch `sprint/14-web-phase-0`. 1184 → 1185 unit tests.** A design sprint by decision (Javear, 2026-10-30). **AC0 met: `docs/arch-web-app.md` v0.5 approved** — the web app that becomes the main front end (Slack stays an accessory). Platform tentative: CloudFront + S3, Cognito, `WebApiFunction`, React + esbuild, polling. Pages of panels (workflow, data, Novia); a widget is a data representation, never tied to a step or gate type; workflows stepped through as in Slack, from a panel that starts them and lists their runs by label; reports refreshed by re-running their workflow; ceilings owned by the renderer, so a workflow is never written twice. Pages / Domains / Activity menus across the top, Novia on the left. **Phase 0** draws the household's own pages (Home, Money, Inventory — `PGC_Page` rows written by `upsert-page.mjs` from a household file, never system seeds) read-only; the page editor, Novia's region and editing records are Phase 1. Mock-up: <https://claude.ai/artifact/V13D3yERqnvQDkm8Xsuu8z>.
 
-**AC7 met.** `manage_expenses` (360 v9), built by Novia: add, edit and **soft delete** (`deleted_at`) confirmed from Slack (runs 905, 908, 913). One accepted gap: Delete is a `special_button`, which takes no `condition`, so it also shows on the Add form, where it fails without writing.
+**Shipped:** Novia's prompt-cache fixes (`b6cba4c`); Node's October 21 security release, all four functions on Node 22.23.4 (`ops/node-oct-2026`, `3529a1c`). **Measured:** the gateway's `/v1/agent` ignores a 1h cache TTL. **Moved:** AC1–AC4, AC6 to the web build; AC7, AC9 to Sprint 15.
 
-**Shipped, unscoped, all Execution — the harness extended to the form an LLM naturally writes:** `list_selection` picks by **typed ID**, one box per table group; a `number` form field validated in the UI layer (decimal comma accepted, decimals by default); `action_key` records a row click; a read with no limit returns every row up to 1000; an upsert row whose match columns are empty is **inserted with its key left to the database**; a markdown table past 2800 characters goes out **whole**, up to Slack's 12,000 (Slack sets no per-block markdown limit — the 2800 came from the section block). **Retired:** `fix_workflow` and the automatic repair chain on every failure — all five of its runs had failed; a failure now sends `WORKFLOW_ERROR` only and repair is Novia's `propose_workflow_fix`.
+Read `docs/sprints/sprint-14.md` (outcome, retro) before adding anything to Sprint 15.
 
-**Decided:** no `table_edit` gate type; past a small grid (≤10 rows × ≤3 editable columns, or one column of ≤30 rows) the route is **pick one** — no paged editable grid, a spreadsheet waits for the web layer; soft delete for expenses. **Novia now runs `anthropic/claude-opus-5-5`** (`minds_eye_preferences` v7) — she cost $1.23 over 30 days on sonnet-4-6, and her recurring failure is reasoning: reading a rule, then building the opposite (runs 887, 911). `docs/perplexityLLMs.json` is a cache of the gateway's `/models`; prices are in `docs/perplexity-agent-llm`.
+### Open Work (Sprint 15 — `docs/sprints/CURRENT.md`, PROPOSED, branch `sprint/15-novia-direct`)
 
-Read `docs/sprints/sprint-13.md` (outcome, retro) before adding anything to Sprint 14.
+**Novia: her cost, and testing her own work** (Javear, 2026-10-30 — her cost is affecting his use of her).
 
-### Open Work (Sprint 14 — `docs/sprints/CURRENT.md`, PROPOSED, branch `sprint/14-web-phase-0`)
+1. **Novia calls Anthropic directly** — `callLlmWithTools` through `@anthropic-ai/sdk`, 1h cache TTL; workflow `llm_call`s, sonar and embeddings stay on Perplexity.
+2. **`answer_gate`** on the provider-neutral `POST /gates/{runId}/responses` with `gate_id`.
+3. **`read_workflow_run`**, **a wake at her run's gate**, and **a test-data policy for prod** — the self-testing loop.
 
-**Decided 2026-10-18 (Javear): a web site becomes the main front end; Slack stays an accessory.** Editing a spreadsheet of data is what proved Slack was not cutting it. The goal is general acceptability, **not** multi-tenancy, which waits until the construction-company partner commits. Design: `docs/arch-home-brain.md`, Phase 0.
-
-0. **A detailed design of the web app first** — `docs/arch-web-app.md`, approved before any build: hosting, sign-in, framework, result delivery, pages, every gate type's web rendering incl. the editable grid, API surface, states, wireframes.
-1. **The web provider end to end** — `GET /gates`, `POST /gates/{runId}/responses`, `GET /inbox` spec-first; `provider: 'web'`; a gate shown, answered and resumed on the site.
-2. **A `form` gate as a real editable grid**, with `manage_budget` (357) as the first workflow — plus its four data findings (all-rows write, `text` amounts, hardcoded USD, label-prefix grouping).
-3. **Sign-in for one user** — the browser never holds the internal API key.
-4. **Release readiness R1–R3 move forward** on `ops/` branches, R1 first (`template.yaml` cannot stand up a second environment). R4, R5 held.
-5. Carried, not scoped: Novia's unprompted pattern choice on Opus 5.5 (observe), `preview_step` (backlog), the inventory correction workflow (deferred).
+The web app's Phase 0 build follows, from `docs/arch-web-app.md` §10.
 
 ### Deferred
 
@@ -297,7 +292,8 @@ Read `docs/sprints/sprint-13.md` (outcome, retro) before adding anything to Spri
 | `docs/arch-memory.md` | Memory layer design — PGC_Memory schema, write paths, retrieval, scope, provenance |
 | `docs/arch-session.md` | Session and chat design — PGC_Session/PGC_SessionEntry, `/chat`, `/explain`, diagnostics |
 | `docs/arch-minds-eye.md` | Minds-eye agent — tool catalog, use cases, agentic loop, implementation sequence (Sprint 5) |
-| `docs/arch-home-brain.md` | Home Brain — proposed single-page app: navigation and domain drill-down over REST, workflow execution pushed by the backend as for Slack (console layout, panels, `provider: 'web'` flows, REST resources, phasing) and the multi-tenant flexible-records direction. **Phase 0 is Sprint 14**; tenancy deferred |
+| `docs/arch-home-brain.md` | Home Brain — proposed single-page app: navigation and domain drill-down over REST, workflow execution pushed by the backend as for Slack (console layout, panels, `provider: 'web'` flows, REST resources, phasing) and the multi-tenant flexible-records direction. buildable detail in `arch-web-app.md`; tenancy deferred |
+| `docs/arch-web-app.md` | Web app design, **approved v0.5** — platform, `PGC_UiMessage` inbox, `gate_id`, `PGC_Page`, API surface, the shell (top-bar menus, Novia left, pages of panels and widgets), gate rendering incl. the editable grid, renderer-owned ceilings, domain views, phases, security, languages |
 
 ### Process and reference
 

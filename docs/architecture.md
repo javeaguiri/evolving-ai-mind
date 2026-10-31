@@ -4,8 +4,9 @@
 <!-- See LICENSE file in the project root for full license terms. -->
 
 Version: 4.1
-Status: Active development — Sprint 13 closed 2026-10-18; Sprint 14 proposed
-Last updated: 2026-10-18 (Sprint 13 close — `gate_type` governs rendering only, no `table_edit` gate; `list_selection` picks by typed ID; a `number` form field validated in the experience layer; `fix-workflow.mjs` and the automatic TROUBLESHOOT→FIX chain retired, a failure sends `WORKFLOW_ERROR` only; an unkeyed upsert row is inserted with its key left to the database; a markdown table is never cut at the section-block 2800, only at Slack's 12,000 payload total)
+Status: Active development — Sprint 14 closed 2026-10-31; Sprint 15 proposed
+Last updated: 2026-10-31 (Sprint 14 close — the web site as the main front end, designed in `docs/arch-web-app.md` v0.5; no `.mjs` added or removed)
+Previously: 2026-10-18 (Sprint 13 close — `gate_type` governs rendering only, no `table_edit` gate; `list_selection` picks by typed ID; a `number` form field validated in the experience layer; `fix-workflow.mjs` and the automatic TROUBLESHOOT→FIX chain retired, a failure sends `WORKFLOW_ERROR` only; an unkeyed upsert row is inserted with its key left to the database; a markdown table is never cut at the section-block 2800, only at Slack's 12,000 payload total)
 Previously: 4.0 — 2026-09-07 (Sprint 12 Track A — the repair loop takes a patch: `propose_workflow_fix` and `simulate_workflow` accept a patch of complete steps merged by `step` identifier; deletion explicit in `removeSteps`; `baseVersion` refuses a write onto a workflow that moved; L0/L1/L2 now runs at both ends of the repair path, having run at neither)
 Previously: 3.9 — 2026-08-30 (Sprint 11 close — bounded views carry their own provenance: capOutput names what it withheld and where the rest is; read_session_entry recall tool; read_workflow outline/steps projection; query_table columns; diffStepFields replacing both DIFF_FIELDS allow-lists; explicit limit on both PGC_SessionEntry loads; output_snapshot as a structural summary)
 Previously: 3.8 — 2026-08-06 — Sprint 9 close (Sprint 10 close did not bump this header) — Novia builds workflows: step-type-registry.mjs added; L0 shape check as a `level` selector on runSimulation, replacing the `skeleton` flag; register_workflow gated write tool; option_source on the human_gate contract with static/dynamic render bounds in callback.mjs; L1 numeric-index check and a template walk that descends the whole step input
@@ -186,7 +187,7 @@ not shared across users of a multi-tenant service.
 - `SlackbotFunction` handles inbound HTTP — slash commands and `/interactive` button clicks
 - `SlackCallbackListenerFunction` handles outbound — consumes `SYSSQSSlackResults` and posts
   threaded Slack replies. Routes on `callback.provider` so adding a new UI is one new `case`
-- Today: Slack. Tomorrow: Teams, webhook, or any other UI — swap the experience layer only
+- Today: Slack. Next: a web site as the main front end, Slack kept as an accessory (decided 2026-10-18; designed and approved 2026-10-31 in `docs/arch-web-app.md` — a second provider, `provider: 'web'`, `WebApiFunction`, not built yet). Any other UI — swap or add the experience layer only
 
 **Process tier** (`ProcFunction`)
 - Contains all business logic and the true value of the system
