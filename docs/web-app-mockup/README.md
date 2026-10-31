@@ -1,7 +1,14 @@
 # Web app mock-up — Sprint 14 (AC0)
 
-Source of the mock-up for `docs/arch-web-app.md`. Live, clickable version:
-<https://claude.ai/artifact/CiBwcLPCVTH3YfKt85L1ro> (private until shared).
+Source of the mock-ups for `docs/arch-web-app.md`.
+
+**v0.4 (current):** `console-v0.4.html` — one standalone page, published at
+<https://claude.ai/artifact/V13D3yERqnvQDkm8Xsuu8z> (private until shared). The console of §4: navigator,
+pages of panels (workflow, data, Novia), widgets, a budget run stepped through in its panel with the
+grid and how Slack shows it, chart click-through, report Refresh, 🔔, 🧠 Help, ⚙ Settings, + Add panel,
+Novia's page proposal; P0/P1 and desktop/phone switches.
+
+**v0.2 (record):** the files below, live at <https://claude.ai/artifact/CiBwcLPCVTH3YfKt85L1ro>.
 
 | File | Frame |
 |---|---|
