@@ -2,8 +2,13 @@
 
 Source of the mock-ups for `docs/arch-web-app.md`.
 
-**v0.4 (current):** `console-v0.4.html` — one standalone page, published at
-<https://claude.ai/artifact/V13D3yERqnvQDkm8Xsuu8z> (private until shared). The console of §4: navigator,
+**v0.5 (current, approved):** `console-v0.5.html`, published at
+<https://claude.ai/artifact/V13D3yERqnvQDkm8Xsuu8z> (private until shared). v0.4 with the Pages,
+Domains and Activity menus across the top bar (open on hover and on click), 🏠 always Home, Novia on
+the left — collapsible with «, stepping aside while a run needs the width, remembered on the device —
+and Phase 0 drawing the household's Home, Money and Inventory pages read-only.
+
+**v0.4 (record):** `console-v0.4.html`, the same artifact's previous version. The console of §4: navigator,
 pages of panels (workflow, data, Novia), widgets, a budget run stepped through in its panel with the
 grid and how Slack shows it, chart click-through, report Refresh, 🔔, 🧠 Help, ⚙ Settings, + Add panel,
 Novia's page proposal; P0/P1 and desktop/phone switches.

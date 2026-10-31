@@ -786,8 +786,9 @@ nothing; its gates reach the web's *Needs you* from `PGC_WorkflowRun`, not from 
 ##### PGC_Page — Phase 0
 
 The household's pages (`arch-web-app.md` §2.3, §4.2): one row per page version, the latest drawn.
-An evolving artifact — written from *+ Add panel* or by Novia's gated `propose_page_change`, and
-seeded with a generic, empty Home only, never a domain-specific page.
+An evolving artifact — written from *+ Add panel* or by Novia's gated `propose_page_change`
+(Phase 1), or until then by `dev_scripts/upsert-page.mjs` from a household file outside the system
+seeds; seeded with a generic, empty Home only, never a domain-specific page.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -795,9 +796,9 @@ seeded with a generic, empty Home only, never a domain-specific page.
 | page_key | text | Stable across versions; `UNIQUE (page_key, version)` |
 | version | integer | |
 | title | jsonb | A string or a language map |
-| order | integer | Position in the web navigator's *Pages*; Home is `0` |
+| order | integer | Position in the web app's *Pages* menu; Home is `0` |
 | panels | jsonb | Ordered `[{ id, kind, width, title?, config }]` — `kind` is `workflow`, `data` or `novia`; a data panel's `config` names its `source` and `widget`. Each `config` is validated against its kind's and widget type's schema on write |
-| created_by | text | `seed`, `user`, `novia` |
+| created_by | text | `seed`, `user` (the page editor or `upsert-page.mjs`), `novia` |
 | created_at | timestamptz | |
 
 **Read by** `GET /proc/pages`; Phase 0 builds the table, the seed and the read, Phase 1 the writes.
@@ -826,7 +827,7 @@ are proposed and settled at the Phase 1 build.
 
 | Table | Change | Phase | Design |
 |---|---|---|---|
-| `PGC_Session` | `topic` text, nullable — the subject a Novia panel lists sessions by; set from the panel that starts the session, or by Novia's ungated `set_session_topic` | 1 | `arch-web-app.md` §2.5 |
+| `PGC_Session` | `topic` text, nullable — the subject a Novia panel lists sessions by; set only from the Novia panel that starts the session | 1 | `arch-web-app.md` §2.5 |
 | `PGC_WorkflowRun` | `label` text, nullable — the run's name in lists, resolved from its workflow's `display.run_label` once every token resolves, then not again | 0 | `arch-web-app.md` §2.4 |
 | `PGC_WorkflowRun` | No column. A `human_gate` frame in `stack` gains `gate_id` (UUID), set when the frame is pushed; `resumeGate` refuses an answer whose `gate_id` differs from the top frame's. An answer carrying none (a Slack button posted before the change) is accepted as today | 0 | `arch-web-app.md` §2.2 |
 | `PGC_Schema`, `PGC_EntitySchema` | `display` jsonb, nullable — how a table or entity is shown: `view`, `label`, `columns` (order, label, hidden, width), `format`, `total`, `soft_delete`, `order_by`, `default_filter`. Every key optional; absent means the default | 1 | `arch-web-app.md` §6.3 |

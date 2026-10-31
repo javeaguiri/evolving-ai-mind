@@ -113,12 +113,12 @@ Small and enumerable. Each becomes a provider-neutral name:
   from the backend.
 - **A second provider, not a replacement.** Slack keeps working. A run started in either can be
   seen in the app.
-- **One page, many panels.** A console: navigation on the left, a panel grid in the centre, Novia
-  on the right. On a phone the three become tabs.
+- **One page, many panels.** A console: navigation menus across the top, Novia on the left, a
+  panel grid beside her. On a phone they become tabs.
 
 ### 4.2 Layout
 
-The buildable shell — navigator, pages of panels, workflows and their runs, Novia, Help and Settings — is `docs/arch-web-app.md` §4, which follows this layout.
+The buildable shell — top-bar menus, pages of panels, workflows and their runs, Novia, Help and Settings — is `docs/arch-web-app.md` §4, which follows this layout.
 
 Desktop:
 
@@ -175,7 +175,7 @@ Resources are in §4.7. **Mode** is from §4.1: *Navigate* is laid out by the ap
 |---|---|---|---|
 | **Command bar** | Execute | One input, the equivalent of `/mind`; replies arrive as pushed content | `POST /commands` |
 | **Breadcrumbs** | Navigate | Where the user is: Home › domain › record, or Home › run › gate | The client's own router |
-| **Navigator** (left) | Navigate | Home, each domain, Activity, Settings | `GET /domains` — the domain registry (`PGC_DomainHelp`) and each domain's live workflows from `PGC_Workflow`, the same read `/help` and `search_domain_help` make |
+| **Navigator** (top-bar menus) | Navigate | Home, each domain, Activity, Settings | `GET /domains` — the domain registry (`PGC_DomainHelp`) and each domain's live workflows from `PGC_Workflow`, the same read `/help` and `search_domain_help` make |
 | **Needs you** | Navigate → Execute | The list of gates waiting on a person, newest first; opening one shows the gate as pushed content, answerable in place | `GET /gates` — runs at `awaiting_human_gate`, each rebuilt with `buildDialog`. **Includes scheduled runs**, whose `callback` is null — today such a gate suspends with nobody to answer it |
 | **Home status** | Execute | Device and system state; pinned output of a status workflow (§4.9) | The latest inbox message of the named status workflow |
 | **Recent activity** | Navigate | Runs by status and time; drill into a run's steps | `GET /runs`, `GET /runs/{runId}` |
