@@ -1,19 +1,17 @@
-# Sprint 14 — The budget grid, and seeing a gate before it is built
+# Sprint 15 — Novia: her cost, and testing her own work
 
-**Status: PROPOSED 2026-10-18, at Sprint 13's close — scope is agreed at "start sprint".**
-Read `docs/sprints/sprint-13.md` §Retro first.
+**Status: PROPOSED 2026-10-31 — awaiting "start sprint".** Decided by Javear 2026-10-30: her cost is
+affecting his ability to use her. Read `docs/sprints/sprint-14.md` §Retro first.
 
-**Branch (proposed):** `sprint/14-budget-grid-and-preview`
-
-> Every AC below was carried from Sprint 13 by Javear's decision on 2026-10-18. The retro's point
-> stands: the engine gaps already known are scoped as items here, not left to surface.
+**Branch:** `sprint/15-novia-direct` (created at "start sprint")
 
 ---
 
 ## Sprint Goal
 
-**Make `manage_budget` the reference small-grid edit — one form, grouped, saving only what
-changed — and give Novia a way to see a gate before she builds it.**
+**Novia costs less per session and tests her own builds and fixes without Javear in the loop:** her
+calls go to the Anthropic API directly, with a 1-hour cache, and she can run, read and answer a
+workflow she started.
 
 ---
 
@@ -21,12 +19,11 @@ changed — and give Novia a way to see a gate before she builds it.**
 
 | # | Item |
 |---|---|
-| **1** | **`manage_budget` (`edit_budget`, workflow 357 v7) — four findings from runs 914/915**, sent to Novia as findings, not fixes: (a) every save writes all 21 rows — step 15 builds one per category, changed or not; (b) amounts are `text` fields read with `parseFloat`, so `12,50` saves as 12 silently — the `number` field exists; (c) step 15 hardcodes `currency: 'USD'` on every row in a euro household, and the summary prints `$`; (d) grouping is a `[Income]` label prefix. It is a one-column small grid (~21 rows) — **not** `manage_expenses`' pick-one |
-| **2** | **A form field `group` that renders a heading where it changes — Execution.** Form fields are inputs only (`step-executor.mjs` `case 'form'`), so nothing can render a sub-title between them. The standard form is HTML's `<fieldset>`/`<legend>`: a `group` on each field, a header block in `dialogToBlocks` where it changes, and the `human_gate` contract says so. ~3 headings + 21 fields is well under 50 blocks |
-| **3** | **`preview_step`, headless — spec first.** Carried from Sprint 13 item 10 (`docs/backlog.md`, "Step preview"): one step against a chosen state through the real `buildDialog` → `dialogToBlocks`, returning a gate's block count and payload size. `openapi.yaml`, a `minds_eye_tool_schemas` row and `docs/arch-minds-eye.md` before code |
-| **4** | **Measure Slack's message-size threshold** — Sprint 13 item 11. Outward posts to a test channel Javear names, each with his go-ahead |
-| **5** | **The inventory correction workflow** — rename, merge, recategorise, alias-fix; specimens aliases **81**, **60**, **59**, keyed on the raw receipt string. Sprint 13 Track C, unchanged |
-| **6** | *Candidate:* a `condition` on `special_buttons`, as `options` already take — the asymmetry behind `manage_expenses`' Delete-on-Add gap. Decide at scoping whether it is needed or whether options suffice |
+| **1** | **Novia calls Anthropic directly** — `docs/backlog.md`, top priority. `callLlmWithTools` only, through `@anthropic-ai/sdk`; workflow `llm_call`s, sonar and embeddings stay on Perplexity. `toInputItems` and the item replay rewritten for Messages content blocks, keeping the byte-identical rebuild tests; `ttl: "1h"` on the cached prefix; the API key in SSM like the others. Carries Sprint 14 AC7 (c) |
+| **2** | **`answer_gate`** — Sprint 14 scope item 9, carried. Built on the provider-neutral `POST /gates/{runId}/responses` with `gate_id`, which this sprint therefore builds in PROC first (`arch-web-app.md` §3.1); refused for a run she did not start and for any gate guarding her own gated write |
+| **3** | **`read_workflow_run`** — from the backlog: the run's status, current step, waiting gate with its `gate_id`, per-step outputs, bounded with provenance |
+| **4** | **Wake her when her run reaches a gate** — from the backlog: a run she started that suspends, completes or fails enqueues `MINDS_EYE_RESUME` for her session; with a bound on self-test rounds per session |
+| **5** | **A test-data policy for prod** — from the backlog; decided before she self-tests anything that writes |
 
 ## Acceptance Criteria
 
@@ -35,20 +32,17 @@ state changes, not at close.**
 
 | # | Status | Criterion | Scope | Threshold |
 |---|---|---|---|---|
-| **AC1** | ⬜ | A single gate edits several records and one click saves them all; **only changed rows are written** | [1](#scope) | Binary, from Slack |
-| **AC2** | ⬜ | `manage_budget` uses it: amounts are numbers, currency is the household's, and income / non-discretionary / discretionary render under their own headings | [1](#scope), [2](#scope) | Binary, from Slack |
-| **AC3** | ⬜ | Novia selects the pattern unprompted when a design calls for it — first cold design on `claude-opus-5-5` | [1](#scope) | Binary, from a cold `/novia` session |
-| **AC4** | ⬜ | A gate that would exceed the ceiling fails in a way that names the cause and the remedy — measured before it is registered | [3](#scope), [4](#scope) | Binary |
-| **AC6** | ⬜ | One correction workflow performs rename, merge, recategorise and alias-fix; aliases 81, 60 and 59 are corrected through it | [5](#scope) | Binary, from Slack, no raw SQL |
-
-(AC5 was folded into AC2 at Sprint 13's close: `edit_budget` is `manage_budget`.)
+| **AC1** | ⬜ | Novia's calls go to the Anthropic API; a round started more than 5 minutes after the last reads its prefix back from cache (Sprint 14 AC7) | [1](#scope) | Binary, from the proc logs on a live session |
+| **AC2** | ⬜ | Her cost per session falls against the Oct 24 baseline, from the Usage and Cost API | [1](#scope) | Measured, compared |
+| **AC3** | ⬜ | Novia answers a gate in a run she started and the run resumes through `POST /gates/{runId}/responses`; a run she did not start, or a gate guarding her own gated write, is refused (Sprint 14 AC9) | [2](#scope) | Binary, live |
+| **AC4** | ⬜ | She builds or fixes a workflow, runs it, is woken at its gate, reads it with `read_workflow_run`, answers, and reports the outcome — with no message from Javear between start and report | [3](#scope), [4](#scope), [5](#scope) | Binary, live |
 
 ## Out of scope
 
 | Item | Why |
 |---|---|
-| A web experience layer | `docs/arch-home-brain.md` — an unpresented proposal |
-| Release readiness | `docs/ops-release-readiness.md`, reviewed at the sprint boundary |
-| A rendered (Slack-posting) `preview_step` | Headless first; the inert-button contract must be settled before a preview posts |
+| The web app's Phase 0 build | The sprint after this one, from `docs/arch-web-app.md` §10 (approved v0.5) — Sprint 14 AC1–AC4 |
+| Encryption at rest (Sprint 14 AC6) | Placed when a sprint has room for a quiet cut |
+| Moving workflow `llm_call`s off Perplexity | Novia is nearly all LLM spend |
 
 ## Session Notes

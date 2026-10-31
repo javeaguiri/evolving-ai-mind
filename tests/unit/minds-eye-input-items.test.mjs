@@ -32,9 +32,12 @@ describe('toInputItems — plain entries', () => {
       [{ role: 'user', content: 'fix the flashcards count' }]);
   });
 
-  it('renders a respond entry as an assistant message, dropping per-turn scratch', () => {
+  it('renders a respond entry with no gateway call as a respond call, dropping per-turn scratch', () => {
     const items = toInputItems([assistant(2, 'Here is what I found.')]);
-    assert.deepEqual(items, [{ role: 'assistant', content: 'Here is what I found.' }]);
+    assert.deepEqual(items, [
+      { type: 'function_call',        call_id: 'call_2', name: 'respond', arguments: '{"message":"Here is what I found."}' },
+      { type: 'function_call_output', call_id: 'call_2', output: '{"status":"delivered_to_user"}' },
+    ]);
   });
 
   it('falls back to raw content when an assistant entry will not parse', () => {
@@ -191,13 +194,24 @@ describe('toInputItems — a typed follow-up closes the respond call', () => {
     assert.equal(afterReply.at(-1).output, '{"user_reply":"approved, but batch the residue"}');
   });
 
-  it('still renders a pre-items respond as an assistant message, user turn intact', () => {
+  it('closes a pre-items respond with the reply too, so it never ends on a user turn', () => {
     // Every entry written before `items` existed takes this path.
     const items = toInputItems([assistant(5, 'Here is the plan.'), user(6, 'go ahead')]);
     assert.deepEqual(items, [
-      { role: 'assistant', content: 'Here is the plan.' },
-      { role: 'user',      content: 'go ahead' },
+      { type: 'function_call',        call_id: 'call_5', name: 'respond', arguments: '{"message":"Here is the plan."}' },
+      { type: 'function_call_output', call_id: 'call_5', output: '{"user_reply":"go ahead"}' },
     ]);
+  });
+
+  it('closes a prose reply — stored with empty items — with the reply, not a user turn', () => {
+    // The shape a text reply with no tool call persists as (session 1261, seq 63/81/106).
+    // Rendered as assistant + user, every round after one read back only tools + instructions.
+    const prose = { role: 'assistant', sequence_number: 63, content: JSON.stringify({ action: 'respond', message: 'Run 924 worked.', items: [] }) };
+    const before = toInputItems([user(62, 'see run 924'), prose]);
+    const after  = toInputItems([user(62, 'see run 924'), prose, user(64, 'See run 926')]);
+    assert.ok(!after.slice(1).some(i => i.role === 'user'), 'the follow-up must not be a user turn');
+    assert.deepEqual(after.slice(0, -1), before.slice(0, -1), 'the resumed round must be an append');
+    assert.equal(after.at(-1).output, '{"user_reply":"See run 926"}');
   });
 
   it('does not treat a user message as an approval when a write gate is open', () => {
@@ -245,9 +259,9 @@ describe('toInputItems — a whole round', () => {
       'function_call', 'function_call_output',
       'function_call', 'function_call_output',
       'function_call', 'function_call_output',
-      'assistant',
+      'function_call', 'function_call_output',
     ]);
-    assert.equal(items.filter(i => i.type === 'function_call').length, 3);
+    assert.equal(items.filter(i => i.type === 'function_call').length, 4);
   });
 });
 
