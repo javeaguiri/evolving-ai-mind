@@ -586,6 +586,16 @@ never been invoked live — which is also how synthetic fixtures are built for t
 Break notifications post to the run's thread as `HUMAN_NOTIFICATION` — run ID, step, drift summary,
 and the session ID to pull the prompt from. They are pointers, not payloads.
 
+### Novia — `replay_run` and `resolve_replay_break`
+
+Novia replays a run in her test sandbox (`docs/arch-sandbox.md`) to check a fix against the case
+that failed, at no LLM cost. `replay_run` creates the run through the shared `createReplayRun`
+with `sandbox` set and `callback: { provider: 'novia', sessionId, reply }`; its gates come to her
+and she answers them with `answer_gate`. A break reaches her as an `LLM_BREAK` event built from
+the shared `breakReport` — the drift, the input diff, the disposition and the resolutions offered,
+without the assembled prompt — and `resolve_replay_break` applies her choice through the shared
+`applyBreakResolution`. Both calls wait, as `answer_gate` does (`docs/arch-minds-eye.md` §4.4).
+
 ### Dev script
 
 `dev_scripts/replay.mjs` wraps the loop that is actually run daily:

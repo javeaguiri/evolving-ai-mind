@@ -43,6 +43,7 @@ import { loadStepTypeContracts }                          from './step-type-regi
 import { resolvePath }                                    from './template-resolver.mjs';
 import { buildDialog }                                    from './step-executor.mjs';
 import { answerGate }                                     from './gates.mjs';
+import { createReplayRun, applyBreakResolution, breakReport } from './replay.mjs';
 
 // Closes the round's instructions. Constant, so it rides in the cached prefix rather than
 // being re-sent with every turn.
@@ -121,10 +122,11 @@ const SANDBOXABLE_TOOLS = new Set([
   'query_table', 'run_sql', 'update_data', 'insert_data', 'upsert_data', 'delete_data', 'propose_workflow_fix',
 ]);
 
-// Calls that set a test run moving and then wait for it: the run's next gate, completion or
-// failure becomes the call's result. answer_gate always; run_workflow with test: true.
+// Calls that set a test run moving and then wait for it: the run's next gate, completion,
+// failure or replay break becomes the call's result. answer_gate, replay_run and
+// resolve_replay_break always; run_workflow with test: true.
 const WAITING_TOOLS = new Set([
-  'answer_gate', 'run_workflow',
+  'answer_gate', 'run_workflow', 'replay_run', 'resolve_replay_break',
 ]);
 
 /**
@@ -148,7 +150,7 @@ function notImplemented(capability, wouldHave, note) {
 // can call and the loop cannot run is worse than a tool it never sees.
 export const DISPATCHABLE_TOOLS = new Set([
   ...READ_TOOLS, ...INLINE_WRITE_TOOLS, ...GATED_WRITE_TOOLS,
-  ...TRIGGER_TOOLS, ...HOUSEKEEPING_TOOLS, ...TEST_TOOLS, 'answer_gate', 'respond',
+  ...TRIGGER_TOOLS, ...HOUSEKEEPING_TOOLS, ...TEST_TOOLS, ...WAITING_TOOLS, 'respond',
 ]);
 
 /**
@@ -962,7 +964,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: testResult });
         console.info('proc/minds-eye: test tool executed', { action, sessionId: session.id, traceId });
 
-      } else if (action === 'answer_gate' || (action === 'run_workflow' && params.test === true)) {
+      } else if (WAITING_TOOLS.has(action) && (action !== 'run_workflow' || params.test === true)) {
         // Sets a test run moving and waits: the round ends on an open call, and the run's next
         // gate, completion or failure becomes its result when the run wakes the session
         // (handleRunEvent). The call is recorded before the run is touched, so nothing the run
@@ -976,9 +978,10 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         const limit = prefs.max_test_events ?? 40;
         const started = countTestEvents(workingHistory) >= limit
           ? { error: `This session has used its ${limit} test events. Call end_test and report what you have.` }
-          : action === 'answer_gate'
-            ? await startAnswerGate(params, session, traceId, pend)
-            : await startTestRun(params, session, callback, traceId, threadTs, pend);
+          : action === 'answer_gate'          ? await startAnswerGate(params, session, traceId, pend)
+          : action === 'replay_run'           ? await startReplayRun(params, session, callback, traceId, threadTs, pend)
+          : action === 'resolve_replay_break' ? await startResolveBreak(params, session, traceId, pend)
+          :                                     await startTestRun(params, session, callback, traceId, threadTs, pend);
 
         if (started.waiting) {
           await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: session.id }], { minds_eye_turn_count: turnCount });
@@ -2461,6 +2464,42 @@ async function startAnswerGate(params, session, traceId, pend) {
   return status === 202 ? { waiting: true } : body;
 }
 
+/**
+ * Replay a run in the sandbox: its llm_call steps served from the source run's recorded responses,
+ * so re-running a failing case after a fix costs no LLM call; its gates are real, and come to her.
+ * Waits for the run's first gate, break, completion or failure.
+ */
+async function startReplayRun(params, session, callback, traceId, threadTs, pend) {
+  const sandbox = await activeSandbox();
+  if (!sandbox) return { error: 'No test sandbox exists. Call start_test first: a replay reads and writes only the sandbox.' };
+  if (params.sourceRunId == null) return { error: 'sourceRunId is required' };
+  const reply   = callback && threadTs ? { ...callback, threadId: threadTs } : callback;
+  const created = await createReplayRun({
+    sourceRunId:    params.sourceRunId,
+    breakPolicy:    params.breakPolicy ?? 'on_miss',
+    callback:       { provider: 'novia', sessionId: session.id, reply },
+    sandbox,
+    triggeredBy:    'minds_eye',
+    beforeDispatch: (runId) => pend(runId, 0),
+    traceId,
+  });
+  return created.error ? { error: created.error } : { waiting: true };
+}
+
+/** Resolve the break her replay is waiting at, then wait for what the run does next. */
+async function startResolveBreak(params, session, traceId, pend) {
+  const { runId, resolution, response, sessionId } = params;
+  if (!runId) return { error: 'runId is required' };
+  const run = (await getRows('PGC_WorkflowRun', [{ column: 'id', op: 'eq', value: runId }], undefined, 1, undefined, ['id', 'sandbox', 'callback'])).rows?.[0];
+  if (!isOwnTestRun(run, session.id)) {
+    return { error: 'resolve_replay_break resolves only breaks in your own replays.' };
+  }
+  const last = await getRows('PGC_WorkflowRunStep', [{ column: 'run_id', op: 'eq', value: runId }], 'id DESC', 1, undefined, ['id']);
+  await pend(runId, last.rows?.[0]?.id ?? 0);
+  const applied = await applyBreakResolution(runId, { resolution, response, sessionId }, traceId, 'minds_eye');
+  return applied.error ? { error: applied.error } : { waiting: true };
+}
+
 /** Start a test run in the sandbox, then wait for its first gate, completion or failure. */
 async function startTestRun(params, session, callback, traceId, threadTs, pend) {
   const sandbox = await activeSandbox();
@@ -3000,15 +3039,21 @@ export function projectWorkflowSteps(steps, { selected, outline } = {}) {
  */
 export function describeRunEvent({ message, run, workflow = null, stepRows = [] }) {
   const stopped  = ['completed', 'failed', 'cancelled'].includes(run.status);
+  const atBreak  = run.status === 'awaiting_llm_break';
   const endsWait = ['HUMAN_GATE', 'WORKFLOW_ERROR', 'WORKFLOW_COMPLETED'].includes(message?.type)
-    || (stopped && message?.type === 'HUMAN_NOTIFICATION');
+    || ((stopped || atBreak) && message?.type === 'HUMAN_NOTIFICATION');
   if (!endsWait) return null;
 
   const { outline, note: _note, executed_step_count: _count, ...summary } =
     projectWorkflowRun({ run, workflow, stepRows, outline: true });
+  // A replay break: the llm_call whose recorded response could not be served. The assembled
+  // prompt is left out — it is the size of a whole prompt; the drift says what changed.
+  const report = atBreak ? breakReport(run) : null;
+  const { instructions: _prompt, ...breakSummary } = report ?? {};
   return {
-    event: message.type === 'HUMAN_NOTIFICATION' ? run.status : message.type,
+    event: atBreak ? 'LLM_BREAK' : message.type === 'HUMAN_NOTIFICATION' ? run.status : message.type,
     ...summary,
+    ...(report ? { break: breakSummary, resolutions: (message.breakActions ?? []).map(a => ({ resolution: a.resolution, ...(a.sessionId != null ? { sessionId: a.sessionId } : {}) })) } : {}),
     // The gate as it was sent, which can carry what the plain gate does not — a form redrawn
     // with "Please complete …" is the same gate, and the warning is the whole event.
     ...(summary.waiting_gate && message.type === 'HUMAN_GATE' && message.dialog

@@ -305,7 +305,8 @@ its open call as a `__pending__` entry **before** the run is dispatched or the a
 the round ends. For a `novia` run `enqueueCallback` sends nothing to Slack: every message the run
 would have sent becomes a `MINDS_EYE_RESUME` with `resumeType: 'run_event'` for her session, and
 `handleRunEvent` resolves the open call when the message ends the wait (`describeRunEvent`) — a
-gate (with the dialog as sent, so a redrawn form carries its warning), an error, completion
+gate (with the dialog as sent, so a redrawn form carries its warning), a replay break (`LLM_BREAK`,
+with the drift and the resolutions offered), an error, completion
 (`WORKFLOW_COMPLETED`, which no person is sent), or any message once the run has stopped. A
 notification on the way to the next gate does not; what a notify step said reaches her in the
 event's `steps_since`. Because the wait is recorded first, nothing the run does can arrive before
@@ -323,6 +324,8 @@ so two racing events resolve it once. Events per session are bounded by
 | `answer_gate { runId, gateId, action, formValues?, inputValue?, listGroup?, selectedValue? }` | `answerGate` (`POST /gates/{runId}/responses`), then waits; the next event is the result | Her own test runs only — every other run's gates belong to the user. A `gateId` that is not the waiting gate is `409 gate_moved` |
 | `sandbox: true` on `query_table`, `run_sql`, `update_data`, `insert_data`, `upsert_data`, `delete_data` | Reads or writes the sandbox | Ungated — `delete_data` included |
 | `propose_workflow_fix { sandbox: true }` | Writes an uncommitted test copy into the sandbox's `PGC_Workflow` | Ungated, validated as any patch; gone at `end_test` |
+| `replay_run { sourceRunId, breakPolicy? }` | Replays a run in the sandbox, `llm_call` steps served from its recordings (`docs/arch-replay.md` §9), then waits | Refused with no sandbox; bounded per session |
+| `resolve_replay_break { runId, resolution, sessionId?, response? }` | `use_recorded`, `call_live`, `supplied` or `abort` at the break she is waiting on, then waits | Her own replays only |
 
 **Apply and test.** `gateButtonConfig` gives the approval gate of `propose_workflow_fix` and
 `register_workflow` a `testLabel` (*Apply and test*, *Register and test*); `callback.mjs` draws it

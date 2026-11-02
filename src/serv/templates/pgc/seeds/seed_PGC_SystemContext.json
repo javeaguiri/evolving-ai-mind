@@ -1336,8 +1336,8 @@
     "section": "minds_eye",
     "inject_always": false,
     "inject_for": [],
-    "version": 1,
-    "content": "Test cycle SOP \u2014 testing a workflow you built or changed, in the sandbox, against a plan the user approved.\n\nWHEN\nAfter the user approves a change with Apply and test, or asks for a test. Never start testing without an approved plan.\n\n1. GROUND THE PLAN IN THE WORKFLOW AND THE DATA\n   simulate_workflow traces the paths through the committed workflow; read_workflow { outline: true } shows the tables each step reads and writes. Then query_table shows whether the data each path needs exists: a step that branches on an empty result needs a case with rows and one without; a gate whose options come from data needs rows to produce them.\n\n2. WRITE THE PLAN AND RESPOND WITH IT\n   - The paths covered, each once, and the input and gate answers that drive each one.\n   - The sandbox: the tables copied and which of their rows, and the test data you will create or change.\n   - Every loop cut short, and how.\n   - Any test copy of the workflow, with its difference from the real one.\n   - What the plan does not cover, and why \u2014 for example a step that creates tables, or a path no safe data reaches.\n   Wait for the user's approval. Change the plan if asked.\n\n3. CUT LOOPS WITH DATA FIRST\n   A loop that runs until a condition holds is cut by data that starts one step short of it: two items instead of fifty, an item one correct answer from done. That tests the workflow as it ships. Only when no data can shorten a loop \u2014 a count fixed in the steps \u2014 make a test copy with propose_workflow_fix { sandbox: true }. A test copy is not the shipped workflow: name the steps it changed in the plan and in the report.\n\n4. RUN\n   start_test, shape the data with sandbox: true, then run_workflow { test: true }: its result is the run's first gate, or its completion or failure.\n   At every gate, read the dialog as the user would see it before answering: no literal {{token}}, no empty label, values that match the sandbox data, options that make sense for the question. A wrong value at a gate is a defect even when the run would carry on. Then answer_gate as the plan says; its result is the next gate, or the run's completion or failure.\n   When a run completes, check what it changed with query_table { sandbox: true }, and read_workflow_run { steps } for any step whose output you need.\n   reset_test before a pass that must start from the plan's starting data.\n\n5. ON A DEFECT\n   Note it \u2014 the step, what you saw, what the plan expected \u2014 and carry on with every path it does not block. Do not fix anything mid-cycle: the later paths would test a different workflow from the earlier ones. When the plan is finished or blocked, end_test and report every defect together. Then the normal fix cycle: diagnose, simulate, and propose the fix for the user's approval. Once a fix is applied, offer a fresh test cycle, which starts from a fresh sandbox.\n\n6. REPORT\n   end_test, then respond: the paths that passed, the defects found, what was not covered, and any test copy used. write_memory with the outcome."
+    "version": 2,
+    "content": "Test cycle SOP \u2014 testing a workflow you built or changed, in the sandbox, against a plan the user approved.\n\nWHEN\nAfter the user approves a change with Apply and test, or asks for a test. Never start testing without an approved plan.\n\n1. GROUND THE PLAN IN THE WORKFLOW AND THE DATA\n   simulate_workflow traces the paths through the committed workflow; read_workflow { outline: true } shows the tables each step reads and writes. Then query_table shows whether the data each path needs exists: a step that branches on an empty result needs a case with rows and one without; a gate whose options come from data needs rows to produce them.\n\n2. WRITE THE PLAN AND RESPOND WITH IT\n   - The paths covered, each once, and the input and gate answers that drive each one.\n   - The sandbox: the tables copied and which of their rows, and the test data you will create or change.\n   - Every loop cut short, and how.\n   - Any test copy of the workflow, with its difference from the real one.\n   - What the plan does not cover, and why \u2014 for example a step that creates tables, or a path no safe data reaches.\n   Wait for the user's approval. Change the plan if asked.\n\n3. CUT LOOPS WITH DATA FIRST\n   A loop that runs until a condition holds is cut by data that starts one step short of it: two items instead of fifty, an item one correct answer from done. That tests the workflow as it ships. Only when no data can shorten a loop \u2014 a count fixed in the steps \u2014 make a test copy with propose_workflow_fix { sandbox: true }. A test copy is not the shipped workflow: name the steps it changed in the plan and in the report.\n\n4. RUN\n   start_test, shape the data with sandbox: true, then run_workflow { test: true }: its result is the run's first gate, or its completion or failure.\n   At every gate, read the dialog as the user would see it before answering: no literal {{token}}, no empty label, values that match the sandbox data, options that make sense for the question. A wrong value at a gate is a defect even when the run would carry on. Then answer_gate as the plan says; its result is the next gate, or the run's completion or failure.\n   When a run completes, check what it changed with query_table { sandbox: true }, and read_workflow_run { steps } for any step whose output you need.\n   reset_test before a pass that must start from the plan's starting data.\n   To check a fix against a real run that failed, replay it with replay_run in the sandbox: its llm_call steps are served from that run's recordings, so it costs no LLM call. A break shows which prompt or input your fix changed; resolve_replay_break with use_recorded when the change should not alter that step's answer, call_live when it should.\n\n5. ON A DEFECT\n   Note it \u2014 the step, what you saw, what the plan expected \u2014 and carry on with every path it does not block. Do not fix anything mid-cycle: the later paths would test a different workflow from the earlier ones. When the plan is finished or blocked, end_test and report every defect together. Then the normal fix cycle: diagnose, simulate, and propose the fix for the user's approval. Once a fix is applied, offer a fresh test cycle, which starts from a fresh sandbox.\n\n6. REPORT\n   end_test, then respond: the paths that passed, the defects found, what was not covered, and any test copy used. write_memory with the outcome."
   },
   {
     "key": "sop_schema_change",
@@ -1372,7 +1372,7 @@
     "section": "rules",
     "inject_always": false,
     "inject_for": [],
-    "version": 10,
+    "version": 11,
     "content": {
       "tools": [
         {
@@ -2399,6 +2399,64 @@
               }
             },
             "required": [
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "replay_run",
+          "description": "Replay a past run in the test sandbox (start_test first) to check a fix against the case that failed. Its llm_call steps are served from the source run's recorded responses, so the replay costs no LLM call; its gates are real and come to you as in a test run - answer them with answer_gate, normally as the source run was answered. When a step's prompt or input differs from its recording (your fix changed it, or memory moved), the run breaks: the result is an LLM_BREAK event with the drift and the resolutions offered, and you resolve it with resolve_replay_break. The call then waits: your round ends, and its result is the run's first gate, break, completion or failure. The sandbox must hold every PGD table the workflow writes. Bounded per session like test runs.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "sourceRunId": {
+                "type": "integer",
+                "description": "The run to replay."
+              },
+              "breakPolicy": {
+                "type": "string",
+                "description": "on_miss (default): serve recordings, break where one does not match. always: break at every llm_call. never: call the LLM live throughout."
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "sourceRunId",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "resolve_replay_break",
+          "description": "Resolve the break your replay is waiting at, then wait for what the run does next. resolution is use_recorded (serve the recording despite the drift - right when your change should not alter this step's answer; pass sessionId to pick one of several recordings offered), call_live (call the LLM for this step only - costs one call), supplied (use the response you pass in response), or abort (end the replay). Only for your own replays. Your round ends, and the result is the run's next gate, break, completion or failure.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "runId": {
+                "type": "integer"
+              },
+              "resolution": {
+                "type": "string",
+                "description": "use_recorded, call_live, supplied or abort"
+              },
+              "sessionId": {
+                "type": "integer",
+                "description": "use_recorded only: which offered recording to serve."
+              },
+              "response": {
+                "type": "object",
+                "description": "supplied only: the response to use."
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "runId",
+              "resolution",
               "reasoning"
             ]
           }
