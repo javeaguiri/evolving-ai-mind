@@ -304,7 +304,7 @@ schedule them.**
 ### Session 1 — 2026-08-30 — Sprint 11 closed, Sprint 12 scoped
 
 Sprint 11 closed early: 2 of 6 ACs met, plus the repair-loop work that was never an AC. Merged to
-main at `65f1f82`; prod is already running it.
+main at `077833a`; prod is already running it.
 
 Sprint 12 is scoped but **not started** — this session is prep only. Track A is the opener by
 decision, and no new workflow is built before it lands.
@@ -437,7 +437,7 @@ three defects would have surfaced by reading — the first two needed the rotati
 a change made *after* the README was last checked. It is worth carrying into Track B that the
 README's remaining steps have the same standing: unverified until someone executes them.
 
-**Commits:** `3b1eda2` (rotation + runbook), `c5580e0` (README).
+**Commits:** `28c1c37` (rotation + runbook), `7829ce1` (README).
 
 **Rotation closed the same session.** The old Perplexity key was deleted in the dashboard, and both
 probes were re-run afterwards: `ping-llm` returns `sonar`, the `vectorSearch` probe returns the same
@@ -549,7 +549,7 @@ key has ever been on this host or in a transcript.
 
 ### Session 5 — 2026-09-07 — Track A built and deployed; AC1 awaits live proof
 
-**Sprint 12 has started.** Prep and Track A landed in one session, commit `032a4d2`, deployed with
+**Sprint 12 has started.** Prep and Track A landed in one session, commit `598e9d3`, deployed with
 both `PGC_SystemContext` rows upserted (`minds_eye_system_prompt` v32 → **v33**,
 `minds_eye_tool_schemas` v6 → **v7**). Regression check first: `/help` from Slack confirmed the
 slackbot → SQS → proc → serv → callback path that Session 4's curl probes could not reach.
@@ -604,7 +604,7 @@ from. Session 1189's inventory planning will supply the real repair.
 ### Session 6 — 2026-09-07 — the README's centre of gravity (no sprint work)
 
 **A one-off administrative task, committed directly to `main` at the user's instruction** and then
-merged into the sprint branch (`d93a065`). No sprint AC advanced, nothing deployed, docs only.
+merged into the sprint branch (`0652f43`). No sprint AC advanced, nothing deployed, docs only.
 
 **The README still opened on the left/right brain split as the system's organising idea** — the
 second thing a reader met, framed as *"the system is designed around two complementary modes of
@@ -725,7 +725,7 @@ is reserved for what the step text makes certain.
 **Two limits are documented in the code rather than papered over:** the check follows one hop, so
 `query → js_transform → gate` warns rather than refuses; and it ignores filters, so a naturally
 small filtered query must still state a limit. Both are deliberate — the alternative is inferring
-what a sandboxed expression returns, or reasoning about filter selectivity. Shipped as `0d240a1`
+what a sandboxed expression returns, or reasoning about filter selectivity. Shipped as `ee14790`
 and deployed; 1079 → **1082 unit tests**.
 
 ### Session 8 — 2026-09-10 — the memory Novia wrote, and could not find
@@ -895,7 +895,7 @@ field was dropped. **The gate posted a correct header over nothing, and every la
 designed.** L1 cannot see it: the data-flow trace models the declared `output_key`, not what the
 expression returns.
 
-**3. The option shape: Execution, fixed and deployed (`bfc301b`).** Behind the missing key sat a
+**3. The option shape: Execution, fixed and deployed (`d36306b`).** Behind the missing key sat a
 second defect that a rename alone would have swapped one wrong output for another. The `options_key`
 branch defaulted to `id`/`name`; the inline `options` branch four lines above had always read
 `value`/`label`. **Same field, two incompatible row shapes decided only by where the options came
@@ -947,7 +947,7 @@ definition alone, and checked it against `simulate_workflow`, which returned `pa
 declared `output_key` — intent, not effect — so the trace asserted the very key that is never written.
 The harness did not miss her error; it confirmed it.**
 
-**3. Validation, fixed (`7dab502`).** L2b already executes the expression under the real `output_key`
+**3. Validation, fixed (`10f9a27`).** L2b already executes the expression under the real `output_key`
 rule, so the executed writes now replace the declared ones in `state_flow`, `declared_writes` is kept
 alongside when they differ, and the divergence is reported as `output_key_not_returned` — advisory
 alone, because a subset return is legitimate (`create_workflow` 21a), and **hard once another step reads
@@ -957,7 +957,7 @@ dependency. Swept all 17 registered workflows: `review_inventory` only, no false
 named **step 4**, which nobody had filed: `nav_result` declared, `nav_flag` returned, `5a` reads
 `nav_result`. Paging was broken identically. 1123 unit tests, unchanged and passing.
 
-**4. Instruction, fixed (`f6613b9`) — and the first diagnosis of it was wrong.** The comma form was
+**4. Instruction, fixed (`e8a6294`) — and the first diagnosis of it was wrong.** The comma form was
 *not* undocumented, as this session first reported; a case-sensitive grep missed `js_transform`'s own
 `input_contract`. It said *"destructure an object return value into multiple top-level local_state keys"*,
 which reads equally well as *the returned object lands under the first key* — an ambiguity that
@@ -993,7 +993,7 @@ alias-fix on `PGD_Inventory` 25 and `PAN MOLD INT ALTEZ` — are still unexercis
 ### Session 12 — 2026-09-12 — the shopping list, and AC1's second unrehearsed case
 
 **Deployed Session 11's two changes, then the next defect found them unnecessary.** `sam deploy`
-(`7dab502`, `simulation-engine.mjs`) and `upsert-step-type.mjs` (`f6613b9`, `js_transform` updated,
+(`10f9a27`, `simulation-engine.mjs`) and `upsert-step-type.mjs` (`e8a6294`, `js_transform` updated,
 18 unchanged) both landed before anything live was read as evidence.
 
 **1. The defect.** `review_inventory`'s shopping list rendered a correct GFM header and then one
@@ -1009,7 +1009,7 @@ screen), and the resolver rendered them as documented. Fault domain **Instructio
 substitution"* — silent on non-scalars. Two fields below, `reveal` documents an array of record
 objects auto-rendering as a real table and warns *"do not hand-format pipe-delimited text to fake a
 table"*. The behaviour is real; it lives on a different field. Generalising it is the error, and the
-contract invited it. Fixed (`da85764`): every token resolves to a single string, what an array and an
+contract invited it. Fixed (`9f6a00f`): every token resolves to a single string, what an array and an
 object each become, that both losses are silent, and that repeated content is built as text in the
 step that prepares it.
 
@@ -1046,7 +1046,7 @@ evidence unprompted when a plausible diagnosis is available from the definition.
 
 **Backlogged, not built:** L2 checks that a `message_template` token *resolves*, never to what type.
 An array or object token is JSON soup in a user-facing message, every time, and statically knowable —
-`state_flow` has carried the resolved type since `7dab502`. Same family as `output_key_not_returned`.
+`state_flow` has carried the resolved type since `10f9a27`. Same family as `output_key_not_returned`.
 Recorded with run 812 as the specimen and an explicit instruction not to build it from one case.
 
 **Note:** the contract fix did not guide this repair — she never queried `PGC_StepType`. Its first
@@ -1071,7 +1071,7 @@ off. `evo_mind` is **85 MB** — PGC 57 MB, PGD 18 MB. `PGC_SessionEntry` and `P
 whole `stack` (~60 kB per run) and nothing prunes either table. PGD tables are small in rows and
 heavy in embedding storage.
 
-**Backlogged (`200a67b`):** a Novia `storage_report` read tool and a gated `purge_rows` write tool,
+**Backlogged (`6284220`):** a Novia `storage_report` read tool and a gated `purge_rows` write tool,
 eligibility rules in system code and shared with the three existing scheduled table-maintenance
 entries. Three design questions are recorded against it — purging transcripts destroys replay
 recordings, `PGC_WorkflowRunStep` snapshots are her diagnostic evidence, and a PostgreSQL `DELETE`
@@ -1083,7 +1083,7 @@ makes space reusable rather than returning it.
 
 **No Track advanced.** This was tooling housekeeping, run with `/doctor`.
 
-**`CLAUDE.md` 34,115 → ~27,000 chars (`34140f9`).** The Sprint 7–10 narratives in *Current State*
+**`CLAUDE.md` 34,115 → ~27,000 chars (`80e0bb8`).** The Sprint 7–10 narratives in *Current State*
 now point to `sprint-07.md` through `sprint-10.md` rather than repeating them. That saves ~1.7k
 tokens (est.) of context every session.
 
@@ -1112,14 +1112,14 @@ every input (runs 828–832), including the two runs entered year-first.
 
 | # | Fault domain | Source | Effect |
 |---|---|---|---|
-| 1 | Execution | `c9d0f12` (session 7) | `getRows` attributed the bound from `req.body.limit` only, so a `vectorSearch.limit` read as SERV's default. Every top-k search that found k rows failed — run 815, with a message claiming "SERV's default of 5", "more match" (never counted) and step "undefined" |
-| 2 | Execution | `c9d0f12` | `truncated` was set on the boundary and never compared to the total, so a read matching exactly its limit failed. `/help`'s step 1c read stood at **99** |
-| 3 | Validation | `0de88be` (July), made blocking by `032a4d2` (Track A) | L2 held `serv_insert.row` to a single object; the contract and executor accept a batch. v5 fails under every simulator back to August. Session 1210 rewrote 9/9a as `serv_upsert` only to get an unrelated step-5 fix past it. `create_workflow` step 36 failed the same way |
+| 1 | Execution | `6f485f0` (session 7) | `getRows` attributed the bound from `req.body.limit` only, so a `vectorSearch.limit` read as SERV's default. Every top-k search that found k rows failed — run 815, with a message claiming "SERV's default of 5", "more match" (never counted) and step "undefined" |
+| 2 | Execution | `6f485f0` | `truncated` was set on the boundary and never compared to the total, so a read matching exactly its limit failed. `/help`'s step 1c read stood at **99** |
+| 3 | Validation | `201610e` (July), made blocking by `598e9d3` (Track A) | L2 held `serv_insert.row` to a single object; the contract and executor accept a batch. v5 fails under every simulator back to August. Session 1210 rewrote 9/9a as `serv_upsert` only to get an unrelated step-5 fix past it. `create_workflow` step 36 failed the same way |
 
 Run 827 was a **true** cut: step 5 read all 102 expenses with no month filter. The check did its
 job there — but Session 7 named that step at 92 rows and left it.
 
-**Fixed and deployed (`c8ec0c0`).** `resolveReadLimit` in `query-utils.mjs` — pure, shared, and the
+**Fixed and deployed (`41558b9`).** `resolveReadLimit` in `query-utils.mjs` — pure, shared, and the
 only attribution rule: `caller` for either limit (tighter wins), `default`, or `ceiling` above
 1000. Both read paths count on the boundary with the same WHERE and values, and `truncated` means
 the count found more. The simulator accepts a row object or an array of them. Probed live: top-5
@@ -1162,7 +1162,7 @@ Three defects, all in how the smoke test reads a workflow compared with how the 
 1. **A runtime `SyntaxError` was reported as unparseable text.** The expression was compiled and
    run in one call, and the error was classified by name. `JSON.parse` over a mock placeholder
    throws `SyntaxError` at run time, so steps 2–7 were refused as syntax errors. It now compiles
-   first, and only a compile failure is a syntax error. Latent since May (`457b9dd`).
+   first, and only a compile failure is a syntax error. Latent since May (`bf901ee`).
 2. **Missing run input was shape-checked as its own literal.** `"{{input.updates}}"` resolved to
    itself and failed the object check. Input the simulation was not given is now inconclusive,
    like a failed upstream computation. A missed path into a prior step's computed value still
@@ -1241,7 +1241,7 @@ same page. Harmless, but it looks broken.
   boolean. The contract also describes `iterator` as choice-gate only, and the lookup is flat, not
   by dot path.
 
-**✅ DONE `9f792c2` (deployed, `human_gate` step type upserted).** Any option except the cancel
+**✅ DONE `e069ee4` (deployed, `human_gate` step type upserted).** Any option except the cancel
 option may carry `condition`, evaluated against `local_state` (merged with the row for an iterator
 option). `resolveGateOptions` filters, so a hidden option is neither drawn nor accepted.
 `evalItemCondition` now delegates to a general `evalCondition`. L1 refuses a condition that does
@@ -1254,7 +1254,7 @@ field, and the selection shown in the header. The design is sound. Two defects, 
 replaying v7 through the real `resolveGateOptions` and `resolveOutputWrites`:
 - **Previous and Next were hidden on every page (Execution, and my Instruction gap).** She wrote
   `local_state.page_state…`, the form every `js_transform` uses, and the engine put only bare
-  keys in scope. **✅ DONE `1cf7ce6` (deployed, upserted)** — both spellings are in scope, and the
+  keys in scope. **✅ DONE `a474da6` (deployed, upserted)** — both spellings are in scope, and the
   contract names both.
 - **The selection is never saved (Generation).** Step 4 returns `merged_selection` and
   `selected_ids_int`, but its `output_key` is still `nav_result,page_offset`, so both are dropped.
@@ -1291,7 +1291,7 @@ before the form is saved). **Run 839** was started on v7 and is still waiting at
 steps by name at every step, so resuming it runs v8 against v7's state and starts from an empty
 selection. It should be left alone and a fresh run started.
 
-**Backlog (`be945d6`):** a tool for Novia to evaluate one step against a state she chooses.
+**Backlog (`3acfbc3`):** a tool for Novia to evaluate one step against a state she chooses.
 
 **✅ Confirmed live by the user, 2026-09-16:** `review_inventory` v8 works from Slack.
 
@@ -1311,7 +1311,7 @@ selection. It should be left alone and a fresh run started.
 5. **Small, for Novia:** in `review_inventory`, cancelling the edit or merge form loses the
    selection. Keep it until the edit or merge is saved.
 6. **Backlog, feeding AC6:** a tool for Novia to evaluate one step against a state she chooses
-   (`be945d6`). Weigh it when AC6 is decided.
+   (`3acfbc3`). Weigh it when AC6 is decided.
 
 Runs 809, 810, 826 and 839 remain at `awaiting_human_gate` (839 is a v7 run; leave it).
 3. The session 15 list still stands: session 1211's gate, then Track D and Track E.
@@ -1334,7 +1334,7 @@ not see an expression reader. The first reconstruction was *caught* — because 
 with a `{{merged_selection}}` reader. v7's readers were expression readers. **That
 distinction is the whole defect.**
 
-**✅ DONE `0022631` — `expression_reads_unwritten_key`, L1, error-grade.** Asks whether
+**✅ DONE `ab554e1` — `expression_reads_unwritten_key`, L1, error-grade.** Asks whether
 **any** step writes the key, never whether a prior one does: workflows loop backwards, and
 judging by position would refuse a correct design. Reuses `writtenByStep` rather than
 building a registry beside it — the prototype's parallel registry is exactly what made it
@@ -1349,7 +1349,7 @@ in a string literal. Silent when the expression takes hold of `local_state` itse
 
 **Swept before it was allowed to block: one hit across 17 workflows, zero false positives.**
 
-**✅ DONE `533e0f9` — the one hit was real, in a core system workflow.** `add_entity` step 2a
+**✅ DONE `0040ce0` — the one hit was real, in a core system workflow.** `add_entity` step 2a
 returned `domain: local_state.domain || ''`. Run input is seeded at `local_state.input`
 (`run-workflow.mjs:162`) and never spread, so it was **always undefined** and the `|| ''`
 swallowed it. Step 2c passes `{{ref_data_ctx.domain}}` into `enrich_ref_records`, whose
@@ -1381,7 +1381,7 @@ write the key.
 **1168 → 1177 unit tests.** `docs/arch-simulation-engine.md` updated.
 
 **✅ DONE — deployed.** `sam build && sam deploy --no-confirm-changeset`; code only, no seed
-changes in `0022631`. Confirmed live against the deployed `/proc/simulate-workflow`, both
+changes in `ab554e1`. Confirmed live against the deployed `/proc/simulate-workflow`, both
 directions: an expression reading an unwritten key returns `passed: false` with
 `expression_reads_unwritten_key`, and the same read through `input` returns `passed: true`.
 
@@ -1390,7 +1390,7 @@ mechanical v6→v7 diff, ending *"Outcome: success"*) and **394** (the narrative
 three fixes worked). 393 keeps its diff — accurate as a record of what changed — with a
 correction appended that separates the two meanings of success: **the write was accepted, the
 workflow was never tested.** 394 leads with the correction and keeps the original beneath it,
-naming which of the three claims failed and why the third was an engine gap (`1cf7ce6`),
+naming which of the three claims failed and why the third was an engine gap (`a474da6`),
 not her error. Corrected in place, as memories 356, 373, 375 and 386 were. Retrieval order
 checked afterwards: at `priority ASC` she now meets **396** (v8, p2) first and the corrected
 **394** (p3) next, so the true account outranks the corrected one.
@@ -1442,7 +1442,7 @@ button carrying no `workflowRunId`. **The preview must not be a live gate** — 
 
 ### Session 17 close — 2026-09-20
 
-**Shipped and deployed:** the L1 reader check (`0022631`), `add_entity` v24 (`533e0f9`), Novia's
+**Shipped and deployed:** the L1 reader check (`ab554e1`), `add_entity` v24 (`0040ce0`), Novia's
 v7 memory corrected (rows 393 and 394). `sam deploy` done and probed live both ways. 1177 tests.
 
 **Decided this session, both on the record:**
@@ -1575,7 +1575,7 @@ backlog item — stored and query vectors now come from different model states a
 table, and `create_domain` has no re-embed path.
 
 **Track F opened** — see the track for the full evaluation of Novia session 1218's
-`manage_expenses` design. Committed `0e9b08e`. Not yet written: the message to paste into `/novia`
+`manage_expenses` design. Committed `e8e549f`. Not yet written: the message to paste into `/novia`
 carrying the four corrections.
 
 **Next session:** Track F's correction round with Novia, and the three Track D decisions above.

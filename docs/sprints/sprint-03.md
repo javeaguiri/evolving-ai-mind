@@ -69,7 +69,7 @@ Novia (Track I) moves to Sprint 5. History threading (Track H) moves to Sprint 4
 
 **2026-05-28 (session 3):** Diagnosed run 385 generate_workflow_steps failures. Fixed step 26 simulation_error_summary bug (only read static_analysis.issues, never smoke_test — always showed vague fallback). create_workflow v51 deployed. Scope assessment: Track H → Sprint 4, Track I → Sprint 5, Track A still in scope (no Novia dependency). Backlog item added for skeleton-first generation redesign. Sprint time-boxed to 2 sessions.
 
-**2026-05-26 (session 2):** Track G coding complete and deployed (commit 66803ea).
+**2026-05-26 (session 2):** Track G coding complete and deployed (commit 6469075).
 - `scope_additions` on memory_config — fix_workflow now retrieves memories for the target workflow
 - `iterator` field on human_gate options — one button per array item, no preceding js_transform needed
 - `generate_workflow_steps` v24: Rule 6 updated, Rule 7 added

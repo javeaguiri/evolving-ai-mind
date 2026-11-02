@@ -390,7 +390,7 @@ was run deliberately without spoon-feeding: the two defects were stated with the
 fix expressions were withheld. She produced both fixes herself. Then checking her work found why
 she had missed the defects in the first place — and it is not her.
 
-**Contract fix shipped (`8c4caa1`, upserted).** `serv_query.output_contract` and
+**Contract fix shipped (`8a5c966`, upserted).** `serv_query.output_contract` and
 `iterator.output_contract` both described their inputs in detail and their outputs in one
 sentence. `serv_query` spends ~350 words on `vectorSearch`'s inputs and never says the returned
 rows carry a `similarity` field at all; `iterator` says it "collects results" and never says an
@@ -577,7 +577,7 @@ fixed five of fifty. The dominant class is a large JSONB column returned whole.
 gateway; the write to `PGC_SessionEntry` is uncapped. Every one of those 120,821 characters was
 already in the database, and `run_sql` could already read it. What was missing was the handle.
 
-**Shipped (`2483b17`):**
+**Shipped (`c0c7843`):**
 - `capOutput` states what it withheld and names the session entry sequence holding the rest. The
   handle is `sequence_number`, **never `id`** — in-round history carries only
   `{ role, content, sequence_number }`, so an id-based marker would render differently on resume,
@@ -610,7 +610,7 @@ rather than copying it verbatim"* — was her following them as literally as the
 The engine fix alone would have left that standing, and it had begun to contradict the newly
 deployed tool schema outright.
 
-**Shipped (`e3ff7c0`):** `minds_eye_system_prompt` v32 — outline → targeted read, a truncation
+**Shipped (`364be03`):** `minds_eye_system_prompt` v32 — outline → targeted read, a truncation
 notice means the result is INCOMPLETE and names where the rest is, range-reading for a workflow
 that does not fit one result, and the "do not call twice" guard kept but re-scoped to *projection*.
 `minds_eye_context_index` v3 — the `output_snapshot` caveat was true this morning and false this
