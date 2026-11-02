@@ -255,7 +255,7 @@ Read `docs/sprints/sprint-14.md` (outcome, retro) before adding anything to Spri
 
 **Encryption at rest, then Novia tests her own work** (started Javear, 2026-11-02).
 
-1. **Encryption at rest** — snapshot → encrypted copy → restore, AWS-managed key `aws/rds`; plan written and agreed before any AWS action.
+1. ✅ **Encryption at rest** — done 2026-11-02 (AC1): prod on `aws/rds`, template `IN_SYNC`, no unencrypted copy left. Runbook `docs/ops-encryption-at-rest.md`.
 2. **A test-data policy for prod** — decided before she self-tests anything that writes.
 3. **`read_workflow_run`**, **`answer_gate`** on the provider-neutral `POST /gates/{runId}/responses` with `gate_id`, and **a wake at her run's gate** — the self-testing loop.
 

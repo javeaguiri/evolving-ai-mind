@@ -187,9 +187,9 @@ F7 is closed only when **no unencrypted copy of the data remains**:
 
 1. Disable deletion protection on `sysrdsevomind-unenc`, then `aws rds delete-db-instance --db-instance-identifier sysrdsevomind-unenc --skip-final-snapshot --delete-automated-backups --region us-east-2` — its automated backups are unencrypted too.
 2. `aws rds delete-db-snapshot --db-snapshot-identifier sysrdsevomind-pre-encrypt-20261102 --region us-east-2`.
-3. Confirm `describe-db-snapshots` and `describe-db-instance-automated-backups` list nothing unencrypted.
+3. Confirm `describe-db-snapshots` and `describe-db-instance-automated-backups` list nothing unencrypted — **across the account, not filtered by instance**: CloudFormation leaves `evomind-infrastructure-snapshot-evominddb-*` snapshots of instances it replaced, which an `--db-instance-identifier` filter misses (two from 2026-03-05 were found and deleted this way). The deleted instance's automated snapshots stay listed `available` for a few minutes after the retained-backup record is gone; they cannot be deleted by hand — poll until they clear.
 4. Keep `sysrdsevomind-encrypted-20261102` for a month as a known-good baseline.
-5. Remove Phase 0's write grants; keep the read ones. Separate deploy.
+5. Remove Phase 0's write grants; keep the read ones. Separate deploy. **IAM takes a little while to propagate — never probe a removed write grant with a real write**: on 2026-11-02 the first probe succeeded and left an encrypted snapshot, `grant-probe`, for the console to delete. Probe with a call that cannot succeed anyway, or wait.
 
 ---
 

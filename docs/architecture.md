@@ -134,7 +134,7 @@ limit is 100. One field is one block, so a data-driven form is bounded by *field
 | Infrastructure | AWS SAM + CloudFormation | Declarative, reproducible |
 | Compute | AWS Lambda (arm64 Graviton2) | ~20% cheaper than x86 |
 | Queuing | AWS SQS (standard) | Async workflow execution |
-| Database | PostgreSQL 16.6 on RDS | Config (PGC) + Domain (PGD) |
+| Database | PostgreSQL 16 on RDS, encrypted at rest (`aws/rds` key) | Config (PGC) + Domain (PGD) |
 | UI | Slack Bot | Primary interface — abstracted, others can be added |
 | LLM | Pluggable (currently Perplexity) | Model selection is coded logic |
 | Region | us-east-2 | Fixed |

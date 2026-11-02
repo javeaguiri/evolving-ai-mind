@@ -139,7 +139,7 @@ The execution stack lives in `PGC_WorkflowRun.stack`. A sequential iterator **ne
 | Infrastructure | AWS SAM + CloudFormation |
 | Compute | AWS Lambda (4 functions) |
 | Queuing | AWS SQS (WorkflowQueue + SlackResultsQueue) |
-| Database | PostgreSQL 16.6 on RDS (PGC + PGD databases) |
+| Database | PostgreSQL 16 on RDS (PGC + PGD databases), encrypted at rest (`aws/rds`) |
 | Primary UI | Slack Bot |
 | LLM | Pluggable — currently Perplexity; model selection is coded logic |
 | Region | us-east-2 |
