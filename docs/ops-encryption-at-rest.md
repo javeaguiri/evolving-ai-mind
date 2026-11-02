@@ -110,9 +110,9 @@ session: `SHOW default_transaction_read_only` → `on`. The setting travels in t
 
 ### 2.4 Restore under a temporary name
 
-`aws rds restore-db-instance-from-db-snapshot --db-instance-identifier sysrdsevomind-enc --db-snapshot-identifier sysrdsevomind-encrypted-20261102 --db-instance-class db.t4g.micro --availability-zone us-east-2a --no-multi-az --publicly-accessible --storage-type gp2 --db-subnet-group-name syssbnevomind --vpc-security-group-ids sg-05c00c014cd77e239 --db-parameter-group-name evomind-infrastructure-evominddbparametergroup-hzgsg1nxant9 --deletion-protection --auto-minor-version-upgrade --ca-certificate-identifier rds-ca-rsa2048-g1 --region us-east-2`, then `aws rds wait db-instance-available --db-instance-identifier sysrdsevomind-enc --region us-east-2`.
+`aws rds restore-db-instance-from-db-snapshot --db-instance-identifier sysrdsevomind-enc --db-snapshot-identifier sysrdsevomind-encrypted-20261102 --db-instance-class db.t4g.micro --availability-zone us-east-2a --no-multi-az --publicly-accessible --storage-type gp2 --db-subnet-group-name syssbnevomind --vpc-security-group-ids sg-05c00c014cd77e239 --db-parameter-group-name evomind-infrastructure-evominddbparametergroup-hzgsg1nxant9 --deletion-protection --auto-minor-version-upgrade --region us-east-2` (the bastion's CLI rejects `--ca-certificate-identifier` on a restore), then `aws rds wait db-instance-available --db-instance-identifier sysrdsevomind-enc --region us-east-2`.
 
-Then the settings a restore does not take: `aws rds modify-db-instance --db-instance-identifier sysrdsevomind-enc --backup-retention-period 7 --preferred-backup-window 05:39-06:09 --preferred-maintenance-window thu:04:12-thu:04:42 --apply-immediately --region us-east-2`.
+Then check the CA, retention and windows against §0. On 2026-11-02 the restore carried all four over from the snapshot and no modify was needed; if any differs, `aws rds modify-db-instance --db-instance-identifier sysrdsevomind-enc` with the matching flags (`--ca-certificate-identifier`, `--backup-retention-period`, `--preferred-backup-window`, `--preferred-maintenance-window`) and `--apply-immediately`.
 
 ### 2.5 Verify before the swap — the abort point
 
@@ -120,15 +120,15 @@ Run §2.7's row-count query against `sysrdsevomind-enc` (the URL's host substitu
 command) and diff it with the baseline. **Any difference: stop.** Delete `sysrdsevomind-enc`, unfreeze
 the old instance (§2.6's command against it), and nothing has changed.
 
-Also confirm on the new instance: `StorageEncrypted: true`, `KmsKeyId` is the `aws/rds` key, the
+Also confirm on the new instance: `StorageEncrypted: true`, a `KmsKeyId` is set (the copy named `alias/aws/rds` explicitly; don't call KMS directly — the bastion's grant is RDS-only, and the refusal prints the key id), the
 parameter group is `in-sync`, `SELECT extname FROM pg_extension` lists `vector`.
 
 ### 2.6 Swap and unfreeze
 
-1. `aws rds modify-db-instance --db-instance-identifier sysrdsevomind --new-db-instance-identifier sysrdsevomind-unenc --apply-immediately --region us-east-2`; wait for `sysrdsevomind-unenc` available.
-2. `aws rds modify-db-instance --db-instance-identifier sysrdsevomind-enc --new-db-instance-identifier sysrdsevomind --apply-immediately --region us-east-2`; wait for `sysrdsevomind` available.
+1. `aws rds modify-db-instance --db-instance-identifier sysrdsevomind --new-db-instance-identifier sysrdsevomind-unenc --apply-immediately --region us-east-2`; poll `describe-db-instances` until `sysrdsevomind-unenc` is `available` — `aws rds wait` fails immediately while the old name is still `renaming`.
+2. `aws rds modify-db-instance --db-instance-identifier sysrdsevomind-enc --new-db-instance-identifier sysrdsevomind --apply-immediately --region us-east-2`; poll until `sysrdsevomind` is `available` with `StorageEncrypted: true`.
 3. Confirm the endpoint resolves to the new instance: `aws rds describe-db-instances --db-instance-identifier sysrdsevomind --region us-east-2 --query 'DBInstances[0].[Endpoint.Address,StorageEncrypted]'` → the unchanged hostname, `true`.
-4. Unfreeze the new instance: `ALTER DATABASE evo_mind SET default_transaction_read_only = off`, then confirm from a new session. **The old instance stays frozen.**
+4. Confirm the SSM URL reaches the new instance — `select inet_server_addr()` through it differs from the address `sysrdsevomind-unenc` resolves to — so the unfreeze cannot land on the old one. Then unfreeze, in one session: `psql "$(…url…)" -c "SET default_transaction_read_only = off" -c "ALTER DATABASE evo_mind SET default_transaction_read_only = off"` — the `ALTER` alone is refused, because it runs in a read-only transaction. Confirm from a new session. **The old instance stays frozen.**
 5. `aws rds stop-db-instance --db-instance-identifier sysrdsevomind-unenc --region us-east-2`.
 
 Outage: from step 1 until step 3 resolves, ~5–10 minutes.
