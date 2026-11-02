@@ -639,7 +639,7 @@ async function handleLlmBreakResolution(buttonValue, payload, correlationId) {
 }
 
 async function handleMindsEyeActionGate(buttonValue, payload, correlationId) {
-  const { sessionId, approved } = buttonValue;
+  const { sessionId, approved, test } = buttonValue;
   const channel  = payload.channel?.id;
   const threadTs = payload.container?.message_ts ?? payload.message?.ts;
   const traceId  = correlationId || randomUUID();
@@ -649,7 +649,7 @@ async function handleMindsEyeActionGate(buttonValue, payload, correlationId) {
     return err(400, 'minds_eye_action_gate button value missing sessionId', correlationId);
   }
 
-  const confirmText = approved ? '✅ Approved — executing…' : '❌ Cancelled.';
+  const confirmText = !approved ? '❌ Cancelled.' : test ? '✅ Approved — applying, then planning a test…' : '✅ Approved — executing…';
   if (channel && threadTs) {
     try {
       await slack.chat.update({
@@ -673,6 +673,7 @@ async function handleMindsEyeActionGate(buttonValue, payload, correlationId) {
         type:      'MINDS_EYE_RESUME',
         sessionId,
         approved:  !!approved,
+        ...(approved && test ? { test: true } : {}),
         slackUser: payload.user?.id,
         callback:  { provider: 'slack', channel, threadId: threadTs },
         traceId,

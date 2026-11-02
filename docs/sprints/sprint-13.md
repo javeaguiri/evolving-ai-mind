@@ -92,8 +92,8 @@ proprietary syntax the harness has to learn.
 
 | **10** | **`preview_step`, headless, with gate size measured — added 2026-10-10.** The tool adopted in Sprint 12 (`docs/backlog.md`, "Step preview") and never built: one step evaluated against a chosen state — hand-written or lifted from a run — through the real `buildDialog` → `dialogToBlocks`, returning for a `human_gate` the **block count and the payload size** alongside the resolved fields and options. Slack does not publish its size limit, so measuring before registering is the only dependable guard; run 872 was diagnosed by doing exactly this by hand. Spec-first: `openapi.yaml`, a tool row in `minds_eye_tool_schemas`, `docs/arch-minds-eye.md`. Headless only — the rendered form stays in the backlog |
 | **11** | **Measure Slack's real message-size threshold — added 2026-10-10.** `msg_blocks_too_long` fired at ~35,800 characters of block JSON (run 872) against a documented 40,000; developers report it near 13,000 and varying with content. Post a few form-shaped test messages of increasing size **to a test channel Javear names** (an outward post — needs his go-ahead per run) and record where it breaks, so G1 in the `human_gate` contract and item 10's warning can state a measured number rather than none |
-| **12** | **`list_selection` picks by typed ID — added 2026-10-10.** 🟡 **CODE `26698b8` + CONTRACT `332c739` DEPLOYED AND UPSERTED 2026-10-10** (live `human_gate` row verified equal to the seed). **`/m list` confirmed working from Slack by Javear 2026-10-15**; the two-table drill-down and wrong/empty-ID cases not yet reported separately. Replaces the table-plus-dropdown pick with the table and an ID **text box** into which the user types the row's **database ID**, already the table's first column — decided by Javear 2026-10-10 over a renumbered `#` column. (`number_input` was decided and then withdrawn the same day: Slack renders it only in modals, and a list gate is a message.) For every consumer, **including `list_entity`'s drill-down**. **A level spanning two tables gets one box and Select button per table** (decided by Javear), so an ID present in both is told apart by the box it is typed in. Resolved by `matchListSelection` (`run-workflow.mjs`); an empty, unknown or non-selectable ID re-renders the gate saying which. No paging: the table is one markdown block, bounded by Slack's 12,000-character markdown total (~120–150 rows); past that, narrow. Execution domain — `callback.mjs` rendering, `run-workflow.mjs` matching — no new `gate_type`. **Contract half:** the `human_gate` row's `list_selection` text, and the decision tree gains the grid threshold — measured per-field costs from run 875: text ~235, date ~190, 4-option select ~545, 22-option select ~1,760 characters; budget ≤12,000 until item 11 measures it; grid only for ≤10 rows × ≤3 editable columns with no row dropdown past ~5 options, or one column up to ~30 rows |
-| **13** | **A `number` form field — added 2026-10-10.** ✅ **DONE 2026-10-18 — `12,50` saved as 12.5 from Slack (Javear, runs 905/908).** **CODE `26698b8` + CONTRACT `332c739` DEPLOYED AND UPSERTED 2026-10-10** (live `human_gate` row verified equal to the seed). **Default flipped to decimals 2026-10-16 (`3549ae6`, `cfc044e`)** after run 888 refused an amount; `decimal: false` for whole numbers. **First live use run 888 — the refusal path works; `12,50` saved 2026-10-18.** **Built in the experience layer, by Javear's decision:** `/proc` declares a number and receives a number; how it is typed and checked is the display's job, and a web page gets it from `<input type="number">`. In Slack (no `number_input` in a message) the field is a text box whose `action_id` carries its rule; `interactive.mjs` converts it, and an invalid entry gets an ephemeral message and **never resumes the run**, leaving the gate and what was typed intact. Original scope text: The `human_gate` contract's field types stop at `text … datetime`; there is no `number`, and `buildInputElement` has no case for one, so every numeric field in a generated form is a text box (workflow 360 v3: the period form's Year, the grid's Amount — the cause of `12,50` saving as 12). Execution domain, extend-the-harness: `{ type: "number", decimal?, min?, max? }` renders as Slack's `number_input`; resume returns a JS number, and — since Slack validates only on modal submit — a non-numeric or out-of-range entry re-renders the gate saying so. **A decimal comma is accepted: `12,50` reads as 12.50** (decided by Javear 2026-10-10). Contract: `number` joins the field-type list with *a numeric value is a number field, never text*; L0 follows from the contract. Shares the `number_input` rendering with item 12 — built together, separate commits |
+| **12** | **`list_selection` picks by typed ID — added 2026-10-10.** 🟡 **CODE `b2061a3` + CONTRACT `5ca983d` DEPLOYED AND UPSERTED 2026-10-10** (live `human_gate` row verified equal to the seed). **`/m list` confirmed working from Slack by Javear 2026-10-15**; the two-table drill-down and wrong/empty-ID cases not yet reported separately. Replaces the table-plus-dropdown pick with the table and an ID **text box** into which the user types the row's **database ID**, already the table's first column — decided by Javear 2026-10-10 over a renumbered `#` column. (`number_input` was decided and then withdrawn the same day: Slack renders it only in modals, and a list gate is a message.) For every consumer, **including `list_entity`'s drill-down**. **A level spanning two tables gets one box and Select button per table** (decided by Javear), so an ID present in both is told apart by the box it is typed in. Resolved by `matchListSelection` (`run-workflow.mjs`); an empty, unknown or non-selectable ID re-renders the gate saying which. No paging: the table is one markdown block, bounded by Slack's 12,000-character markdown total (~120–150 rows); past that, narrow. Execution domain — `callback.mjs` rendering, `run-workflow.mjs` matching — no new `gate_type`. **Contract half:** the `human_gate` row's `list_selection` text, and the decision tree gains the grid threshold — measured per-field costs from run 875: text ~235, date ~190, 4-option select ~545, 22-option select ~1,760 characters; budget ≤12,000 until item 11 measures it; grid only for ≤10 rows × ≤3 editable columns with no row dropdown past ~5 options, or one column up to ~30 rows |
+| **13** | **A `number` form field — added 2026-10-10.** ✅ **DONE 2026-10-18 — `12,50` saved as 12.5 from Slack (Javear, runs 905/908).** **CODE `b2061a3` + CONTRACT `5ca983d` DEPLOYED AND UPSERTED 2026-10-10** (live `human_gate` row verified equal to the seed). **Default flipped to decimals 2026-10-16 (`ce423ed`, `4913982`)** after run 888 refused an amount; `decimal: false` for whole numbers. **First live use run 888 — the refusal path works; `12,50` saved 2026-10-18.** **Built in the experience layer, by Javear's decision:** `/proc` declares a number and receives a number; how it is typed and checked is the display's job, and a web page gets it from `<input type="number">`. In Slack (no `number_input` in a message) the field is a text box whose `action_id` carries its rule; `interactive.mjs` converts it, and an invalid entry gets an ephemeral message and **never resumes the run**, leaving the gate and what was typed intact. Original scope text: The `human_gate` contract's field types stop at `text … datetime`; there is no `number`, and `buildInputElement` has no case for one, so every numeric field in a generated form is a text box (workflow 360 v3: the period form's Year, the grid's Amount — the cause of `12,50` saving as 12). Execution domain, extend-the-harness: `{ type: "number", decimal?, min?, max? }` renders as Slack's `number_input`; resume returns a JS number, and — since Slack validates only on modal submit — a non-numeric or out-of-range entry re-renders the gate saying so. **A decimal comma is accepted: `12,50` reads as 12.50** (decided by Javear 2026-10-10). Contract: `number` joins the field-type list with *a numeric value is a number field, never text*; L0 follows from the contract. Shares the `number_input` rendering with item 12 — built together, separate commits |
 
 ## Out of scope
 
@@ -117,7 +117,7 @@ position is read at a glance.
 | **AC1** | ~~⬜~~ | ~~A single gate edits several records and one click saves them all; only changed rows are written~~ **Moved to Sprint 14 (Javear, 2026-10-18).** The single gate works — `edit_budget` 357 v7, runs 914/915 — but every save writes all 21 rows, so *only changed rows are written* is unmet | [1](#scope) | Binary, from Slack |
 | **AC2** | ~~⬜~~ | ~~`manage_budget` uses it~~ **Moved to Sprint 14 by Javear 2026-10-18, with a clarification:** `manage_budget` is one editable field (amount) per category, ~21 rows — inside the contract's small-grid route (*one editable column of up to about 30 rows*), so it stays a single form, **not** `manage_expenses`' pick-one. Its one gap is grouping: income / discretionary / non-discretionary are label prefixes because a form field cannot carry a sub-title — a field `group` rendering a heading where it changes (Execution) | [4](#scope) | Binary, from Slack |
 | **AC3** | ~~🟡~~ | ~~Novia selects the pattern unprompted when a design calls for it~~ **Moved to Sprint 14 (Javear, 2026-10-18), not evidenced:** she read the contract only when prompted, and twice built against a rule she had read (runs 887, 911). Her first cold design on `claude-opus-5-5` is the test | [2](#scope), [3](#scope) | Binary, from a cold `/novia` session |
-| **AC4** | ~~🟡~~ | ~~A gate that would exceed the ceiling fails in a way that names the cause and the remedy~~ **Moved to Sprint 14 (Javear, 2026-10-18)** with items 10 (`preview_step`) and 11 (measure Slack's size threshold). The contract half landed (decision tree, grid threshold, G1–G5); runtime `msg_blocks_too_long` is reported, not retried (`1335f2b`) | [3](#scope), [5](#scope), [10](#scope), [11](#scope), [12](#scope) | Binary |
+| **AC4** | ~~🟡~~ | ~~A gate that would exceed the ceiling fails in a way that names the cause and the remedy~~ **Moved to Sprint 14 (Javear, 2026-10-18)** with items 10 (`preview_step`) and 11 (measure Slack's size threshold). The contract half landed (decision tree, grid threshold, G1–G5); runtime `msg_blocks_too_long` is reported, not retried (`e0eb33d`) | [3](#scope), [5](#scope), [10](#scope), [11](#scope), [12](#scope) | Binary |
 | **AC5** | ~~⬜~~ | ~~`edit_budget` uses the pattern and runs end to end from Slack~~ **Folded into AC2 and moved to Sprint 14 (Javear, 2026-10-18): `edit_budget` (357) *is* `manage_budget`.** v7 already is the bulk-edit pattern — templated `fields` → one form → one upsert — and runs 914/915 completed from Slack | [6](#scope) | Binary, from Slack |
 | **AC6** | ~~⬜~~ | ~~One correction workflow performs rename, merge, recategorise and alias-fix; aliases **81**, **60** and **59** are corrected through it~~ **Moved to Sprint 14 (Javear, 2026-10-18), not started** | [7](#scope), [Track C](#track-c-moved-from-sprint-12--the-inventory-correction-workflow) | Binary, from Slack, no raw SQL |
 | **AC7** | ✅ | `manage_expenses` is built by Novia and runs end to end — add, delete and edit — with the two data-destroying corrections applied and the delete semantics decided. **Add and edit confirmed from Slack 2026-10-18 (runs 905/908); delete decided as soft delete (`deleted_at`); v8's run 911 failed (Generation), v9's run 913 deleted end to end. Met 2026-10-18, accepted by Javear with one known gap (Delete on the Add form fails without writing)** | [8](#scope), [12](#scope), [13](#scope) | Binary, from Slack |
@@ -192,7 +192,7 @@ merges persisting after aliases 81, 60 and 59 are corrected*.
 
 **No code. Nothing deployed, nothing upserted** — main still reflects what is running in prod.
 
-**Sprint 12 closed and merged** (`4307657`). 19 sessions, 1044 → **1177** tests. Two ACs met, two
+**Sprint 12 closed and merged** (`7d9e796`). 19 sessions, 1044 → **1177** tests. Two ACs met, two
 withdrawn because the work was wrong rather than late, two moved here, one carried. Outcome and
 retro in `docs/sprints/sprint-12.md` — **read its retro before adding anything to this sprint.**
 
@@ -222,7 +222,7 @@ decided by the analyst rather than the decider.
 
 **Process change, from the user:** the AC table is a live status board — status column, a link to
 the delivering scope item, updated when state changes rather than at close. On the lifecycle and
-the enforcement list in `CLAUDE.md`, and merged to main separately (`083f942`) so the retro is
+the enforcement list in `CLAUDE.md`, and merged to main separately (`aeeb836`) so the retro is
 visible there.
 
 **Next session starts here:** draft the paging remedy for the `human_gate` `PGC_StepType` contract
@@ -305,7 +305,7 @@ went to two pieces of work outside this sprint, each on its own branch so this o
   Pass A:** the `TROUBLESHOOT_WORKFLOW` → `FIX_WORKFLOW` chain fires automatically on every workflow
   failure, so `fix_workflow` cannot simply be removed.
 
-A commit of the design doc landed here by mistake and was reverted (`8325091`); the net diff of this
+A commit of the design doc landed here by mistake and was reverted (`07fcfe1`); the net diff of this
 branch is unchanged.
 
 **Next session starts here — the bulk-record edit, with a Novia-session decision first.** Session
@@ -322,7 +322,7 @@ fallback if her summary loses something. **Sequencing still holds:** the bulk-ed
 ### Session 4 — 2026-10-10 — `manage_expenses` built, four engine fixes, G1–G5
 
 **Three engine fixes deployed, plus one classification fix; contract seed upserted.** 1177 → **1181**
-tests. Commits `3c20162`, `87145ef`, `1335f2b` deployed with `sam deploy`; `PGC_StepType.human_gate`
+tests. Commits `e29506c`, `4ec4bcf`, `e0eb33d` deployed with `sam deploy`; `PGC_StepType.human_gate`
 upserted and verified equal to the seed.
 
 **Novia built `manage_expenses` in a fresh session, 1236** (session 1218 retired: it predated the
@@ -340,14 +340,14 @@ upserted and verified equal to the seed.
 
 **Four engine defects surfaced, all Execution, all fixed:**
 1. An inline form field's `default`/`placeholder` were not template-resolved while `label` was —
-   `{{default_year}}` rendered literally (`3c20162`). Her v1 was right; v2 is a workaround that also
+   `{{default_year}}` rendered literally (`e29506c`). Her v1 was right; v2 is a workaround that also
    works.
 2. An option valued `''` (HTML's standard *none*) made Slack reject the message (run 870). Rendered
-   as `EMPTY_OPTION_VALUE`, read back as null (`3c20162`).
+   as `EMPTY_OPTION_VALUE`, read back as null (`e29506c`).
 3. An empty reveal-table cell made Slack reject the message (run 871 — the Payment column, blank on
-   88 rows). Rendered as an em dash (`87145ef`).
+   88 rows). Rendered as an em dash (`4ec4bcf`).
 4. `msg_blocks_too_long` was retried silently every 30s instead of reported (run 872) — added to
-   `PERMANENT_SLACK_ERRORS` (`1335f2b`).
+   `PERMANENT_SLACK_ERRORS` (`e0eb33d`).
 
 **Run 872's real finding: a gate has a size limit as well as a count limit.** 45 blocks — under 50 —
 but ~35,800 characters of block JSON: 14 per-row dropdowns 16,100 (each repeating all 22
@@ -385,7 +385,7 @@ from the run's saved state through the real `buildDialog` → `dialogToBlocks`: 
 characters** — under both documented limits, and still rejected. The 14 per-row dropdowns are
 16,127 of it (each Category select repeats 22 options, ~1,760 characters). v3 dropped the reveal
 (G2) but kept the editable ID field (G3) and `(no category)` on a NOT NULL column (G4). The engine
-reported the refusal at once, as `1335f2b` intended. The system's share is the blind spot items
+reported the refusal at once, as `e0eb33d` intended. The system's share is the blind spot items
 10 and 11 exist for: she had no way to measure before registering. Run 875 is parked, untouched.
 
 **Decided by Javear: an editable grid only for small sets; past that, pick one record from a
@@ -410,13 +410,13 @@ in the experience layer by Javear's decision** — a web page would do it native
 is Slack's compensation, not procedure logic. The same argument applies to the required-field
 check; backlogged, not moved.
 
-**Landed `26698b8`** (code, 1181 → 1197 tests) and `332c739` (contract seed, docs, backlog row).
+**Landed `b2061a3`** (code, 1181 → 1197 tests) and `5ca983d` (contract seed, docs, backlog row).
 **Deployed (`sam deploy`) and `PGC_StepType` upserted the same day**; the live `human_gate` row is
 byte-equal to the seed.
 
 **`docs/workflow-schema.json` evaluated** at Javear's request: only a unit test reads it, no
 Novia-built workflow is ever validated against it, and per-step validation of every live workflow
-found it stale rather than the workflows wrong. Backlogged (`109574b`): closed vocabularies and
+found it stale rather than the workflows wrong. Backlogged (`9cbf3a2`): closed vocabularies and
 unknown-key warnings in L0, composed from `PGC_StepType`; the file generated from it or retired.
 
 **Contract changes (`PGC_StepType.human_gate`, seed only):** `list_selection` described as an ID
@@ -490,13 +490,13 @@ corrected; it was not** — she wrote **443** (p2) beside it; 441 still states t
 refused *"must be a whole number"*: Amount was `type: number` without `decimal: true`.
 
 **Landed, deployed (`sam deploy`), `PGC_StepType` upserted, live row verified equal to seed:**
-- `3549ae6` — **Execution.** `action_key` now records a `list_selection` row's `item_action`
+- `ce423ed` — **Execution.** `action_key` now records a `list_selection` row's `item_action`
   (`gateActionValue`, `run-workflow.mjs`). It matched only options and special buttons, so an Edit
   after an Add New would have read `confirm` and opened a blank add form — v7 depends on this.
   **The `number` default flipped to decimals** (Javear's decision): JSON Schema's `number` is any
   number and an LLM writes an amount that way; `decimal: false` opts into whole numbers.
   1197 → **1201** tests.
-- `cfc044e` — **Instruction.** `output_key` (list_selection): written by a row selection only —
+- `4913982` — **Instruction.** `output_key` (list_selection): written by a row selection only —
   unset before the first pick, every other button leaves it as it was; use `action_key` to tell
   Add from Edit (Novia's "unset on first entry" wording adopted). `arch-step-types.md`'s field
   table gains `number` — it still said number was absent.
@@ -512,12 +512,12 @@ Novia to fix the row itself, not write beside it. Then item 10's spec.
 
 **Run 892 (`help`) failed at step 1c: 105 `PGC_IntentMap` rows matched, SERV's unstated default
 cut it at 100.** Not a one-off — Javear reported the same error recurring in legacy workflows.
-`PGC_WorkflowRunStep` shows the truncation check (`c9d0f12`) has failed four workflows whose
+`PGC_WorkflowRunStep` shows the truncation check (`6f485f0`) has failed four workflows whose
 tables outgrew 100: runs **807** (`review_inventory`, 132), **827** (`budget_vs_expense_report`,
 102), **857** (`edit_budget`, 104), **892** (`help`, 105). A sweep of live workflows found **24
 `serv_query` reads stating no limit across 10 workflows**, nearly all meaning "every row".
 
-**Execution, unscoped — extend the harness (`5f1fa97`, deployed, `PGC_StepType` upserted).** A
+**Execution, unscoped — extend the harness (`794226f`, deployed, `PGC_StepType` upserted).** A
 read with no LIMIT means every matching row, as in SQL; 100 was a convention no author wrote
 against. `DEFAULT_READ_LIMIT` = `MAX_READ_LIMIT` = 1000, still reported as `default`, so a cut at
 the ceiling still fails loudly. The `serv_query` contract states it. Probed live: step 1c's read
@@ -528,7 +528,7 @@ now returns 105, `limit_applied: default`. Also fixes Novia's own `PGC_IntentMap
 already an Internal server error at 100 rows (6MB Lambda response, the `stack` column). The
 `help` seed row says v3 while live is v10 — check for drift before its next upsert.
 
-**Then: `fix_workflow` and the automatic repair chain retired (`ff76115`, deployed, Novia's
+**Then: `fix_workflow` and the automatic repair chain retired (`ae95c71`, deployed, Novia's
 system prompt v37 upserted) — Javear's decision on cleanup D1, option 3.** Looking into
 `fix_workflow` step 11 found it had never run: all **five** `fix_workflow` runs (467, 468, 640,
 808, 858) failed at step 4's repair `llm_call`, and 808/858 were auto-started ~2s after 807/857 —
@@ -545,7 +545,7 @@ against live: all 11 seeded workflows match on every fingerprinted field.
 
 **AC7 — Javear tested 360 v7 from Slack 2026-10-17: the edit path works.** Still to test:
 **Add New → Save → Edit** (opens that row, not a blank add form — the `action_key` path from
-`3549ae6`). AC7 stays 🟡; delete semantics (`deleted_at` vs hard delete) also still open.
+`ce423ed`). AC7 stays 🟡; delete semantics (`deleted_at` vs hard delete) also still open.
 
 **Next session starts here:** (1) Javear's Add New test on 360; (2) Novia corrects memory 441 in
 place; (3) confirm AC1/AC2 wording against the 2026-10-10 small-grid decision; (4) item 10 spec.
@@ -559,7 +559,7 @@ input syntax for type integer: ""`. Step 9 gives a new record `edit_id: ''`; ste
 `WHERE id = ''` and Postgres refused the cast; the INSERT would have failed the same way on the
 `serial` column. Rolled back — nothing written.
 
-**Execution — extend the harness (`3ce72e9`, deployed, `PGC_StepType` upserted).** An empty key
+**Execution — extend the harness (`7529d23`, deployed, `PGC_StepType` upserted).** An empty key
 on a new record is the standard form of a single save step, and the contract already steers
 Novia to one upsert over a lookup-plus-branch. `unkeyedInsertRow` (`table.mjs`, pure): a row whose
 `matchColumns` are all `null`/`''`/absent skips the lookup and is inserted without them, so the
@@ -569,7 +569,7 @@ column cannot be matched). No workflow change. 1174 → **1179** tests. Run 904 
 **Javear confirmed from Slack (runs 905, 908):** Add New → Save shows the new row; Edit opens it
 filled in; `12,50` saves as 12.5. Item 13 ✅. AC7 stays 🟡 — delete and its semantics remain.
 
-**But the 10/17 expenses did not show — Execution, experience layer (`770e55c`, deployed).** All 50
+**But the 10/17 expenses did not show — Execution, experience layer (`9665bfc`, deployed).** All 50
 October rows reached the gate (step 6 and step 7 both `array[50]`). `markdownProseToBlocks` cut
 every paragraph at 2800 chars with `...`, and the list table is one paragraph: run 908's was
 3,425, so it stopped mid-row at ~41 and every 10/17 row vanished silently. Slack sets **no
@@ -628,7 +628,7 @@ gate the row selection leads to*; hers restates it and says "button", which is w
 
 **AC7 ✅ — closed by Javear 2026-10-18** ("happy with manage expenses for now"); scope item 8 ✅.
 
-**Novia moved to `anthropic/claude-opus-5-5`** (`ccb6158`; `minds_eye_preferences` v7 upserted; she cost
+**Novia moved to `anthropic/claude-opus-5-5`** (`bb35631`; `minds_eye_preferences` v7 upserted; she cost
 $1.23 over 30 days on sonnet-4-6). `docs/perplexityLLMs.json` refreshed from the gateway's live list.
 
 **AC2 moved to Sprint 14 (Javear).** Checked first: the live `human_gate` decision tree does **not**
@@ -668,16 +668,16 @@ a one-column small grid, not a pick-one), AC3 (not evidenced), AC4 (with items 1
 started).
 
 **Shipped, unscoped — Execution, each extending the harness to a standard form:**
-`list_selection` picks by typed ID, one box per table group (`26698b8`); a `number` form field
-validated in the UI layer, decimal comma accepted (`26698b8`, `3549ae6`); `action_key` records a row
-click (`3549ae6`); templated field defaults and an empty "none" option (`3c20162`);
-`msg_blocks_too_long` reported, not retried (`1335f2b`); a read with no limit returns every row up to
-1000 (`5f1fa97`); an upsert row with empty match columns is inserted with its key left to the database
-(`3ce72e9`); a markdown table past 2800 characters goes out whole up to Slack's 12,000 (`770e55c`).
-**Retired:** `fix_workflow` and the automatic repair chain on every failure (`ff76115`) — all five of
+`list_selection` picks by typed ID, one box per table group (`b2061a3`); a `number` form field
+validated in the UI layer, decimal comma accepted (`b2061a3`, `ce423ed`); `action_key` records a row
+click (`ce423ed`); templated field defaults and an empty "none" option (`e29506c`);
+`msg_blocks_too_long` reported, not retried (`e0eb33d`); a read with no limit returns every row up to
+1000 (`794226f`); an upsert row with empty match columns is inserted with its key left to the database
+(`7529d23`); a markdown table past 2800 characters goes out whole up to Slack's 12,000 (`9665bfc`).
+**Retired:** `fix_workflow` and the automatic repair chain on every failure (`ae95c71`) — all five of
 its runs had failed. **Contract:** the `human_gate` decision tree, paging, the grid threshold, G1–G5,
 and *a special button never carries the typed ID*. **Novia moved to `anthropic/claude-opus-5-5`**
-(`ccb6158`) — $1.23 over 30 days on sonnet-4-6, so price was not the constraint.
+(`bb35631`) — $1.23 over 30 days on sonnet-4-6, so price was not the constraint.
 
 **Decided:** no `table_edit` gate type (2026-09-22); pick-one past a small grid, no paged editable
 grid, a spreadsheet waits for the web layer (2026-10-10); soft delete for expenses (2026-10-18).

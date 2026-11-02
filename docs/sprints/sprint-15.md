@@ -1,0 +1,240 @@
+# Sprint 15 — Encryption at rest, then Novia tests her own work
+
+**Status: CLOSED 2026-11-02 — all 11 ACs met.** Started 2026-11-02 (Javear). Re-scoped at start from the proposal of 2026-10-31:
+the move to the Anthropic API is deferred — it was chosen to fix the 1h TTL for a human-in-the-loop
+test cycle, and if Novia runs the whole cycle herself the 5-minute TTL may be enough (AC5 decides).
+Encryption at rest comes first. Read `docs/sprints/sprint-14.md` §Retro first.
+
+**Branch:** `sprint/15-encrypt-novia-self-test`
+
+---
+
+## Sprint Goal
+
+**The prod database is encrypted on disk, and Novia tests a workflow she built or fixed against a
+plan Javear approved — in a sandbox, so household data is never touched — running, reading and
+answering it herself until she reports.**
+
+---
+
+## Scope
+
+| # | Item |
+|---|---|
+| **1** | **Encryption at rest for PostgreSQL** — Sprint 14 scope item 6 / AC6, carried; `docs/arch-security.md` F7. Snapshot → encrypted copy → restore, **AWS-managed key `aws/rds`** (decided Javear, 2026-11-02). Not a template toggle: `EvoMindDB` has a custom `DBInstanceIdentifier`, so `StorageEncrypted: true` in `template.yaml` asks CloudFormation for a replacement it cannot perform under that name — and after a restore-and-rename keeps `SYSRDSEvoMind`, the next deploy would still read the property change as a replacement. The plan brings the restored instance back under the stack without one (e.g. `DeletionPolicy: Retain`, remove from stack, resource import with `StorageEncrypted: true`), keeps the endpoint, and is cut in a quiet window so no writes are lost. **Written and agreed before any AWS action** — ✅ DONE 2026-11-02 — [`docs/ops-encryption-at-rest.md`](../ops-encryption-at-rest.md), all four phases |
+| **2** | **A test-data policy for prod — a sandbox schema** (decided Javear, 2026-11-02: option A of the backlog's three). Design [`arch-sandbox.md`](../arch-sandbox.md): a `sandbox_<n>` schema holding copies of the tables a test needs (named by her, FK parents and dependent views added by SERV, rows `all`/`none`/filtered) plus `PGC_Memory` and `PGC_Workflow`; a test run reaches it through `search_path`, and a PGD write to a table not copied is refused. Tools `start_test` / `reset_test` / `end_test`. The run, its steps and session stay real — the record of the test. No two-stage commit: a Postgres transaction lives on one connection and a run spans many invocations and gate waits. Approved Javear, 2026-11-02 (only the tables and views needed; test memories in the sandbox) — 🟡 **SERV half built 2026-11-02** and verified against the live database (create, filtered copy, own sequences, triggers, `NOT VALID` FKs checked on new writes, cascade, write refusal 409, schema refusal 403, bad names 400, household rows unchanged, reset, drop); ✅ **PROC half built 2026-11-02**: `PGC_WorkflowRun.sandbox` (template, seed, live `addColumn`, registry synced); `serv-client.mjs` sends `x-sandbox` from a per-message scope (`sandboxScope` / `setSandbox` / `withSandbox`); `run-workflow.mjs` names the run's sandbox when it loads the run; no episodic memory for a test run; `serv_schema` refused in one; `read_workflow_run` reports `test_run`. Not deployed — nothing starts a test run until scope 6 |
+| **3** | **`read_workflow_run`** — from the backlog: the run's status, current step, waiting gate with its `gate_id`, per-step outputs, bounded with provenance — ✅ DONE 2026-11-02 (built, schema seeded; not yet deployed): `projectWorkflowRun` reads the stack (live/failed) or `state` (completed), renders the gate with `buildDialog`, and `steps` returns the value at each step's `output_key` because `output_snapshot` is an 800-character summary; checked against live runs 950 (waiting), 951 (completed), 912 (failed) |
+| **4** | **`answer_gate`** — Sprint 14 scope item 9, carried. Built on the provider-neutral `POST /gates/{runId}/responses` with `gate_id`, which this sprint builds in PROC first (`arch-web-app.md` §3.1); ~~refused for a run she did not start and for any gate guarding her own gated write~~ refused for anything but her own test run (Javear, 2026-11-02) — 🟡 **endpoint built 2026-11-02** (`src/proc/gates.mjs`, spec in `openapi.yaml`): every gate frame gets a `gate_id`, carried on its dialog and every re-render; `resumeGate` refuses an answer naming another gate and accepts one naming none (Slack's buttons, unchanged this sprint); a form's number fields read with the rule moved to `src/shared/number-rule.mjs`. **Tool built 2026-11-02 with scope 6** — refused for anything but her own test run; records her wait before sending the answer |
+| **5** | **Wake her when her run reaches a gate** — from the backlog: a run she started that suspends, completes or fails enqueues `MINDS_EYE_RESUME` for her session; with a bound on self-test rounds per session — 🟡 **built 2026-11-02, not deployed**: `enqueueCallback` turns every message of a `novia` run into a `run_event` wake; `handleRunEvent` resolves her open call with `describeRunEvent` (gate as sent, error, `WORKFLOW_COMPLETED`, or any message once stopped; notifications on the way don't wake her). **Design change in the build:** no `await_run` — an event landing between `answer_gate` and `await_run` (a redrawn form is the same gate) would have left her waiting forever, so `run_workflow { test: true }` and `answer_gate` record the wait before they act and the event becomes their result. Bound: `max_test_events` |
+| **6** | 🟡 **built 2026-11-02, not deployed** — **Her test runs' gates never reach Slack** (Javear, 2026-11-02) — a test run carries `callback.provider: 'novia'`; PROC routes on the provider as `arch-web-app.md` §3 does, so nothing is enqueued to Slack and she sees the gate through 5 and 3 — the provider-neutral dialog with templates resolved, as Javear would see it before Block Kit. Slack-only layout is the renderer's, not hers |
+| **7** | 🟡 **built 2026-11-02, not deployed** — `sop_test_cycle` and the TEST RUNS paragraph in the seed; *Apply and test* / *Register and test* on the commit gate (`gateButtonConfig.testLabel` → `mindsEyeGateButtons` → `test: true` → `withTestRequest`) — **The test cycle** (Javear, 2026-11-02), in her guidance, not code: (a) after a commit she offers **Submit only** or **Submit and test**; (b) on test, she checks the data each path needs and writes a **plan** — paths covered (each once, from the simulation trace), data used and created, test-only changes, what is *not* covered — which Javear approves before she starts; (c) loops are cut by **shaping data first** (e.g. cards one correct answer from done); where only a workflow change will do, she tests an **uncommitted copy** and the plan shows its diff from the real one; (d) on a defect she continues every path it does not block, then resets the sandbox, runs one normal fix cycle (simulate → Javear's permission → commit) and offers a fresh test cycle |
+| **8** | **`PGC_SessionEntry.json` template role check omits `tool`** — from the backlog (2026-08-30); one line, no migration — ✅ DONE 2026-11-02 (live database already admitted `tool`) |
+| **9** | **A turn whose tool arguments will not parse is never persisted** — from the backlog (2026-08-30); `minds-eye.mjs` writes the `PGC_SessionEntry` row so the rebuilt transcript matches the in-round one — ✅ DONE 2026-11-02, unit-tested; not yet deployed |
+| **10** | 🟡 **built 2026-11-02, not deployed** — `replay_run` and `resolve_replay_break` (both wait); `replay.mjs` shares `createReplayRun`, `breakReport`, `applyBreakResolution` with its routes; a replay break ends her wait as `LLM_BREAK`; `sop_test_cycle` v2 says when to replay — **The replay harness as her tool** — from the backlog (2026-08-26); last in the sprint. After a fix she replays the failing run at no LLM cost; replays go through the sandbox (2) and her provider (6). Endpoints exist; the gap is the tool case and its `minds_eye_tool_schemas` entry |
+| **11** | **PGC schema drift — template, seed registry, live registry, live database** (Javear, 2026-11-02, found closing 8) — a four-way audit: the live database is the truth. Templates miss live columns (`PGC_Prompt` ×3, `PGC_SessionEntry.compressed`, `PGC_WorkflowRun.session_id`), assert one it lacks (`PGC_Memory.embedding`) and a wrong nullability (`PGC_EntitySchema.upsert_key`); the seed misses columns and checks on 5 tables and still describes `PGC_SystemContext` before its JSONB migration; live registry rows miss or carry stale checks on 4. Fixed in the files, `dev_scripts/upsert-schema-registry.mjs` writes registry rows only after checking them against the live catalog, and a unit test holds template = seed. `PGC_Archetype` **removed** (Javear, 2026-11-02): never bootstrapped, no trace in the live database, and Sprint 10 found Novia takes a workflow's shape from a working one with `read_workflow` — template, seed, table-map and registry rows, bootstrap wiring, `upsert-archetype.mjs`, `arch-data.md` §4.3.7 and `arch-minds-eye.md` §12.3, §12.9–12.12 gone — `fk_intentmap_workflow` was declared in template, seed and registry but absent live — added live (Javear, 2026-11-02; 0 orphans, 44 linked rows) by `dev_scripts/migrate-pgc-intentmap-workflow-fk.mjs` — ✅ DONE 2026-11-02 |
+
+## Acceptance Criteria
+
+⬜ not started · 🟡 in progress · ✅ met · ~~struck~~ withdrawn or moved. **Updated when a criterion's
+state changes, not at close.**
+
+| # | Status | Criterion | Scope | Threshold |
+|---|---|---|---|---|
+| **AC1** | ✅ met 2026-11-02 — encrypted (`aws/rds`), row counts identical, live check passed, drift `IN_SYNC`, no unencrypted instance, snapshot or backup left ([`ops-encryption-at-rest.md`](../ops-encryption-at-rest.md)) | The prod database is encrypted at rest: `StorageEncrypted: true` on the live instance, `template.yaml` matches the live instance (drift `IN_SYNC`), every table's row count unchanged across the cut, the Lambdas reach it with no SSM change or with the change made through a version-pinned deploy, and **no unencrypted copy remains** — the old instance, its automated backups and the pre-encrypt snapshot deleted (Phase 4; added Javear, 2026-11-02) (Sprint 14 AC6) | [1](#scope) | Binary, verified live |
+| **AC2** | ✅ met 2026-11-02 — [`arch-sandbox.md`](../arch-sandbox.md) approved by Javear | A written test-data policy for prod, approved by Javear | [2](#scope) | Approved |
+| **AC3** | ✅ met 2026-11-02 — resume: run 955, five `answer_gate` calls through `/proc/gates`, each on the gate then waiting; refusal: session 1285, asked to answer run 958 (`ping_core` from Slack), she read it with `read_workflow_run`, saw `test_run: false` and declined before calling `answer_gate` — so the harness guard (`isOwnTestRun`) is still proven by unit tests only | Novia answers a gate in a run she started and the run resumes through `POST /gates/{runId}/responses`; ~~a run she did not start, or a gate guarding her own gated write,~~ any run but her own test run is refused (Javear, 2026-11-02) (Sprint 14 AC9) | [3](#scope), [4](#scope) | Binary, live |
+| **AC4** | ✅ met 2026-11-02 — session 1284: tested `flashcard_quiz_session` v3 against an approved plan (run 955), proposed five fixes, Javear chose *Apply and test* (v4), she planned the retest, Javear approved, runs 956–957 passed every expected value, `end_test`, report — no message from Javear between each plan approval and its report. Whole session 43 calls, **$1.79, 96% cache reads** | She fixes a workflow, offers Submit only / Submit and test, writes a test plan Javear approves, runs it in the sandbox, is woken at its gates, reads them with `read_workflow_run`, answers, resets the sandbox and reports — with no message from Javear between plan approval and report (reworded Javear, 2026-11-02; was "between start and report") | [3](#scope)–[7](#scope) | Binary, live — vehicle: `flashcard_quiz_session` spaced repetition (Javear, 2026-11-02; was `manage_budget`) — test as it stands, fix, retest; her plan judged against [`flashcard-quiz-sm2-analysis.md`](../flashcard-quiz-sm2-analysis.md) §2 |
+| **AC5** | ✅ met 2026-11-02 — session 1284's whole cycle (review, plan, run 955, report): 21 calls, **$0.85, 92% of input read from cache**; every wake round read its full prefix (events arrive in seconds, inside the 5-minute TTL), so the Anthropic-direct move is **not needed** for self-testing. One break: the round after a typed reply ("Continue") read only the 19.5k system-and-tools prefix — the rebuilt transcript diverged on that resume path (~$0.07); a finding for the backlog | Her cache reads across a self-test cycle are measured from the proc logs; the result decides whether the Anthropic API move returns | [3](#scope)–[5](#scope) | Measured, reported |
+| **AC6** | ✅ met 2026-11-02 — household `PGD_Cards` (388, checksum of interval, EF, due date and `updated_at` over every card), `PGD_ReviewLog` (472, max id 472) and `PGD_Decks` (14) identical before and after run 955; the sandbox was dropped by her `end_test` | A test run's writes land only in the sandbox: every real `PGD_*` table it touches has identical row counts and content before and after; reset leaves no sandbox table behind | [2](#scope) | Binary, live |
+| **AC7** | ✅ met 2026-11-02 — run 955 (`provider: novia`): the Slack listener never saw it; each event reached her session in under a second | No gate or notification from a run with provider `novia` reaches Slack; she reads the gate's resolved dialog | [6](#scope) | Binary, live |
+| **AC8** | ✅ met 2026-11-02 — in session 1284 she read `sop_test_cycle` unprompted, grounded both plans in the data, cut loops with data only (no test copy), read every gate before answering, recorded defects without fixing mid-cycle, ended each test and reported; *Apply and test* reached her as `test_requested` and she planned the retest | Her guidance carries the test cycle: the two submit options, the plan and its contents, data-first loop cutting with an uncommitted test copy as the fallback, and continue → reset → one fix cycle → fresh test on a defect | [7](#scope) | Shown in AC4's run |
+| **AC9** | ✅ met 2026-11-02 — template fixed; parse-error entry persisted, 3 unit tests (1185 → 1188) | The template's role check includes `tool`, matching the registry and live database; an unparseable tool call is persisted and appears in the rebuilt transcript (unit test) | [8](#scope), [9](#scope) | Unit tests pass |
+| **AC10** | ✅ met 2026-11-02 — session 1287, replay 960 of `process_receipt` run 946 in her sandbox after the clock fix (`e150dd6`): step 1b gave 2026-10-31, `parse_receipt` served from recording 1283 (`response_source: replayed`, no LLM call), the same steps, the same expense written (in the sandbox), the same message; household expenses and inventory identical; `end_test`, report. First attempt (session 1286) found the clock defect; her stale memory of it (530) deleted at Javear's request | After a fix she replays the failing run in the sandbox through her own tool, and reads its outcome | [10](#scope) | Binary, live |
+| **AC11** | ✅ met 2026-11-02 — all 16 PGC tables agree four ways (audit re-run clean; only the `PGC_WorkflowStats` view, created by bootstrap, has no template); `upsert-schema-registry.mjs --check` 16 ok; 1188 → 1253 tests | Template, seed registry, live registry rows and live database agree for every bootstrapped PGC table — columns, types, nullability, checks, FKs; a unit test fails on template/seed drift | [11](#scope) | Audit re-run clean; unit tests pass |
+| ~~**AC1 (proposed)**~~ | ~~⬜~~ — **deferred at sprint start (Javear, 2026-11-02)**: the 1h TTL was for a human-paced test cycle; AC5 measures whether a self-paced one needs it | ~~Novia's calls go to the Anthropic API; a round started more than 5 minutes after the last reads its prefix back from cache~~ | — | — |
+| ~~**AC2 (proposed)**~~ | ~~⬜~~ — **deferred with it** | ~~Her cost per session falls against the Oct 24 baseline, from the Usage and Cost API~~ | — | — |
+
+## Out of scope
+
+| Item | Why |
+|---|---|
+| Novia calls Anthropic directly | Deferred at sprint start (Javear, 2026-11-02) — AC5 decides whether it returns |
+| The web app's Phase 0 build | A later sprint, from `docs/arch-web-app.md` §10 (approved v0.5) — Sprint 14 AC1–AC4 |
+| IAM database authentication (backlog F3 / S3) | Sequenced after this sprint's instance replacement |
+| Moving workflow `llm_call`s off Perplexity | Novia is nearly all LLM spend |
+
+## Session Notes
+
+### Session 1 (2026-11-02)
+
+Sprint started, re-scoped (Anthropic direct deferred to AC5). Encryption runbook written and approved
+(`docs/ops-encryption-at-rest.md`); AC1 now also requires no unencrypted copy remaining. **Phase 0**
+deployed — bastion grants verified (snapshot and automated-backup reads work; 9 automated snapshots,
+no manual ones, all unencrypted). **Phase 1.1** — `Retain` on `EvoMindDB`, no RDS change. **Phase 1.2**
+— `EvoMindDB` and the `RDSEndpoint` output removed; CloudFormation `DELETE_SKIPPED`, instance
+`available` with deletion protection, SERV reads through the Lambda. Live engine is 16.13 against
+the template's former `"16.6"`. **Next:** Phase 2 in a quiet window Javear picks; Phase 3 restores the
+`EvoMindDB` block from git history with `StorageEncrypted: true` and `EngineVersion: "16"`.
+
+**Phase 2 (same session):** writes frozen; 30-table baseline; snapshot 5m, encrypted copy 3.5m,
+restore 8.5m (CA, retention and windows carried over — no modify). Abort point passed: all 30 row
+counts identical, encrypted, parameter group in sync, `vector` present. Swap ~2 min; the SSM URL
+reaches the new instance (verified by server address before unfreezing). Unfrozen; old
+`sysrdsevomind-unenc` frozen and stopped — **RDS restarts it on 2026-11-09, so Phase 4 by 2026-11-08**.
+SERV reads through the Lambda. Runbook corrected with what the cut showed (restore CA flag, rename
+waiter, unfreeze needs a read-write session first). The `aws/rds` key's id was printed once by a
+refused direct `kms:DescribeKey` — an identifier, not key material; no direct KMS call again.
+
+**Phase 3 (same session):** Javear's live check passed (`/ping` e2e, a read, a write). Imported from
+the deployed template plus the block (`CAPABILITY_NAMED_IAM` needed too); one change, `Import`, no
+replacement. Restoring `RDSEndpoint` showed a non-replacing `Modify` of `EvoMindDB` — `sam build`
+metadata and the `!GetAtt` form of `VPCSecurityGroups`, same value — previewed before executing, no
+pending change after. Single-resource drift needed `DetectStackResourceDrift` (granted, own deploy):
+**`IN_SYNC`, no differences.**
+
+**Novia test candidate (Javear, 2026-11-02):** `manage_budget` did not create the new month's budget
+correctly. Left as found — a live defect for AC4, where Novia diagnoses and fixes it herself.
+**Superseded (Javear, later the same day):** the cause is routing, not the workflow — `/m manage
+budget` reaches `manage_expenses` instead of `edit_budget`, an alias Novia can rebind with
+`manage_routing_aliases`. AC4 moved to `flashcard_quiz_session`, where Javear reports cards are not
+retested as spaced repetition intends; four findings read from the live v3 (all-cards selection,
+in-session retries rescheduling, EF lowered on failure, no repetition count) and a four-card
+reference test in [`flashcard-quiz-sm2-analysis.md`](../flashcard-quiz-sm2-analysis.md).
+
+**Phase 4 (same session, Javear: "do phase 4 now… okay delete snapshots"):** `sysrdsevomind-unenc`
+deleted with its automated backups; pre-encrypt snapshot deleted; two unencrypted CloudFormation
+snapshots from 2026-03-05 setup day (instances long gone) found by an account-wide sweep and
+deleted; the old automated snapshots cleared ~2 min after the instance. **Sweep: 0 unencrypted
+instances, snapshots, backups.** Write grants removed (own deploy); bastion keeps 7 read-only
+actions (5 CloudFormation drift/describe, 2 RDS snapshot/backup describes). A write probe ran
+before IAM propagated and created encrypted snapshot `grant-probe` — **Javear to delete it in the
+console** (the bastion can no longer). Kept: `sysrdsevomind-encrypted-20261102` (baseline, a month).
+F7 closed in `arch-security.md`; README and `architecture.md` §2 say PostgreSQL 16, encrypted.
+
+### Session 2 (2026-11-02) — re-scoped with Javear
+
+Commit trailers across history rewritten to `Co-Authored-By: Christopher Wren` (all branches and
+tags, force-pushed by Javear); 183 doc hash references repointed (`1931531`). Javear's self-test
+review added scope 6–10 and AC6–AC10: her test runs' gates stay out of Slack (provider `novia`),
+the test cycle (Submit only / Submit and test, an approved plan, data-first loop cutting with an
+uncommitted test copy, continue → reset → one fix cycle → fresh test), and three backlog items
+(template role check, unparseable tool call persisted, replay as her tool). **Test-data policy:
+option A, a sandbox schema** — no two-stage commit is possible across a run. Transcript eviction
+stays in the backlog, waiting for its trigger.
+
+**Built and deployed (same session):** AC2 sandbox policy approved; scope 8, 9 (AC9); schema drift
+four ways, `PGC_Archetype` removed, `fk_intentmap_workflow` added live (AC11); `read_workflow_run`;
+`gate_id` + `POST /proc/gates/{runId}/responses` (the spec file parses again); the sandbox, SERV and
+PROC halves, verified against the live database; a pre-existing SERV connection leak fixed (five
+table routes closed their PGD connection only on success); test runs, the wake and `answer_gate`
+(no `await_run` — the waiting call records itself first); *Apply and test*. **Deployed
+2026-11-02 at `d0d23ea`**: all four functions updated; `upsert-system-context` inserted
+`sop_test_cycle` and updated the prompt (v38), tool schemas (v10) and preferences; registry 16/16;
+smoke checks on the live sandbox and gates routes passed; live catalog 36 tools, none undescribed or
+undispatchable; no errors in any function's logs. 1185 → 1319 tests.
+
+**Scope 10 deployed 2026-11-02 at `2e696a0`:** PROC and SERV updated; `sop_test_cycle` v2 and tool
+schemas v11 upserted; live catalog 38 tools, none undescribed or undispatchable; `GET
+/proc/replay/946` unchanged after the refactor. AC10's live vehicle: `process_receipt` run 946
+(31 Oct, completed, its parse step fingerprinted) — Javear asks Novia to replay it in a sandbox.
+
+### Earlier plan — the live cycle (AC3–AC8), then scope 10
+
+Javear starts it in Slack: ask Novia to test `flashcard_quiz_session` as it stands — her plan
+compared with `flashcard-quiz-sm2-analysis.md` §2, the run expected to reproduce F1–F3 — then to fix
+it, choosing *Apply and test*, and retest. F4 (a repetition count column) is Javear's decision before
+it is fixed. Evidence to collect: the plan she proposes; her test run's gates never reaching Slack
+(AC7); `answer_gate` resuming it (AC3); household `PGD_*` rows unchanged (AC6 — counts before and
+after); her cache reads across the cycle from the proc logs (AC5). Then scope 10, replay as her tool.
+
+### Superseded — write the sandbox policy, then the toolkit
+
+Read this file, then `docs/arch-web-app.md` §3 (`PGC_UiMessage` provider routing, §3.1
+`POST /gates/{runId}/responses`, `gate_id`) and `docs/arch-minds-eye.md` (tool catalog).
+1. **AC2 write-up for approval** — the sandbox: which tables are copied (those the workflow under
+   test reads or writes, from its steps), when (test start), how SERV routes a test run's
+   `PGD_*` names to `test.*`, what stays real (`PGC_*`), reset, and the uncommitted test copy.
+   Propose, don't build.
+2. **Quick wins** — 8 and 9 (unit tests first).
+3. **Prep before code** — ✅ DONE 2026-11-02, approved by Javear: `await_run` (the wake closes her
+   open call; superseded in the build — the call that sets a run moving waits itself, see scope 5), `answer_gate` only in her own test runs, **Apply and test** as a second approve button
+   on the commit gate. Seed text held in [`sprint-15-novia-seed-drafts.json`](sprint-15-novia-seed-drafts.json) —
+   `sop_test_cycle`, the system prompt's TEST RUNS paragraph, six tool schemas, `sandbox` / `test`
+   parameters; catalog in `arch-minds-eye.md` §4.4. **Each piece moves into
+   `seed_PGC_SystemContext.json` in the commit that builds its code**: the seed must describe
+   exactly the dispatchable tools (`minds-eye-tool-schemas.test.mjs`), and a `sandbox: true` the
+   code ignores would write household data. The file is deleted when empty.
+4. Build order: 3 `read_workflow_run` → 6 provider `novia` → 4 `answer_gate` + endpoint
+   (`openapi.yaml` spec-first) → 5 the wake → 2 the sandbox → 7 → 10 replay.
+AC4's live vehicle: `flashcard_quiz_session` (moved from `manage_budget` — see Session 1's superseded note).
+
+---
+
+## Outcome — closed 2026-11-02
+
+**All 11 ACs met in 2 sessions. 1185 → 1334 unit tests. Prod runs the branch at `e150dd6`.**
+
+- **Encryption at rest (AC1):** prod on `aws/rds`, imported back under the stack `IN_SYNC`, no
+  unencrypted instance, snapshot or backup left; `grant-probe` deleted by Javear.
+- **Novia tests her own work (AC2–AC8, AC10):** the sandbox (`arch-sandbox.md`); test runs that wake
+  her session instead of reaching Slack; `answer_gate` on `/proc/gates` with `gate_id`; *Apply and
+  test*; `sop_test_cycle`; replay as her tool, and a replay that reads its source run's clock.
+  **Session 1284** reviewed `flashcard_quiz_session`, proved four defects in a sandbox, fixed them
+  (v4) and proved the fix, with no message from Javear between each plan approval and its report —
+  **$1.79, 96% cache reads, household rows unchanged**. **Session 1285** declined to answer a
+  person's run. **Session 1287** replayed `process_receipt` run 946 with no LLM call.
+- **Also:** scope 8–9 defects (AC9); the PGC schema made to agree four ways and `PGC_Archetype`
+  removed (AC11); a SERV connection leak fixed; the OpenAPI file parses again.
+- **Decided:** the Anthropic-direct move is not needed for self-testing (AC5).
+
+## Retro
+
+**What went right.**
+
+*A tightly defined sprint, decided quickly.* Javear's verdict at close: the best sprint to date — well
+defined, no added tech debt, every AC met. The scope was re-cut at the start (Anthropic-direct
+deferred to a measurement), every design question was put as a short choice and answered in one
+message (the sandbox option, the tables-only copy, test memories, the AC4 vehicle), and each
+decision went into the AC table the turn it was made. Findings that were not this sprint's work went
+to the backlog or a domain doc as they appeared, so nothing was carried silently.
+
+*Live data corrected the analysis, both ways.* Novia's review of the quiz found that a retry was
+scored from the stale `current_card` — my reading had the mechanism wrong (interval 6, not 15). Her
+run then proved hers. Later the F4 claim of mine was withdrawn on a second look. Each correction went
+into the analysis doc as it happened, so the plan she was judged against stayed true.
+
+*Verifying against the live database before deploying.* Running the real SERV handler locally against
+prod in a throwaway schema checked the sandbox's SQL — sequences, triggers, `NOT VALID` FKs, cascade —
+before any deploy, and a hung test process exposed a connection leak in five routes that had been
+there all along.
+
+*Reasoning about a race before shipping it.* `await_run` was approved, then removed in the build: an
+event landing between `answer_gate` and `await_run` (a redrawn form is the same gate) would have left
+her waiting forever. The call that moves the run now waits itself, and nothing can arrive before it.
+
+*Measuring before deciding.* AC5 settled the Anthropic-direct question with a number from a real
+cycle, not a projection.
+
+**What went wrong, and what it says.**
+
+*I pushed three failing tests.* `fabc29b` committed after a test run whose output was piped to `grep`
+and followed by `;`. **Gate every commit on the test command's exit code** (`&&`), and read the
+summary from a log afterwards.
+
+*Seed text ahead of its code.* The approved tool text went into the seed before the tools existed and
+broke the invariant that the seed describes exactly the dispatchable tools — and a `sandbox: true`
+the code ignored would have written household data. **Text an LLM reads ships in the commit that
+builds what it describes;** drafts wait in a file.
+
+*Replay promised "everything but the LLM" without listing what a run is given.* The clock was an
+input nobody named, found when Novia's first replay broke on step 1b's date. `Math.random` is
+another (backlog). **When a mechanism promises to reproduce a run, enumerate the run's inputs —
+clock, randomness, external reads — before calling it faithful.**
+
+*A smoke check that wasn't read-only.* A `resume { abort }` against a real run was in a verification
+command and was blocked. It would have been refused, but it was still a write aimed at real data.
+**Post-deploy checks read; they never write.**
+
+*AC4's first vehicle wasn't checked.* `manage_budget`'s defect turned out to be a routing alias, not
+the workflow. **Confirm a vehicle's defect before naming it in an AC.**
+

@@ -625,6 +625,30 @@ export function oversizedGateMessage(blocks) {
   };
 }
 
+/**
+ * A Novia action gate's buttons: approve, approve-and-test when /proc offers it (testLabel), and
+ * cancel. Exported for tests.
+ */
+export function mindsEyeGateButtons({ sessionId, confirmLabel = 'Approve', confirmStyle, testLabel }) {
+  const approve = (label, test, actionId) => ({
+    type:      'button',
+    text:      { type: 'plain_text', text: label },
+    action_id: actionId,
+    value:     JSON.stringify({ action: 'minds_eye_action_gate', sessionId, approved: true, ...(test ? { test: true } : {}) }),
+    ...(confirmStyle ? { style: confirmStyle } : {}),
+  });
+  return [
+    approve(confirmLabel, false, 'minds_eye_delete_approve'),
+    ...(testLabel ? [approve(testLabel, true, 'minds_eye_approve_test')] : []),
+    {
+      type:      'button',
+      text:      { type: 'plain_text', text: 'Cancel' },
+      action_id: 'minds_eye_delete_cancel',
+      value:     JSON.stringify({ action: 'minds_eye_action_gate', sessionId, approved: false }),
+    },
+  ];
+}
+
 // Returns true when the gate was refused, in which case the caller must not post.
 async function refuseOversizedGate({ callback, blocks, gateType, workflowRunId, traceId }) {
   const oversized = oversizedGateMessage(blocks);
@@ -790,30 +814,15 @@ async function postHumanGate(message) {
 
   // minds_eye_gate \u2014 Novia action gate. Renders with sessionId buttons instead of workflowRunId.
   if (gateType === 'minds_eye_gate') {
-    const { sessionId, confirmLabel = 'Approve', confirmStyle } = message;
+    const { sessionId, confirmLabel = 'Approve', confirmStyle, testLabel } = message;
     const gateText = dialog?.fields?.find(f => f.type === 'typography')?.value ?? 'Confirm action';
-    const approveButton = {
-      type:      'button',
-      text:      { type: 'plain_text', text: confirmLabel },
-      action_id: 'minds_eye_delete_approve',
-      value:     JSON.stringify({ action: 'minds_eye_action_gate', sessionId, approved: true }),
-    };
-    if (confirmStyle) approveButton.style = confirmStyle;
     const sessionContextBlock = { type: 'context', elements: [{ type: 'mrkdwn', text: `sessionId: ${sessionId} | traceId: ${traceId}` }] };
     const gateBlocks = [
       ...markdownToBlocks(gateText),
       sessionContextBlock,
       {
         type: 'actions',
-        elements: [
-          approveButton,
-          {
-            type:      'button',
-            text:      { type: 'plain_text', text: 'Cancel' },
-            action_id: 'minds_eye_delete_cancel',
-            value:     JSON.stringify({ action: 'minds_eye_action_gate', sessionId, approved: false }),
-          },
-        ],
+        elements: mindsEyeGateButtons({ sessionId, confirmLabel, confirmStyle, testLabel }),
       },
     ];
     await routeCallback(callback, gateText.slice(0, 150), gateBlocks);

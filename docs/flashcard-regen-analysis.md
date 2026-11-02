@@ -198,7 +198,7 @@ After deploying code changes: run `node dev_scripts/upsert-prompt.mjs generate_w
 
 ## Implementation Status (2026-05-11)
 
-All four fixes implemented, deployed, and pushed in commit `a0a939d`. Artifacts pushed to DB via upsert scripts. Unit tests: 18 pre-existing failures remain; 10 tests that were previously failing now pass as a side-effect of the engine fix. Zero regressions.
+All four fixes implemented, deployed, and pushed in commit `ca992e1`. Artifacts pushed to DB via upsert scripts. Unit tests: 18 pre-existing failures remain; 10 tests that were previously failing now pass as a side-effect of the engine fix. Zero regressions.
 
 ---
 
@@ -288,7 +288,7 @@ const hasCancel = (s.options ?? []).some(o => o.on_select === 'cancel');
 
 **Correction attempt behavior:** The LLM received the error message "has no option with action 'cancel'" and on attempt 2 introduced a `special_buttons` array (not a real schema concept) with `action: "cancel"`. This added a second schema violation rather than fixing the first. Both attempts failed for the same underlying reason.
 
-**Fix:** Commit `beb99c7` — `review-output.mjs` corrected to check `o.on_select`. Also fixed the options loop error-message label from `opt.action` (always `undefined`) to `opt.label ?? opt.value`.
+**Fix:** Commit `db83267` — `review-output.mjs` corrected to check `o.on_select`. Also fixed the options loop error-message label from `opt.action` (always `undefined`) to `opt.label ?? opt.value`.
 
 **System implication logged in backlog:** L1 static analysis should detect nested `{{...{{...}}...}}` template tokens before the workflow is registered.
 

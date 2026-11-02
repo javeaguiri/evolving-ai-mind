@@ -139,7 +139,7 @@ The execution stack lives in `PGC_WorkflowRun.stack`. A sequential iterator **ne
 | Infrastructure | AWS SAM + CloudFormation |
 | Compute | AWS Lambda (4 functions) |
 | Queuing | AWS SQS (WorkflowQueue + SlackResultsQueue) |
-| Database | PostgreSQL 16.6 on RDS (PGC + PGD databases) |
+| Database | PostgreSQL 16 on RDS (PGC + PGD databases), encrypted at rest (`aws/rds`) |
 | Primary UI | Slack Bot |
 | LLM | Pluggable — currently Perplexity; model selection is coded logic |
 | Region | us-east-2 |
@@ -324,6 +324,7 @@ evolving-mind-ai/
 | Callback abstraction | ✅ Complete | `callback: { provider, channel, threadId }` throughout |
 | Workflow versioning | ✅ Working | `dev_scripts/upsert-workflow.mjs` — push new versions without deploy |
 | `/novia` — the minds-eye agent | ✅ Working | The primary way the system is extended and repaired. Native function-calling loop over a full tool catalog: context assembly (Layer 1 PGC catalog + Layer 2 memory), read tools (`query_table`, `read_workflow`, `read_prompt`, `simulate_workflow`, `read_session_entry`, …), gated write tools (`register_workflow`, `propose_workflow_fix`, `propose_schema_fix`, `update_data`, `schedule_workflow`, …), bounded tool output that names what it withheld, turn + action limit gates with Continue/Follow-up/Cancel, thread session continuity, factual + diagnostic memory writes. Display name configurable in `PGC_SystemContext` |
+| Novia tests her own work | ✅ Working | In a test sandbox — a schema of copied tables, so household data is never written (`docs/arch-sandbox.md`). She plans a test for approval, runs it with gates answered by her instead of reaching Slack, replays past runs with recorded LLM responses, and reports. *Apply and test* on a workflow change starts a test cycle (`docs/arch-minds-eye.md` §4.4) |
 | pgvector semantic search | ✅ Active | `PGC_DomainHelp.embedding` populated; used by Novia `search_domain_help` and intent classifier Pass 2 domain alias matching |
 | PGC_Session / PGC_SessionEntry | ✅ Live | Session storage for Novia, /chat, /explain; `minds_eye_turn_count`, `minds_eye_action_count` counters; `compressed` column for future context compression; `role = 'tool'` for Novia tool-call transcript |
 

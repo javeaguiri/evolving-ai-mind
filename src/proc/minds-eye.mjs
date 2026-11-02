@@ -35,12 +35,15 @@
 // Transport-agnostic — no AWS SDK, no Slack SDK.
 
 import { ok, err }                                         from '../shared/lambda-utils.mjs';
-import { getRows, insertRow, insertRows, updateRows, deleteRows, upsertRows } from '../shared/serv-client.mjs';
+import { getRows, insertRow, insertRows, updateRows, deleteRows, upsertRows, servPost, withSandbox } from '../shared/serv-client.mjs';
 import { callLlmWithTools }                                from '../shared/llm-client.mjs';
 import { enqueueCallback, enqueueWorkflow }                from '../shared/sqs-callback.mjs';
 import { runSimulation, expectedRunInput }                from './simulation-engine.mjs';
 import { loadStepTypeContracts }                          from './step-type-registry.mjs';
 import { resolvePath }                                    from './template-resolver.mjs';
+import { buildDialog }                                    from './step-executor.mjs';
+import { answerGate }                                     from './gates.mjs';
+import { createReplayRun, applyBreakResolution, breakReport } from './replay.mjs';
 
 // Closes the round's instructions. Constant, so it rides in the cached prefix rather than
 // being re-sent with every turn.
@@ -72,7 +75,7 @@ const DEFAULT_PREFERENCES = {
 
 const READ_TOOLS = new Set([
   'query_table', 'query_entity', 'read_memory',
-  'read_workflow', 'read_prompt', 'simulate_workflow',
+  'read_workflow', 'read_workflow_run', 'read_prompt', 'simulate_workflow',
   'search_domain_help', 'list_tables', 'list_physical_tables',
   'run_sql', 'read_session_entry',
   'list_capabilities', 'list_schedules',
@@ -107,6 +110,25 @@ const HOUSEKEEPING_TOOLS = new Set([
   'write_memory',
 ]);
 
+// Test tools (docs/arch-minds-eye.md §4.4, docs/arch-sandbox.md) — the sandbox's lifecycle. No
+// gate and no action count: they touch only the sandbox.
+const TEST_TOOLS = new Set([
+  'start_test', 'reset_test', 'end_test',
+]);
+
+// Tools that act on the sandbox instead of household data when called with sandbox: true —
+// ungated and uncounted there, delete_data and propose_workflow_fix (the test copy) included.
+const SANDBOXABLE_TOOLS = new Set([
+  'query_table', 'run_sql', 'update_data', 'insert_data', 'upsert_data', 'delete_data', 'propose_workflow_fix',
+]);
+
+// Calls that set a test run moving and then wait for it: the run's next gate, completion,
+// failure or replay break becomes the call's result. answer_gate, replay_run and
+// resolve_replay_break always; run_workflow with test: true.
+const WAITING_TOOLS = new Set([
+  'answer_gate', 'run_workflow', 'replay_run', 'resolve_replay_break',
+]);
+
 /**
  * The result of a tool that is declared but not yet wired up.
  *
@@ -128,7 +150,7 @@ function notImplemented(capability, wouldHave, note) {
 // can call and the loop cannot run is worse than a tool it never sees.
 export const DISPATCHABLE_TOOLS = new Set([
   ...READ_TOOLS, ...INLINE_WRITE_TOOLS, ...GATED_WRITE_TOOLS,
-  ...TRIGGER_TOOLS, ...HOUSEKEEPING_TOOLS, 'respond',
+  ...TRIGGER_TOOLS, ...HOUSEKEEPING_TOOLS, ...TEST_TOOLS, ...WAITING_TOOLS, 'respond',
 ]);
 
 /**
@@ -321,7 +343,7 @@ export async function handle(req) {
 // ---------------------------------------------------------------------------
 
 async function handleGateResume(body, callback, traceId, req) {
-  const { sessionId, approved, resumeType } = body;
+  const { sessionId, approved, resumeType, test } = body;
 
   const sessResp = await getRows('PGC_Session', [{ column: 'id', op: 'eq', value: sessionId }]);
   const session  = sessResp.rows?.[0] ?? null;
@@ -332,6 +354,11 @@ async function handleGateResume(body, callback, traceId, req) {
   }
 
   const entries = await loadSessionEntries(session.id);
+
+  // A test run she is waiting on reached a gate, completed or failed (docs/arch-minds-eye.md §4.4).
+  if (resumeType === 'run_event') {
+    return handleRunEvent({ session, entries, runEvent: body.runEvent, callback, traceId, req });
+  }
 
   // Follow-up question — add user message, reset turns and actions (a human just
   // engaged with the session), run loop, re-post continue gate after response.
@@ -453,7 +480,7 @@ async function handleGateResume(body, callback, traceId, req) {
   }
 
   // Execute the approved gated action
-  const result    = await executeWriteTool(action, params, traceId);
+  const result    = withTestRequest(await executeWriteTool(action, params, traceId), test);
   const resultStr = JSON.stringify({ tool: action, params, result });
   await insertRow('PGC_SessionEntry', {
     session_id:      session.id,
@@ -499,6 +526,73 @@ async function handleGateResume(body, callback, traceId, req) {
   if (req?.source === 'http') {
     return ok({ success: true, sessionId: session.id }, req.correlationId);
   }
+}
+
+/**
+ * Resolve the call she left waiting on a test run, and carry on.
+ *
+ * Every message a test run sends arrives here. It ends the wait only when the session's last
+ * entry is the open call for that run and the message is one that ends it (describeRunEvent);
+ * anything else — a notification on the way to a gate, an event nobody is waiting for — is
+ * dropped. The resolution takes the next sequence number, and (session_id, sequence_number) is
+ * unique, so two events racing for the same wait resolve it once.
+ */
+async function handleRunEvent({ session, entries, runEvent, callback, traceId, req }) {
+  const last = entries[entries.length - 1];
+  let waiting = null;
+  try { waiting = last?.role === 'tool' ? JSON.parse(last.content) : null; } catch { waiting = null; }
+  if (waiting?.tool !== '__pending__' || !WAITING_TOOLS.has(waiting.action) || waiting.runId !== runEvent?.workflowRunId) {
+    console.info('proc/minds-eye: run event with no call waiting on it — dropped', {
+      sessionId: session.id, runId: runEvent?.workflowRunId, type: runEvent?.type, traceId,
+    });
+    return;
+  }
+
+  const runId = waiting.runId;
+  const run   = (await getRows('PGC_WorkflowRun', [{ column: 'id', op: 'eq', value: runId }], undefined, 1, undefined,
+    ['id', 'workflow_id', 'status', 'triggered_by', 'sandbox', 'stack', 'state', 'error', 'started_at', 'completed_at'])).rows?.[0];
+  if (!run) return;
+  const [wfResp, stepResp] = await Promise.all([
+    getRows('PGC_Workflow', [{ column: 'id', op: 'eq', value: run.workflow_id }], undefined, 1, undefined, ['name', 'version', 'steps']),
+    getRows('PGC_WorkflowRunStep', [{ column: 'run_id', op: 'eq', value: runId }, { column: 'id', op: 'gt', value: waiting.sinceStepId ?? 0 }],
+      'id ASC', undefined, undefined,
+      ['id', 'step_number', 'step_type', 'status', 'retry_count', 'input_snapshot', 'output_snapshot', 'error', 'duration_ms', 'executed_at']),
+  ]);
+  const result = describeRunEvent({ message: runEvent, run, workflow: wfResp.rows?.[0] ?? null, stepRows: stepResp.rows ?? [] });
+  if (!result) return;
+
+  const { prefs, systemPrompt } = await loadPrefsAndPrompt();
+  const limit = prefs.max_test_events ?? 40;
+  if (countTestEvents(entries) + 1 >= limit) {
+    result.note = `This is the last test event this session allows (${limit}). Call end_test and report what you have.`;
+  }
+
+  const seq     = last.sequence_number + 1;
+  const content = JSON.stringify({ tool: waiting.action, params: waiting.params, result });
+  try {
+    await insertRow('PGC_SessionEntry', { session_id: session.id, sequence_number: seq, role: 'tool', content });
+  } catch (error) {
+    console.info('proc/minds-eye: run event already resolved by another wake', { sessionId: session.id, runId, error: error.message, traceId });
+    return;
+  }
+  console.info('proc/minds-eye: test run event delivered', { sessionId: session.id, runId, event: result.event, traceId });
+
+  const { layer1Context, layer2Context } = await assembleContext();
+  await runReasoningLoop({
+    session,
+    prefs,
+    systemPrompt,
+    layer1Context,
+    layer2Context,
+    workingHistory:     [...entries, { role: 'tool', content, sequence_number: seq }],
+    callback,
+    traceId,
+    currentTurnCount:   session.minds_eye_turn_count ?? 0,
+    currentActionCount: session.minds_eye_action_count ?? 0,
+    currentSeq:         seq + 1,
+    threadTs:           callback?.threadId ?? session.slack_thread_ts,
+  });
+  if (req?.source === 'http') return ok({ success: true, sessionId: session.id }, req.correlationId);
 }
 
 // ---------------------------------------------------------------------------
@@ -786,7 +880,18 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
           console.warn('proc/minds-eye: tool arguments would not parse — returning the error', {
             action: entry.call.name, traceId,
           });
-          recordToolOutput({ error: 'arguments were not valid JSON — resend this call with valid JSON arguments' });
+          // Persisted like any tool entry, so the rebuild replays the malformed call and its
+          // error exactly as this round sent them.
+          const parseErrorEntry = unparseableCallEntry(entry.call.name, entryItems, turnCount);
+          await insertRow('PGC_SessionEntry', {
+            session_id:      session.id,
+            sequence_number: seq,
+            role:            'tool',
+            content:         parseErrorEntry,
+          });
+          recordToolOutput(UNPARSEABLE_ARGUMENTS_RESULT);
+          workingHistory.push({ role: 'tool', content: parseErrorEntry, sequence_number: seq });
+          seq += 1;
           activeCall = null;
           continue;
         }
@@ -837,6 +942,63 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         console.info('proc/minds-eye: responded', { sessionId: session.id, traceId, turns: turnCount });
         control = 'break';
         break;
+
+      } else if (params.sandbox === true && SANDBOXABLE_TOOLS.has(action)) {
+        // The sandbox, not household data: ungated and uncounted, whatever the tool is outside it.
+        const sbResult = await executeInSandbox(action, params, traceId, session);
+        const sbEntry  = JSON.stringify({ tool: action, params, result: sbResult, items: entryItems, turn: turnCount });
+        await insertRow('PGC_SessionEntry', { session_id: session.id, sequence_number: seq, role: 'tool', content: sbEntry });
+        recordToolOutput(sbResult);
+        workingHistory.push({ role: 'tool', content: sbEntry, sequence_number: seq });
+        seq += 1;
+        await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: sbResult });
+        console.info('proc/minds-eye: sandbox tool executed', { action, sessionId: session.id, traceId });
+
+      } else if (TEST_TOOLS.has(action)) {
+        const testResult = await executeTestTool(action, params, traceId);
+        const testEntry  = JSON.stringify({ tool: action, params, result: testResult, items: entryItems, turn: turnCount });
+        await insertRow('PGC_SessionEntry', { session_id: session.id, sequence_number: seq, role: 'tool', content: testEntry });
+        recordToolOutput(testResult);
+        workingHistory.push({ role: 'tool', content: testEntry, sequence_number: seq });
+        seq += 1;
+        await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: testResult });
+        console.info('proc/minds-eye: test tool executed', { action, sessionId: session.id, traceId });
+
+      } else if (WAITING_TOOLS.has(action) && (action !== 'run_workflow' || params.test === true)) {
+        // Sets a test run moving and waits: the round ends on an open call, and the run's next
+        // gate, completion or failure becomes its result when the run wakes the session
+        // (handleRunEvent). The call is recorded before the run is touched, so nothing the run
+        // does can arrive before she is waiting for it.
+        const pend = async (runId, sinceStepId) => {
+          const pendingEntry = JSON.stringify({ tool: '__pending__', action, params, runId, sinceStepId, items: entryItems, turn: turnCount });
+          await insertRow('PGC_SessionEntry', { session_id: session.id, sequence_number: seq, role: 'tool', content: pendingEntry });
+          workingHistory.push({ role: 'tool', content: pendingEntry, sequence_number: seq });
+          seq += 1;
+        };
+        const limit = prefs.max_test_events ?? 40;
+        const started = countTestEvents(workingHistory) >= limit
+          ? { error: `This session has used its ${limit} test events. Call end_test and report what you have.` }
+          : action === 'answer_gate'          ? await startAnswerGate(params, session, traceId, pend)
+          : action === 'replay_run'           ? await startReplayRun(params, session, callback, traceId, threadTs, pend)
+          : action === 'resolve_replay_break' ? await startResolveBreak(params, session, traceId, pend)
+          :                                     await startTestRun(params, session, callback, traceId, threadTs, pend);
+
+        if (started.waiting) {
+          await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: session.id }], { minds_eye_turn_count: turnCount });
+          await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: started });
+          console.info('proc/minds-eye: waiting on test run', { action, sessionId: session.id, traceId });
+          earlyExit = true;
+          control = 'break';
+          break;
+        }
+
+        // Refused, or failed before anything happened: answered now. Same tool name as any
+        // open call it follows, so a rebuild reads it as that call's output.
+        const failedEntry = JSON.stringify({ tool: action, params, result: started, items: entryItems, turn: turnCount });
+        await insertRow('PGC_SessionEntry', { session_id: session.id, sequence_number: seq, role: 'tool', content: failedEntry });
+        recordToolOutput(started);
+        workingHistory.push({ role: 'tool', content: failedEntry, sequence_number: seq });
+        seq += 1;
 
       } else if (READ_TOOLS.has(action)) {
         const toolResult = await executeReadTool(action, params, traceId, session);
@@ -1072,13 +1234,15 @@ async function notifyTurnProgress({ callback, traceId, turn, action, reasoning, 
 // Post an action gate — stores __pending__ entry, posts HUMAN_GATE
 // ---------------------------------------------------------------------------
 
-function gateButtonConfig(action, params = {}) {
+export function gateButtonConfig(action, params = {}) {
   if (action === 'delete_data')          return { confirmLabel: 'Delete', confirmStyle: 'danger' };
   if (action === 'drop_table')           return { confirmLabel: 'Drop',   confirmStyle: 'danger' };
   if (action === 'drop_view')            return { confirmLabel: 'Drop',   confirmStyle: 'danger' };
   if (action === 'create_view')          return { confirmLabel: 'Create', confirmStyle: null };
-  if (action === 'register_workflow')    return { confirmLabel: 'Register', confirmStyle: null };
-  if (action === 'propose_workflow_fix') return { confirmLabel: 'Apply',  confirmStyle: null };
+  // A workflow change can be approved with a test: the second approval applies it and asks her to
+  // plan one (sop_test_cycle). Not offered for a test copy, which is never gated.
+  if (action === 'register_workflow')    return { confirmLabel: 'Register', confirmStyle: null, testLabel: 'Register and test' };
+  if (action === 'propose_workflow_fix') return { confirmLabel: 'Apply',  confirmStyle: null, testLabel: 'Apply and test' };
   if (action === 'propose_schema_fix') {
     const isDrop = params.operation === 'dropColumn';
     return { confirmLabel: isDrop ? 'Drop' : 'Apply', confirmStyle: isDrop ? 'danger' : null };
@@ -1088,7 +1252,7 @@ function gateButtonConfig(action, params = {}) {
 
 async function postActionGate({ session, action, params, items, turn, callback, traceId, currentTurnCount, currentSeq }) {
   const gateText = await buildGateText(action, params, traceId);
-  const { confirmLabel, confirmStyle } = gateButtonConfig(action, params);
+  const { confirmLabel, confirmStyle, testLabel } = gateButtonConfig(action, params);
 
   await insertRow('PGC_SessionEntry', {
     session_id:      session.id,
@@ -1110,6 +1274,7 @@ async function postActionGate({ session, action, params, items, turn, callback, 
       dialog:       { fields: [{ type: 'typography', value: gateText }] },
       confirmLabel,
       confirmStyle,
+      ...(testLabel ? { testLabel } : {}),
       traceId,
     });
   }
@@ -2147,7 +2312,7 @@ async function executeWriteTool(action, params, traceId) {
 // Execute a trigger tool — dispatches a registered workflow to the step executor
 // ---------------------------------------------------------------------------
 
-async function executeTriggerTool(action, params, callback, traceId, threadTs) {
+async function executeTriggerTool(action, params, callback, traceId, threadTs, test = null) {
   try {
     switch (action) {
 
@@ -2187,6 +2352,8 @@ async function executeTriggerTool(action, params, callback, traceId, threadTs) {
           ? { ...callback, threadId: threadTs }
           : callback;
 
+        // A test run reads and writes its sandbox, and reports to her session rather than to a
+        // person: callback.reply is her own thread (docs/arch-minds-eye.md §4.4).
         const runResp = await insertRow('PGC_WorkflowRun', {
           workflow_id:  wf.id,
           trace_id:     traceId,
@@ -2195,9 +2362,13 @@ async function executeTriggerTool(action, params, callback, traceId, threadTs) {
           input:        input,
           stack:        [],
           state:        {},
-          callback:     workflowCallback,
+          callback:     test ? { provider: 'novia', sessionId: test.sessionId, reply: workflowCallback } : workflowCallback,
+          ...(test ? { sandbox: test.sandbox } : {}),
         });
         if (!runResp.success) return { error: `Failed to create workflow run: ${runResp.error}` };
+
+        // Her call is waiting before the run can produce anything to wake it.
+        if (test?.beforeDispatch) await test.beforeDispatch(runResp.row.id);
 
         await enqueueWorkflow({
           type:          'WORKFLOW_STEP',
@@ -2216,6 +2387,128 @@ async function executeTriggerTool(action, params, callback, traceId, threadTs) {
     console.error('proc/minds-eye: executeTriggerTool error', { action, traceId, error: error.message });
     return { error: error.message };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Test tools — the sandbox, her test runs, and the gates in them (docs/arch-minds-eye.md §4.4)
+// ---------------------------------------------------------------------------
+
+/**
+ * An approved change the user also asked to have tested (Apply and test). Marked on the result
+ * only when the change was applied — there is nothing to test after a refusal.
+ */
+export function withTestRequest(result, test) {
+  if (!test || !result || result.error || result.success === false) return result;
+  return { ...result, test_requested: true, next: 'The user asked you to test this change. Read sop_test_cycle, then respond with a test plan for their approval.' };
+}
+
+/** Whether a run is a test run this session started — the only runs whose gates she answers. */
+export function isOwnTestRun(run, sessionId) {
+  return !!run?.sandbox && run.callback?.provider === 'novia' && run.callback?.sessionId === sessionId;
+}
+
+/** Test events already delivered in this session: resolved waiting calls. */
+export function countTestEvents(history = []) {
+  return history.filter(e => {
+    if (e?.role !== 'tool') return false;
+    try {
+      const parsed = JSON.parse(e.content);
+      return WAITING_TOOLS.has(parsed?.tool) && parsed?.result?.event !== undefined;
+    } catch { return false; }
+  }).length;
+}
+
+async function activeSandbox() {
+  return (await servPost('/api/v1/serv/sandbox/current', {})).sandbox ?? null;
+}
+
+async function executeTestTool(action, params, traceId) {
+  try {
+    const route = { start_test: 'create', reset_test: 'reset', end_test: 'drop' }[action];
+    const body  = action === 'start_test' ? { tables: params.tables } : {};
+    const { statusCode: _s, correlationId: _c, success: _ok, ...report } = await servPost(`/api/v1/serv/sandbox/${route}`, body);
+    return report;
+  } catch (error) {
+    console.warn('proc/minds-eye: test tool failed', { action, error: error.message, traceId });
+    return { error: error.message };
+  }
+}
+
+/** A read or write tool, run against the sandbox: every SERV call it makes carries x-sandbox. */
+async function executeInSandbox(action, params, traceId, session) {
+  const sandbox = await activeSandbox();
+  if (!sandbox) return { error: 'No test sandbox exists. Call start_test first.' };
+  const { sandbox: _flag, ...rest } = params;
+  const result = await withSandbox(sandbox, () => (READ_TOOLS.has(action)
+    ? executeReadTool(action, rest, traceId, session)
+    : executeWriteTool(action, rest, traceId)));
+  return { sandbox, ...result };
+}
+
+/**
+ * Answer a gate in her own test run, then wait. `pend` records the waiting call before the answer
+ * is sent, so the event it causes can never arrive first.
+ *
+ * @returns {Promise<{ waiting: true } | { error: string }>}
+ */
+async function startAnswerGate(params, session, traceId, pend) {
+  const { runId, gateId, action, formValues, inputValue, listGroup, selectedValue } = params;
+  if (!runId) return { error: 'runId is required' };
+  const run = (await getRows('PGC_WorkflowRun', [{ column: 'id', op: 'eq', value: runId }], undefined, 1, undefined, ['id', 'sandbox', 'callback'])).rows?.[0];
+  if (!isOwnTestRun(run, session.id)) {
+    return { error: "answer_gate answers only the gates of your own test runs. This run's gates belong to the user." };
+  }
+  const last = await getRows('PGC_WorkflowRunStep', [{ column: 'run_id', op: 'eq', value: runId }], 'id DESC', 1, undefined, ['id']);
+  await pend(runId, last.rows?.[0]?.id ?? 0);
+  const { status, body } = await answerGate(runId, { gateId, action, formValues, inputValue, listGroup, selectedValue }, traceId);
+  return status === 202 ? { waiting: true } : body;
+}
+
+/**
+ * Replay a run in the sandbox: its llm_call steps served from the source run's recorded responses,
+ * so re-running a failing case after a fix costs no LLM call; its gates are real, and come to her.
+ * Waits for the run's first gate, break, completion or failure.
+ */
+async function startReplayRun(params, session, callback, traceId, threadTs, pend) {
+  const sandbox = await activeSandbox();
+  if (!sandbox) return { error: 'No test sandbox exists. Call start_test first: a replay reads and writes only the sandbox.' };
+  if (params.sourceRunId == null) return { error: 'sourceRunId is required' };
+  const reply   = callback && threadTs ? { ...callback, threadId: threadTs } : callback;
+  const created = await createReplayRun({
+    sourceRunId:    params.sourceRunId,
+    breakPolicy:    params.breakPolicy ?? 'on_miss',
+    callback:       { provider: 'novia', sessionId: session.id, reply },
+    sandbox,
+    triggeredBy:    'minds_eye',
+    beforeDispatch: (runId) => pend(runId, 0),
+    traceId,
+  });
+  return created.error ? { error: created.error } : { waiting: true };
+}
+
+/** Resolve the break her replay is waiting at, then wait for what the run does next. */
+async function startResolveBreak(params, session, traceId, pend) {
+  const { runId, resolution, response, sessionId } = params;
+  if (!runId) return { error: 'runId is required' };
+  const run = (await getRows('PGC_WorkflowRun', [{ column: 'id', op: 'eq', value: runId }], undefined, 1, undefined, ['id', 'sandbox', 'callback'])).rows?.[0];
+  if (!isOwnTestRun(run, session.id)) {
+    return { error: 'resolve_replay_break resolves only breaks in your own replays.' };
+  }
+  const last = await getRows('PGC_WorkflowRunStep', [{ column: 'run_id', op: 'eq', value: runId }], 'id DESC', 1, undefined, ['id']);
+  await pend(runId, last.rows?.[0]?.id ?? 0);
+  const applied = await applyBreakResolution(runId, { resolution, response, sessionId }, traceId, 'minds_eye');
+  return applied.error ? { error: applied.error } : { waiting: true };
+}
+
+/** Start a test run in the sandbox, then wait for its first gate, completion or failure. */
+async function startTestRun(params, session, callback, traceId, threadTs, pend) {
+  const sandbox = await activeSandbox();
+  if (!sandbox) return { error: 'No test sandbox exists. Call start_test first: a test run reads and writes only the sandbox.' };
+  const { test: _flag, ...runParams } = params;
+  const result = await executeTriggerTool('run_workflow', runParams, callback, traceId, threadTs, {
+    sandbox, sessionId: session.id, beforeDispatch: (runId) => pend(runId, 0),
+  });
+  return result.error ? result : { waiting: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -2434,6 +2727,7 @@ const NARROWER_READ = {
   query_entity:         'call query_entity again with narrower `filters` or a smaller `limit`',
   read_memory:          'call read_memory again with narrower `filters` or a smaller `limit`',
   read_workflow:        'call read_workflow again with `outline: true`, or `steps` naming only the steps you need',
+  read_workflow_run:    'call read_workflow_run again with `outline: true`, or `steps` naming only the steps you need',
   run_sql:              'call run_sql again with a SELECT that returns only the columns and rows you need',
   list_tables:          'call list_tables again with `domain` or `prefix`',
   list_physical_tables: 'call list_physical_tables again with `prefix`',
@@ -2484,6 +2778,21 @@ export function capOutput(text, seq, tool) {
       ? ` The full result is also stored as session entry sequence ${seq}; read_session_entry({ sequence: ${seq}, offset: ${MAX_TOOL_OUTPUT_CHARS} }) pages it when a narrower read cannot express what you need.`
       : ` The full result is session entry sequence ${seq} — call read_session_entry({ sequence: ${seq}, offset: ${MAX_TOOL_OUTPUT_CHARS} }) to read the rest.`;
   return `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)} ...[truncated: ${MAX_TOOL_OUTPUT_CHARS} of ${text.length} characters shown.${narrower}${recall}]`;
+}
+
+export const UNPARSEABLE_ARGUMENTS_RESULT = { error: 'arguments were not valid JSON — resend this call with valid JSON arguments' };
+
+/**
+ * The session entry for a call whose arguments would not parse. `items` carries the gateway's
+ * own function_call, malformed arguments included, so toInputItems replays the call as sent.
+ *
+ * @param {string} tool          The call's name
+ * @param {Array}  items         The turn's gateway items for this call
+ * @param {number} turn          The turn number
+ * @returns {string}             The entry's content
+ */
+export function unparseableCallEntry(tool, items, turn) {
+  return JSON.stringify({ tool, params: {}, result: UNPARSEABLE_ARGUMENTS_RESULT, items, turn });
 }
 
 /**
@@ -2715,6 +3024,144 @@ export function projectWorkflowSteps(steps, { selected, outline } = {}) {
   return { step_count: all.length, steps: all };
 }
 
+/**
+ * What a test run's message means for the call waiting on it, or null when it does not end the
+ * wait — a notification the run sent on its way to its next gate. A gate, an error, completion,
+ * or any message once the run has stopped all end it. The steps run since the call are listed,
+ * with what each notify step said, since notifications do not wake her on their own.
+ *
+ * @param {object} args
+ * @param {object} args.message   The run's message (HUMAN_GATE, HUMAN_NOTIFICATION, WORKFLOW_ERROR, WORKFLOW_COMPLETED)
+ * @param {object} args.run       PGC_WorkflowRun row
+ * @param {object} [args.workflow]
+ * @param {Array}  args.stepRows  PGC_WorkflowRunStep rows executed since the call, in order
+ * @returns {object|null}
+ */
+export function describeRunEvent({ message, run, workflow = null, stepRows = [] }) {
+  const stopped  = ['completed', 'failed', 'cancelled'].includes(run.status);
+  const atBreak  = run.status === 'awaiting_llm_break';
+  const endsWait = ['HUMAN_GATE', 'WORKFLOW_ERROR', 'WORKFLOW_COMPLETED'].includes(message?.type)
+    || ((stopped || atBreak) && message?.type === 'HUMAN_NOTIFICATION');
+  if (!endsWait) return null;
+
+  const { outline, note: _note, executed_step_count: _count, ...summary } =
+    projectWorkflowRun({ run, workflow, stepRows, outline: true });
+  // A replay break: the llm_call whose recorded response could not be served. The assembled
+  // prompt is left out — it is the size of a whole prompt; the drift says what changed.
+  const report = atBreak ? breakReport(run) : null;
+  const { instructions: _prompt, ...breakSummary } = report ?? {};
+  return {
+    event: atBreak ? 'LLM_BREAK' : message.type === 'HUMAN_NOTIFICATION' ? run.status : message.type,
+    ...summary,
+    ...(report ? { break: breakSummary, resolutions: (message.breakActions ?? []).map(a => ({ resolution: a.resolution, ...(a.sessionId != null ? { sessionId: a.sessionId } : {}) })) } : {}),
+    // The gate as it was sent, which can carry what the plain gate does not — a form redrawn
+    // with "Please complete …" is the same gate, and the warning is the whole event.
+    ...(summary.waiting_gate && message.type === 'HUMAN_GATE' && message.dialog
+      ? { waiting_gate: { ...summary.waiting_gate, dialog: message.dialog } } : {}),
+    steps_since: outline.map((line, i) => (
+      stepRows[i]?.step_type === 'notify' && stepRows[i]?.output_snapshot?.summary
+        ? { ...line, notified: stepRows[i].output_snapshot.summary } : line
+    )),
+    ...(message.message ? { message: message.message } : {}),
+  };
+}
+
+/**
+ * Project a workflow run down to what was asked for, as projectWorkflowSteps does a workflow.
+ *
+ * A run's live state is its stack: PGC_WorkflowRun.state is written only when the run
+ * completes, so the top frame's local_state is read while the run is live or has failed, and
+ * state.local_state once it has completed. A waiting gate is rendered with buildDialog from
+ * the gate frame — the call the resume paths use to redraw it — so the dialog is what the
+ * person answering it sees, every {{token}} resolved.
+ *
+ * A step's output_snapshot is a bounded summary. `steps` therefore also returns the value now
+ * held at that step's output_key, which is the output in full.
+ *
+ * @param {object} args
+ * @param {object} args.run        PGC_WorkflowRun row
+ * @param {object} [args.workflow] The PGC_Workflow row the run executes (its own version)
+ * @param {Array}  args.stepRows   PGC_WorkflowRunStep rows, in execution order
+ * @param {boolean} [args.outline] One line per executed step
+ * @param {Array}  [args.selected] Step identifiers to return in full
+ * @returns {object}
+ */
+export function projectWorkflowRun({ run, workflow = null, stepRows = [], outline, selected }) {
+  const stack      = Array.isArray(run.stack) ? run.stack : [];
+  const top        = stack.length > 0 ? stack[stack.length - 1] : null;
+  const localState = top?.local_state ?? run.state?.local_state ?? null;
+  const stepOf     = (row) => String(row.input_snapshot?.step ?? row.step_number);
+
+  const waitingGate = run.status === 'awaiting_human_gate' && top?.type === 'human_gate'
+    ? {
+        gate_id:       top.gate_id ?? null,
+        gate_type:     top.gate_type,
+        step:          String(top.step_number),
+        waiting_since: top.pushed_at ?? null,
+        dialog:        buildDialog(top.step_ref ?? {}, top.local_state ?? {}),
+      }
+    : null;
+
+  const line = (row) => ({
+    step:         stepOf(row),
+    type:         row.step_type,
+    status:       row.status,
+    duration_ms:  row.duration_ms ?? null,
+    ...(row.retry_count ? { retry_count: row.retry_count } : {}),
+    ...(row.error       ? { error: row.error } : {}),
+    output_chars: row.output_snapshot?.chars ?? null,
+  });
+
+  const summary = {
+    run_id:              run.id,
+    workflow:            workflow?.name ?? null,
+    workflow_version:    workflow?.version ?? null,
+    status:              run.status,
+    triggered_by:        run.triggered_by ?? null,
+    test_run:            run.sandbox != null,
+    started_at:          run.started_at ?? null,
+    completed_at:        run.completed_at ?? null,
+    current_step:        top?.current_step ?? top?.step_number ?? null,
+    error:               run.error ?? null,
+    waiting_gate:        waitingGate,
+    executed_step_count: stepRows.length,
+  };
+
+  if (outline) {
+    return {
+      ...summary,
+      outline: stepRows.map(line),
+      note:    'Outline only. Call read_workflow_run again with steps: ["<step>"] for those steps\' outputs in full.',
+    };
+  }
+
+  if (Array.isArray(selected) && selected.length > 0) {
+    const wanted   = selected.map(String);
+    const defs     = Array.isArray(workflow?.steps) ? workflow.steps : [];
+    const picked   = stepRows.filter(row => wanted.includes(stepOf(row)));
+    const notRun   = wanted.filter(w => !picked.some(row => stepOf(row) === w));
+    const current  = Object.fromEntries(wanted.map(w => {
+      const outputKey = defs.find(s => String(s?.step) === w)?.output_key;
+      return [w, outputKey
+        ? { output_key: outputKey, value: localState ? resolvePath(localState, outputKey) ?? null : null }
+        : { output_key: null }];
+    }));
+    return {
+      ...summary,
+      executions: picked.map(row => ({ ...line(row), executed_at: row.executed_at ?? null, output_summary: row.output_snapshot?.summary ?? null })),
+      current_output: current,
+      ...(localState ? {} : { note: 'This run kept no state (it was cancelled), so no output value can be read back.' }),
+      ...(notRun.length && { not_run: notRun }),
+    };
+  }
+
+  return {
+    ...summary,
+    last_step: stepRows.length > 0 ? line(stepRows[stepRows.length - 1]) : null,
+    note:      'Pass outline: true for every executed step, or steps: ["<step>"] for named steps\' outputs in full.',
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Execute a read tool and return the result object
 // ---------------------------------------------------------------------------
@@ -2854,6 +3301,29 @@ async function executeReadTool(action, params, traceId, session) {
           // discarded, and omitting one it does read resolves to undefined with no error.
           expected_input: expectedRunInput(wf.steps),
           ...projectWorkflowSteps(wf.steps, { selected, outline }),
+        };
+      }
+
+      case 'read_workflow_run': {
+        const { runId, steps: selected, outline } = params;
+        if (!runId) return { error: 'runId is required' };
+        const runResp = await getRows(
+          'PGC_WorkflowRun',
+          [{ column: 'id', op: 'eq', value: runId }],
+          undefined, 1, undefined,
+          ['id', 'workflow_id', 'status', 'triggered_by', 'sandbox', 'stack', 'state', 'error', 'started_at', 'completed_at']
+        );
+        const run = runResp.rows?.[0];
+        if (!run) return { error: `Workflow run ${runId} not found` };
+        const [wfResp, stepResp] = await Promise.all([
+          getRows('PGC_Workflow', [{ column: 'id', op: 'eq', value: run.workflow_id }], undefined, 1, undefined,
+            ['name', 'version', 'steps']),
+          getRows('PGC_WorkflowRunStep', [{ column: 'run_id', op: 'eq', value: runId }], 'id ASC', undefined, undefined,
+            ['step_number', 'step_type', 'status', 'retry_count', 'input_snapshot', 'output_snapshot', 'error', 'duration_ms', 'executed_at']),
+        ]);
+        return {
+          ...projectWorkflowRun({ run, workflow: wfResp.rows?.[0] ?? null, stepRows: stepResp.rows ?? [], outline, selected }),
+          ...(stepResp.limit_applied && { step_rows: withReadProvenance(stepResp) }),
         };
       }
 

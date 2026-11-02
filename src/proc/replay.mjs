@@ -76,49 +76,9 @@ async function startReplay(req, traceId) {
     return err(code, msg, req.correlationId);
   };
 
-  if (!BREAK_POLICIES.includes(breakPolicy)) {
-    return fail(400, `breakPolicy must be one of: ${BREAK_POLICIES.join(', ')}`);
-  }
-
-  let workflowId;
-  let runInput;
-  let srcId = null;
-
-  if (sourceRunId != null) {
-    const src = await getRows('PGC_WorkflowRun',
-      [{ column: 'id', op: 'eq', value: sourceRunId }], undefined, 1, undefined, ['id', 'workflow_id', 'input']);
-    if (!src.success || src.count === 0) return fail(404, `source run ${sourceRunId} not found`);
-    workflowId = src.rows[0].workflow_id;
-    runInput   = src.rows[0].input;
-    srcId      = sourceRunId;
-  } else {
-    if (!workflow || input === undefined) {
-      return fail(400, 'sourceRunId omitted — workflow and input are required');
-    }
-    const wf = await getRows('PGC_Workflow',
-      [{ column: 'name', op: 'eq', value: workflow }], undefined, 1, undefined, ['id']);
-    if (!wf.success || wf.count === 0) return fail(404, `workflow "${workflow}" not found`);
-    workflowId = wf.rows[0].id;
-    runInput   = input;
-  }
-
-  const runResp = await insertRow('PGC_WorkflowRun', {
-    workflow_id:          workflowId,
-    trace_id:             traceId,
-    triggered_by:         'api',
-    status:               'running',
-    input:                runInput,
-    callback:             callback ?? null,
-    llm_break_policy:     breakPolicy,
-    replay_source_run_id: srcId,
-    started_at:           new Date().toISOString(),
-  });
-  if (!runResp.success) return fail(500, `Failed to insert replay run: ${runResp.error}`);
-
-  const runId = runResp.row.id;
-  console.info('proc/replay: replay run created', { runId, sourceRunId: srcId, breakPolicy, traceId });
-
-  await enqueueWorkflow({ type: 'WORKFLOW_STEP', action: 'execute_top', workflowRunId: runId, traceId });
+  const created = await createReplayRun({ sourceRunId, workflow, input, breakPolicy, callback, traceId });
+  if (created.error) return fail(created.status, created.error);
+  const { runId, sourceRunId: srcId } = created;
 
   if (req.source === 'sqs') {
     if (callback) {
@@ -133,6 +93,62 @@ async function startReplay(req, traceId) {
     return;
   }
   return ok({ runId, status: 'running' }, req.correlationId);
+}
+
+/**
+ * Create a replay run and dispatch its first step. Shared by the /replay command, the HTTP
+ * route and Novia's replay_run, which runs it in her sandbox and reports it to her session
+ * (`sandbox`, a `novia` callback, and `beforeDispatch` to record her wait before the run moves).
+ *
+ * @returns {Promise<{ runId: number, sourceRunId: number|null } | { status: number, error: string }>}
+ */
+export async function createReplayRun({ sourceRunId, workflow, input, breakPolicy, callback = null, sandbox = null, triggeredBy = 'api', beforeDispatch = null, traceId }) {
+  if (!BREAK_POLICIES.includes(breakPolicy)) {
+    return { status: 400, error: `breakPolicy must be one of: ${BREAK_POLICIES.join(', ')}` };
+  }
+
+  let workflowId;
+  let runInput;
+  let srcId = null;
+
+  if (sourceRunId != null) {
+    const src = await getRows('PGC_WorkflowRun',
+      [{ column: 'id', op: 'eq', value: sourceRunId }], undefined, 1, undefined, ['id', 'workflow_id', 'input']);
+    if (!src.success || src.count === 0) return { status: 404, error: `source run ${sourceRunId} not found` };
+    workflowId = src.rows[0].workflow_id;
+    runInput   = src.rows[0].input;
+    srcId      = sourceRunId;
+  } else {
+    if (!workflow || input === undefined) {
+      return { status: 400, error: 'sourceRunId omitted — workflow and input are required' };
+    }
+    const wf = await getRows('PGC_Workflow',
+      [{ column: 'name', op: 'eq', value: workflow }], undefined, 1, undefined, ['id']);
+    if (!wf.success || wf.count === 0) return { status: 404, error: `workflow "${workflow}" not found` };
+    workflowId = wf.rows[0].id;
+    runInput   = input;
+  }
+
+  const runResp = await insertRow('PGC_WorkflowRun', {
+    workflow_id:          workflowId,
+    trace_id:             traceId,
+    triggered_by:         triggeredBy,
+    status:               'running',
+    input:                runInput,
+    callback:             callback ?? null,
+    llm_break_policy:     breakPolicy,
+    replay_source_run_id: srcId,
+    started_at:           new Date().toISOString(),
+    ...(sandbox ? { sandbox } : {}),
+  });
+  if (!runResp.success) return { status: 500, error: `Failed to insert replay run: ${runResp.error}` };
+
+  const runId = runResp.row.id;
+  console.info('proc/replay: replay run created', { runId, sourceRunId: srcId, breakPolicy, sandbox, traceId });
+
+  if (beforeDispatch) await beforeDispatch(runId);
+  await enqueueWorkflow({ type: 'WORKFLOW_STEP', action: 'execute_top', workflowRunId: runId, traceId });
+  return { runId, sourceRunId: srcId };
 }
 
 // REPLAY message with NO sourceRunId (SQS, from `/replay` with no arg) — list recent runs
@@ -162,44 +178,94 @@ async function listReplays(req, traceId) {
   console.info('proc/replay: listed recent runs', { count: runs.length, traceId });
 }
 
+/**
+ * The break report of a run at an llm break, or null. Read from the break frame, where the seam
+ * stashed everything it computed. Shared by GET /proc/replay/{runId} and the LLM_BREAK event a
+ * break sends Novia.
+ */
+export function breakReport(run) {
+  const top = Array.isArray(run?.stack) && run.stack.length ? run.stack[run.stack.length - 1] : null;
+  if (run?.status !== 'awaiting_llm_break' || top?.type !== 'llm_break' || !top.break) return null;
+  const b = top.break;
+  return {
+    step_id:              b.step_id,
+    intent_category:      b.intent_category,
+    reason:               b.reason,
+    policy:               b.policy,
+    drift:                b.drift ?? null,
+    instructions:         b.instructions,        // the assembled prompt — served from the frame, not PGC_Session
+    fingerprint:          b.fingerprint?.components ?? null,
+    candidate_session_id: b.candidate_session_id ?? null,
+    candidate_ids:        b.candidate_ids ?? null,
+    // A6 — computed once at the seam, where both sides were already in hand, and stashed on
+    // the frame. Recomputing it here would make the report a second derivation of one truth
+    // (checklist rule 2e) and cost a SERV read to re-fetch what the lookup already had.
+    input_diff:           b.input_diff ?? null,
+    // A6 (diagnostic) — how the full local_state diverged from the source run at this step;
+    // broader than input_diff, never used to decide the break.
+    local_state_diff:     b.local_state_diff ?? null,
+    // A9/A12 — disposition (how to treat use_recorded) and blast radius (which downstream
+    // steps a drifted key reaches) are stashed on the frame too, read here rather than
+    // re-derived. blast_radius is added by run-workflow at break time (it needs the steps).
+    disposition:          b.disposition ?? null,
+    blast_radius:         b.blast_radius ?? null,
+  };
+}
+
 // GET /proc/replay/{runId}
 async function getReplay(req, runId, traceId) {
   const resp = await getRows('PGC_WorkflowRun',
     [{ column: 'id', op: 'eq', value: runId }], undefined, 1, undefined, ['id', 'status', 'stack', 'replay_source_run_id']);
   if (!resp.success || resp.count === 0) return err(404, `replay run ${runId} not found`, req.correlationId);
 
-  const run  = resp.rows[0];
-  const top  = Array.isArray(run.stack) && run.stack.length ? run.stack[run.stack.length - 1] : null;
-
-  let report = null;
-  if (run.status === 'awaiting_llm_break' && top?.type === 'llm_break' && top.break) {
-    const b = top.break;
-    report = {
-      step_id:              b.step_id,
-      intent_category:      b.intent_category,
-      reason:               b.reason,
-      policy:               b.policy,
-      drift:                b.drift ?? null,
-      instructions:         b.instructions,        // the assembled prompt — served from the frame, not PGC_Session
-      fingerprint:          b.fingerprint?.components ?? null,
-      candidate_session_id: b.candidate_session_id ?? null,
-      candidate_ids:        b.candidate_ids ?? null,
-      // A6 — computed once at the seam, where both sides were already in hand, and stashed on
-      // the frame. Recomputing it here would make the report a second derivation of one truth
-      // (checklist rule 2e) and cost a SERV read to re-fetch what the lookup already had.
-      input_diff:           b.input_diff ?? null,
-      // A6 (diagnostic) — how the full local_state diverged from the source run at this step;
-      // broader than input_diff, never used to decide the break.
-      local_state_diff:     b.local_state_diff ?? null,
-      // A9/A12 — disposition (how to treat use_recorded) and blast radius (which downstream
-      // steps a drifted key reaches) are stashed on the frame too, read here rather than
-      // re-derived. blast_radius is added by run-workflow at break time (it needs the steps).
-      disposition:          b.disposition ?? null,
-      blast_radius:         b.blast_radius ?? null,
-    };
-  }
+  const run    = resp.rows[0];
+  const report = breakReport(run);
 
   return ok({ runId: run.id, status: run.status, break: report }, req.correlationId);
+}
+
+/**
+ * Write a break's resolution onto its frame and enqueue resume_llm. Shared by the HTTP route, the
+ * Slack break buttons and Novia's resolve_replay_break.
+ *
+ * @returns {Promise<{ resolution: string } | { status: number, error: string }>}
+ */
+export async function applyBreakResolution(runId, body, traceId, source = 'tool') {
+  const { resolution, response, breakPolicy, sessionId } = body;
+  const bodyError = validateResumeBody(body);
+  if (bodyError) return { status: 400, error: bodyError };
+
+  const resp = await getRows('PGC_WorkflowRun',
+    [{ column: 'id', op: 'eq', value: runId }], undefined, 1, undefined, ['id', 'status', 'stack']);
+  if (!resp.success || resp.count === 0) return { status: 404, error: `replay run ${runId} not found` };
+
+  const run = resp.rows[0];
+  if (run.status !== 'awaiting_llm_break') {
+    return { status: 409, error: `run ${runId} is not awaiting an llm break (status: ${run.status})` };
+  }
+  const stack = run.stack;
+  const top   = stack[stack.length - 1];
+  if (!top || top.type !== 'llm_break') {
+    return { status: 409, error: `run ${runId} has no llm_break frame on top` };
+  }
+
+  const namedError = validateNamedRecording(sessionId, top.break?.candidate_ids);
+  if (namedError) return { status: 400, error: namedError };
+
+  // Write the resolution (and any supplied response) onto the break frame — a
+  // design_workflow_process response can approach SQS's 256KB limit, so it rides on the
+  // jsonb frame, never in the resume_llm message, which carries only workflowRunId.
+  top.resolution = resolution;
+  top.response   = response ?? null;
+  top.session_id = sessionId ?? null;
+
+  const updates = { stack };
+  if (breakPolicy !== undefined) updates.llm_break_policy = breakPolicy;
+  await updateRows('PGC_WorkflowRun', [{ column: 'id', op: 'eq', value: runId }], updates);
+
+  await enqueueWorkflow({ type: 'WORKFLOW_STEP', action: 'resume_llm', workflowRunId: runId, traceId });
+  console.info('proc/replay: resume enqueued', { runId, resolution, breakPolicy: breakPolicy ?? null, source, traceId });
+  return { resolution };
 }
 
 // POST /proc/replay/{runId}/resume
@@ -233,7 +299,7 @@ export function validateNamedRecording(sessionId, offeredIds) {
 }
 
 async function resumeReplay(req, runId, traceId) {
-  const { resolution, response, breakPolicy, sessionId } = req.body ?? {};
+  const { resolution } = req.body ?? {};
   const isSqs    = req.source === 'sqs';
   const callback = req.callback ?? req.body?.callback ?? null;
   // fail() adapts to transport. HTTP has a caller to receive the error; a Slack button click
@@ -246,39 +312,8 @@ async function resumeReplay(req, runId, traceId) {
     return err(code, msg, req.correlationId);
   };
 
-  const bodyError = validateResumeBody(req.body ?? {});
-  if (bodyError) return fail(400, bodyError);
-
-  const resp = await getRows('PGC_WorkflowRun',
-    [{ column: 'id', op: 'eq', value: runId }], undefined, 1, undefined, ['id', 'status', 'stack']);
-  if (!resp.success || resp.count === 0) return fail(404, `replay run ${runId} not found`);
-
-  const run = resp.rows[0];
-  if (run.status !== 'awaiting_llm_break') {
-    return fail(409, `run ${runId} is not awaiting an llm break (status: ${run.status})`);
-  }
-  const stack = run.stack;
-  const top   = stack[stack.length - 1];
-  if (!top || top.type !== 'llm_break') {
-    return fail(409, `run ${runId} has no llm_break frame on top`);
-  }
-
-  const namedError = validateNamedRecording(sessionId, top.break?.candidate_ids);
-  if (namedError) return fail(400, namedError);
-
-  // Write the resolution (and any supplied response) onto the break frame — a
-  // design_workflow_process response can approach SQS's 256KB limit, so it rides on the
-  // jsonb frame, never in the resume_llm message, which carries only workflowRunId.
-  top.resolution = resolution;
-  top.response   = response ?? null;
-  top.session_id = sessionId ?? null;
-
-  const updates = { stack };
-  if (breakPolicy !== undefined) updates.llm_break_policy = breakPolicy;
-  await updateRows('PGC_WorkflowRun', [{ column: 'id', op: 'eq', value: runId }], updates);
-
-  await enqueueWorkflow({ type: 'WORKFLOW_STEP', action: 'resume_llm', workflowRunId: runId, traceId });
-  console.info('proc/replay: resume enqueued', { runId, resolution, breakPolicy: breakPolicy ?? null, source: req.source, traceId });
+  const applied = await applyBreakResolution(runId, req.body ?? {}, traceId, req.source);
+  if (applied.error) return fail(applied.status, applied.error);
 
   // SQS (button) path posts nothing on success — the resumed run posts its own progress or next
   // break through the run's own callback, so a success ack here would just be noise.

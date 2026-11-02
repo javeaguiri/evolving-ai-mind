@@ -146,14 +146,14 @@ Full retro: `docs/sprints/sprint-07.md` §RETRO. The four findings that shape th
 
 | Track item | AC(s) | Status |
 |---|---|---|
-| A1 — Schema migration: `PGC_Session` + `PGC_WorkflowRun` columns | AC1 | ✅ DONE 2026-07-15 — migrated + verified live (commit `891246f`) |
+| A1 — Schema migration: `PGC_Session` + `PGC_WorkflowRun` columns | AC1 | ✅ DONE 2026-07-15 — migrated + verified live (commit `b2f63bb`) |
 | A2 — Fingerprint computation at the seam | AC1 | ✅ DONE 2026-07-16 — deployed + **verified live**: run 720 wrote 7-component fingerprints on all 8 `llm_call`s |
 | A3 — Break policy + corpus lookup in `llm-harness.mjs` | AC2 | ✅ DONE 2026-07-16 — verified live; `on_miss` broke at all 8 calls, served all 8 recordings, **0 live calls** |
 | A4 — Break suspend / `resume_llm` in `run-workflow.mjs` | AC3, AC4 | ✅ DONE 2026-07-16 — verified live across 9 breaks; re-assembly fingerprint mismatch anomaly fired correctly when code was deployed mid-break |
 | A5 — `/proc/replay` endpoints + `/replay` Slack cmd | AC2, AC3, AC4 | ✅ DONE 2026-07-16 — verified live: `/replay 719` → run 720; GET served the 20KB assembled prompt from the frame; 9 resumes incl. `sessionId` + `abort` |
-| A5b — `use_recorded` names its recording (`sessionId`) | AC3 | ✅ DONE 2026-07-16 — commit `2b3858a`. Validated against `candidate_ids`; notification offers one named curl per candidate. **Load-bearing**: run 720 needed 1064 on step 21 pass 1 and 1067 on pass 2 |
-| A5c — `unfingerprinted` is not drift | AC4 | ✅ DONE 2026-07-16 — commit `919e874`. Own verdict; no fabricated drift list |
-| A6 — Drift report: **which `input` keys moved** | AC4 | 🔨 CODE-COMPLETE + deployed 2026-07-16 (`c32102c`) — `hashInputKeys` (hash + serialised size per key) → `request_fingerprint.input_keys`; `describeInputDrift` at the seam; notification renders it; `diffComponents` fixed to judge `COMPONENT_ORDER` (latent bug: it diffed the raw key union, so `input_keys` would have read as an 8th component). **Additive — not in the composite, so 720/721 keep hitting.** 16 new tests, 615 total. ✅ **CONFIRMED LIVE 2026-07-21 (run 724):** `input changed: user_design_notes (4→35 chars) | unchanged: domain, …, step_type_contracts, …` — the sentence that cost a scratchpad by hand. ✅ **`local_state` diff DONE 2026-07-23** — `describeStateDrift` (reuses the generic `hashInputKeys`/`diffInputKeys`; `computeFingerprint` now snapshots `stateKeys`, stored as `request_fingerprint.local_state_keys`, excluded from the composite so old recordings keep matching); rendered as a compact diagnostic `state` line (names what moved, counts what held still) + full detail on the GET report; never gates a break (arch-replay §8). +9 tests, 654 total |
+| A5b — `use_recorded` names its recording (`sessionId`) | AC3 | ✅ DONE 2026-07-16 — commit `dd2adb5`. Validated against `candidate_ids`; notification offers one named curl per candidate. **Load-bearing**: run 720 needed 1064 on step 21 pass 1 and 1067 on pass 2 |
+| A5c — `unfingerprinted` is not drift | AC4 | ✅ DONE 2026-07-16 — commit `03bbb9c`. Own verdict; no fabricated drift list |
+| A6 — Drift report: **which `input` keys moved** | AC4 | 🔨 CODE-COMPLETE + deployed 2026-07-16 (`5bd25b0`) — `hashInputKeys` (hash + serialised size per key) → `request_fingerprint.input_keys`; `describeInputDrift` at the seam; notification renders it; `diffComponents` fixed to judge `COMPONENT_ORDER` (latent bug: it diffed the raw key union, so `input_keys` would have read as an 8th component). **Additive — not in the composite, so 720/721 keep hitting.** 16 new tests, 615 total. ✅ **CONFIRMED LIVE 2026-07-21 (run 724):** `input changed: user_design_notes (4→35 chars) | unchanged: domain, …, step_type_contracts, …` — the sentence that cost a scratchpad by hand. ✅ **`local_state` diff DONE 2026-07-23** — `describeStateDrift` (reuses the generic `hashInputKeys`/`diffInputKeys`; `computeFingerprint` now snapshots `stateKeys`, stored as `request_fingerprint.local_state_keys`, excluded from the composite so old recordings keep matching); rendered as a compact diagnostic `state` line (names what moved, counts what held still) + full detail on the GET report; never gates a break (arch-replay §8). +9 tests, 654 total |
 | ~~A7 — fingerprint backfill / assembled-request hash~~ | AC5 | ❌ **STRUCK 2026-07-16 — unnecessary, not merely deferred.** Replay is second by construction: you cannot replay a run that never ran, and every run fingerprints itself. **A fingerprinted corpus is not a goal, it is a byproduct you cannot avoid.** Unfingerprinted corpora are a closed historical set (six pre-A2 runs) that shrinks to zero and never grows; 719 is already superseded by 720. The assembled hash also would **not** have fixed A9 — run 721 detected the drift correctly *with components* and offered `use_recorded` anyway. It adds nothing where components exist. See Session 5 |
 | A8 — `dev_scripts/replay.mjs` developer loop | AC2, AC3 | 🔨 CODE-COMPLETE + pushed 2026-07-23 — thin wrapper over the three endpoints (start/poll/resume), no logic of its own. Dumps prompt-*.txt + break-*.json off the frame, waits for resume-<runId>.json or a Slack-button resolution, `--auto` for unattended payload-free resolves, `--record`/`--workflow --input` for record-from-scratch, **`--slack-channel`/`--slack-thread`** so a gated workflow's human gates render in Slack (the run 726/727 wedge fix). The three endpoints it wraps were **exercised live driving run 728's AC3 close** (start w/ callback, GET break report, two `supplied` resumes); the script's own file-loop still to be driven end-to-end against a gated run |
 | A12 — **blast radius: name the steps a drifted key reaches** | AC4 | ✅ DONE 2026-07-21 — `computeBlastRadius` (pure over the workflow definition, reuses `extractTemplateRefs`) maps each drifted `input` key → the other `llm_call` steps reading its `local_state` root; stashed on the frame, rendered in the notification + GET report. 6 tests reproduce run 723's 11→{21,21r,21t}. ✅ **CONFIRMED LIVE 2026-07-21 (run 724):** notification + GET report both carried `blast_radius: {user_design_notes: [21, 21r, 21t]}`. **New 2026-07-16, proven live on run 723.** The notification offers `use_recorded` as *"free, keeps the suffix free"* — **false whenever the drift originates in a `local_state` key several steps read.** `user_design_notes` changed at the step-9 gate (4→123 chars) and is read by `llm_call` steps **11, 21, 21r, 21t**: accepting at 11 does not free the suffix, it defers the identical decision three more times. Fix: A6's report names the downstream readers — *"user_design_notes (4→123 chars) — also read by steps 21, 21r, 21t"* — computable straight from the workflow definition, no new data. Turns "accept?" into a decision with its cost visible. Feeds A9: a disposition should know a drift's blast radius, not just its component. **Third instance of the day's pattern — see Session 7** |
@@ -164,7 +164,7 @@ Full retro: `docs/sprints/sprint-07.md` §RETRO. The four findings that shape th
 | B2 — Gate `research_workflow_domain` on new domains | AC7, AC8 | ⬜ |
 | B3 — Spend measurement against Sprint 7 baseline | AC8 | ⬜ |
 | C1 — `notify` template audit (D3 carry-forward) | AC9 | ✅ **DONE 2026-07-23** — audited the `notify` step (18) of the `edit_budget` workflow generated by run 729: **clean markdown** (`Budget updated for {{month}}/{{year}}` + `.length` counts), not a raw JSON dump. No `design_workflow_dialogs` fix warranted — the concern isn't present on this specimen. (`generate_crud_workflows` half dropped — obviated, → backlog.) |
-| C2 — `edit_budget` end-to-end validation | AC10 | 🔨 **run 731 diagnosed, 4 fixes landed + deployed 2026-07-24** — the run persisted correctly (Medical → $130, `PGD_Budgets` row 16) but presented wrongly, three separate defects: (1) **Execution** — form-gate resume crashed on a templated `fields` (`resolveFormFields`, a632e6b). (2) **Execution** — standard `**bold**` reached a Slack `mrkdwn` block and rendered literally (`toSlackMrkdwn`, af1e8dc). (3) **Instruction ×3** — `design_workflow_dialogs` v17 (tabular reveals must be GFM pipe tables), `design_workflow_process` v24 (a save-and-continue loop must re-read what it wrote), `workflow_routing_rules` v3 rule 6b (the back-edge lands on the re-query step, not the build step), and **`markdown_formatting_syntax` v6 — the root cause**: its reveal clause claimed tables do not render and told the designer to hand-write `*bold*`, contradicting the rule in (3). Both claims were stale against `callback.mjs`. Re-generate `edit_budget`, then re-run from Slack. **Follow-on 2026-07-24 — experience/procedure partition swept clean:** the v6 fix was itself written with a leak (*"never Slack's single-character forms"*) — a /proc instruction naming the renderer. Rather than reword, every standard-markdown gap is now closed *in code* (`toSlackMrkdwn` also converts headings, task lists and `[text](url)` → `<url|text>`; applied at two label sites that never had it) and the instructions that taught /proc this renderer's syntax are **deleted**: `markdown_formatting_syntax` v10, `design_workflow_dialogs` v18, `design_workflow_process` v25, `review_workflow_redundancy` v3 (the 50-block limit restated as a ~40-field budget). A sweep of all 24 prompts + 36 context rows now reports **zero** references to Slack/mrkdwn/Block Kit. Done in one pass deliberately — incremental prompt edits churn replay fingerprints |
+| C2 — `edit_budget` end-to-end validation | AC10 | 🔨 **run 731 diagnosed, 4 fixes landed + deployed 2026-07-24** — the run persisted correctly (Medical → $130, `PGD_Budgets` row 16) but presented wrongly, three separate defects: (1) **Execution** — form-gate resume crashed on a templated `fields` (`resolveFormFields`, 1379e9c). (2) **Execution** — standard `**bold**` reached a Slack `mrkdwn` block and rendered literally (`toSlackMrkdwn`, ac5c349). (3) **Instruction ×3** — `design_workflow_dialogs` v17 (tabular reveals must be GFM pipe tables), `design_workflow_process` v24 (a save-and-continue loop must re-read what it wrote), `workflow_routing_rules` v3 rule 6b (the back-edge lands on the re-query step, not the build step), and **`markdown_formatting_syntax` v6 — the root cause**: its reveal clause claimed tables do not render and told the designer to hand-write `*bold*`, contradicting the rule in (3). Both claims were stale against `callback.mjs`. Re-generate `edit_budget`, then re-run from Slack. **Follow-on 2026-07-24 — experience/procedure partition swept clean:** the v6 fix was itself written with a leak (*"never Slack's single-character forms"*) — a /proc instruction naming the renderer. Rather than reword, every standard-markdown gap is now closed *in code* (`toSlackMrkdwn` also converts headings, task lists and `[text](url)` → `<url|text>`; applied at two label sites that never had it) and the instructions that taught /proc this renderer's syntax are **deleted**: `markdown_formatting_syntax` v10, `design_workflow_dialogs` v18, `design_workflow_process` v25, `review_workflow_redundancy` v3 (the 50-block limit restated as a ~40-field budget). A sweep of all 24 prompts + 36 context rows now reports **zero** references to Slack/mrkdwn/Block Kit. Done in one pass deliberately — incremental prompt edits churn replay fingerprints |
 | D1 — `/chat` dead code removal | AC11 | ➡️ **BACKLOG** (2026-07-23) — deletion undecided, moved out of sprint |
 
 ---
@@ -369,11 +369,11 @@ record of why — it is no longer a plan.
 
 - Test 1 states an absolute: *"This is always removable."* It carries no exception, while Test 2 directly
   beneath it carries two (*"NOT a finding: a re-query AFTER a write…"*). The author knew to write exceptions.
-- Test 1 was **over-fitted to its specimen**. Commit `13973cee` was built from run 700, where steps 15+16
+- Test 1 was **over-fitted to its specimen**. Commit `abac102a` was built from run 700, where steps 15+16
   interpreted a button whose options diverged *immediately* — genuinely removable. Generalising that one true
   case to "always" made it false wherever options converge on a shared step first.
 - **The system already contains the refutation and the critic cannot see it.** `action_key`'s contract
-  (`f06a700`) says: *"a save-and-continue loop, where 'Save' and 'Done' both run the SAME write and diverge
+  (`f91ecbd`) says: *"a save-and-continue loop, where 'Save' and 'Done' both run the SAME write and diverge
   only AFTER it — the decision has to survive the write… Routing the two buttons to separate chains instead
   would duplicate the write."* `review_workflow_redundancy` does **not** inject `step_type_contracts`, so it
   has never seen this and would repeat the error today. Two contradicting statements of one truth, with
@@ -398,7 +398,7 @@ false-positives and then needs a referee who doesn't exist.
 Tests 6–7 are **experience**, and here the non-expert is the *right* judge — the finding is about what they
 will see. *"Your design shows the budget view twice, once before editing and once after. Want it once, looping
 back after each edit?"* is a question they can answer. Test 6's own disambiguator is already phrased that way,
-and it earned its place: added by `3de304f` after run 702 designed one screen twice
+and it earned its place: added by `cd6882e` after run 702 designed one screen twice
 (`comprehensive_view` / `updated_comprehensive_view`) and the five structural tests all returned `findings: []`
 because the keys differed. **The most costly form of redundancy was not computable — which is exactly why it
 needs an LLM, and exactly why the other five do not.**
@@ -412,18 +412,18 @@ needs an LLM, and exactly why the other five do not.**
    Deterministic, no LLM, no gate, no false positive on a graph property.
 3. **Narrow 21r to Tests 6–7.** Surface at the step-24 gate phrased in **user-experience terms** — screens
    seen, not steps merged. The user decides *what* they see; the system decides *how* it is wired.
-4. Note `3de304f` already put the preventive rule in `design_workflow_process` (*"a screen the user must see
+4. Note `cd6882e` already put the preventive rule in `design_workflow_process` (*"a screen the user must see
    again after a change is a LOOP, not a copy"*). Test 6 is the safety net for when that is ignored — measure
    whether the net still catches anything before paying for it again.
 
-**Backing out `13973cee` is the right direction but is not a `git revert`.** It is seed-only
+**Backing out `abac102a` is the right direction but is not a `git revert`.** It is seed-only
 (`seed_PGC_Prompt.json`, `seed_PGC_Workflow.json`, `backlog.md`) — an artifact change, correctly placed. But
-ten commits have touched those seeds since, including `f06a700` (`action_key`) and `3de304f` (Test 6), so it
+ten commits have touched those seeds since, including `f91ecbd` (`action_key`) and `cd6882e` (Test 6), so it
 needs surgical removal from the current seeds. The commit **pre-registered its own deletion** — *"If this
 proves to be noise, delete it"*, citing the `runRoutingValueRules` precedent. This executes that exit
 condition rather than reversing a decision.
 
-**What deleting the critic outright would lose.** `13973cee`'s root-cause diagnosis still stands and is not
+**What deleting the critic outright would lose.** `abac102a`'s root-cause diagnosis still stands and is not
 addressed by deletion: *"The pipeline is additive by construction… nothing in the chain ever merges or
 deletes — there is no point at which a step can die. Nothing gives the LLM a cost signal for step count."*
 Run 700's complexity also **hid a real bug** (*"step 18 saved the budget rows before step 19 applied the user's
@@ -552,7 +552,7 @@ then reinstated for a different reason — see below.**
 
 #### Findings, in order of how much they cost to learn
 
-1. **The harness found a defect in the harness.** (Fixed, commit `92b6e9b`.) The `PGC_StepType` read had no
+1. **The harness found a defect in the harness.** (Fixed, commit `94ab940`.) The `PGC_StepType` read had no
    `ORDER BY` and no column scope. Row order is whatever the heap returns, so updating any step type
    relocates its row and reshuffles the injected array — which reaches both the prompt and the `input`
    fingerprint, arrays being order-significant. `updated_at` was serialised into the prompt too, so a
@@ -743,7 +743,7 @@ deleted, A8 is pure ergonomics.**
 
 ### Session 6 — 2026-07-16 — A6 built; two wedges found by using it
 
-**A6's core landed and deployed** (`c32102c`): per-key hashes + sizes of `resolvedInput` written as
+**A6's core landed and deployed** (`5bd25b0`): per-key hashes + sizes of `resolvedInput` written as
 `request_fingerprint.input_keys`, diffed at the seam, rendered in the notification. **Additive by
 construction** — `input_keys` is not in `COMPONENT_ORDER` and not in the composite, which run 722 proved
 live: replaying 721's **pre-A6** corpus still produced **8 hits, 0 breaks, 0 live calls**, and minted an
@@ -1020,9 +1020,9 @@ independent defects, three fault domains, all now fixed and deployed:
 
 | # | Domain | Defect | Fix |
 |---|---|---|---|
-| 1 | Execution | form-gate resume crashed on a templated `fields` | `resolveFormFields`, one resolver for render + resume (`a632e6b`) |
-| 2 | Execution | standard `**bold**` reached a `mrkdwn` block and rendered literally | `toSlackMrkdwn` (`af1e8dc`) |
-| 3 | Instruction | the loop rebuilt its view from a key loaded before the write, so the save looked reverted | `design_workflow_process` v24, routing rule 6b (`76880a2`) |
+| 1 | Execution | form-gate resume crashed on a templated `fields` | `resolveFormFields`, one resolver for render + resume (`1379e9c`) |
+| 2 | Execution | standard `**bold**` reached a `mrkdwn` block and rendered literally | `toSlackMrkdwn` (`ac5c349`) |
+| 3 | Instruction | the loop rebuilt its view from a key loaded before the write, so the save looked reverted | `design_workflow_process` v24, routing rule 6b (`727ec4a`) |
 
 **The root cause of the comma-separated reveal was an instruction contradicting itself.**
 `markdown_formatting_syntax` v5 told `design_workflow_dialogs` that tables do not render in reveal content and
@@ -1042,13 +1042,13 @@ deliberately: incremental prompt edits churn replay fingerprints.
 
 **Two follow-ons from that sweep:**
 
-- **L1 gate-size check** (`60311ca`) — the ~40-field budget was an instruction with nothing behind it, so an
+- **L1 gate-size check** (`1cc3842`) — the ~40-field budget was an instruction with nothing behind it, so an
   oversized gate reached production and was found at runtime by a user watching the run wedge
   (`refuseOversizedGate` posts and returns; the run sits at `awaiting_human_gate` forever). `MAX_GATE_FIELDS`
   now fails L1. Counts statically-declared `fields` only — a `{{template}}` reference is skipped rather than
   guessed, since a guess either false-positives or gives false assurance; an estimate belongs in L2's data-flow
   trace. Catches the run 719 class (63 fields).
-- **`design_workflow_dialogs` v19** (`92e0c7c`) — run 731's step 14 rendered every category **twice**:
+- **`design_workflow_dialogs` v19** (`6aa6c33`) — run 731's step 14 rendered every category **twice**:
   `{{display_text}}` (step 12, one prose line per category) inline above `{{edit_fields}}` (step 13, one input
   per category with the same amount as `default`). Nothing caused this and nothing prevented it — the prompt's
   own examples show the right shape without ever stating it. New rule: **the fields are the display; the

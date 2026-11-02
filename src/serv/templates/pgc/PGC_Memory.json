@@ -14,7 +14,6 @@
     { "name": "source_workflow", "type": "varchar(100)", "nullable": true },
     { "name": "source_step",     "type": "varchar(50)",  "nullable": true },
     { "name": "expires_at",      "type": "timestamptz",  "nullable": true },
-    { "name": "embedding",       "type": "real[]",       "nullable": true },
     { "name": "created_at",      "type": "timestamptz",  "nullable": false, "default": "now()" },
     { "name": "updated_at",      "type": "timestamptz",  "nullable": false, "default": "now()" }
   ],

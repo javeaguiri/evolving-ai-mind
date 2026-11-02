@@ -18,6 +18,8 @@ import { handle as schema }   from './schema.mjs';
 import { bootstrap }          from './init-brain.mjs';
 import { handle as table }   from './table.mjs';
 import { handle as entity } from './entity.mjs';
+import { handle as sandbox, sandboxRefusal } from './sandbox.mjs';
+import { inSandbox }      from './sandbox-context.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway for every
@@ -30,12 +32,26 @@ export async function handler(event) {
   const parent   = segments.pop();
   req.route      = parent === 'serv' ? req.subRoute : parent;
 
+  // A request carrying x-sandbox runs against the test sandbox (docs/arch-sandbox.md): checked
+  // first, then every connection it opens has its search_path pointed there.
+  const sandboxName = Object.entries(req.headers ?? {})
+    .find(([name]) => name.toLowerCase() === 'x-sandbox')?.[1];
+  if (sandboxName) {
+    const refusal = await sandboxRefusal(req, sandboxName);
+    if (refusal) return err(refusal.status, refusal.message, req.correlationId);
+    return inSandbox(sandboxName, () => route(req));
+  }
+  return route(req);
+}
+
+function route(req) {
   switch (req.route) {
     case 'ping-db': return pingDb(req);
     case 'schema':  return schema(req);
     case 'table':   return table(req);
     case 'entity':  return entity(req);
     case 'bootstrap': return bootstrap(req);
+    case 'sandbox': return sandbox(req);
 
     default:
       return err(404, `SERV route "${req.route}" not found`, req.correlationId);

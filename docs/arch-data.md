@@ -165,13 +165,13 @@ Lambda response limit or exhaust available memory — always pass an explicit
 | id | serial PK | |
 | workflow_id | integer FK | → PGC_Workflow.id |
 | trace_id | text | Correlation ID carried end-to-end from Slack message through all hops. Replaces `workflowId` in SQS payloads |
-| triggered_by | text | `slack`, `api`, `workflow`, `system` — who initiated this run |
+| triggered_by | text | `slack`, `api`, `workflow`, `system`, `intent_classify`, `minds_eye` — who initiated this run |
 | status | text | `pending`, `running`, `awaiting_confirmation`, `awaiting_human_gate`, `awaiting_llm_break`, `completed`, `failed`, `cancelled`. `awaiting_llm_break` = suspended for a developer at an `llm_call` seam (replay harness, `docs/arch-replay.md`) — distinct from `awaiting_human_gate` so a break for a developer is never mistaken for a gate for a user |
 | input | jsonb | Original user intent + parameters |
 | stack | jsonb | Execution stack — array of FrameDefinition (see Section 6.3). Controls frame flow only |
 | state | jsonb | **Deprecated.** Previously mirrored `stack[top].local_state` on every write. Now written only at workflow completion (`{ local_state: finalState }`). Do not read or write `state.local_state` during execution — use `stack[top].local_state` directly |
 | output | jsonb | Final workflow output — copied from `state` at completion |
-| callback | jsonb | Provider-agnostic UI callback — `{ provider, channel, threadId }` |
+| callback | jsonb | Provider-agnostic UI callback — `{ provider, channel, threadId }`. A test run Novia started carries `{ provider: 'novia', sessionId, reply }`: its messages wake her session instead of reaching a person, and `reply` is her own thread (`docs/arch-minds-eye.md` §4.4) |
 | total_execution_ms | integer | Running sum of all step `duration_ms` values. Incremented in same UPDATE as stack write. Used by Guard 2 |
 | step_count | integer | Total steps executed this run. Incremented in same UPDATE as stack write |
 | steps_in_window | integer | Steps executed since last `human_gate` completion. Reset to 0 when a human_gate step completes. Used by Guard 1 |
@@ -180,10 +180,15 @@ Lambda response limit or exhaust available memory — always pass an explicit
 | session_id | integer FK | ✦ → PGC_Session.id nullable — set when a Novia session triggers a sub-workflow run via `run_workflow` tool |
 | replay_source_run_id | integer | Nullable, no FK — the run whose corpus + input this run replays (`docs/arch-replay.md` §7a). Not an FK: the source run is a corpus being read and may be deleted by replay cleanup |
 | llm_break_policy | text | Nullable — `never` \| `on_miss` \| `always`; null ⇒ `never`. Read at the `llm_call` seam via `LOAD_RUN_COLUMNS`; drives replay/record break behaviour. Mutable at a break |
+| sandbox | text | Nullable — the `sandbox_<n>` schema a test run reads and writes (`docs/arch-sandbox.md`). Read via `LOAD_RUN_COLUMNS`; `run-workflow.mjs` names it for every SERV call the run makes. Null for every run that is not a test |
 | started_at | timestamptz | |
 | completed_at | timestamptz | |
-| created_at | timestamptz | |
+| created_at | timestamptz | A replay's expressions read the clock from its source run's `created_at` (`docs/arch-replay.md` §9a) |
 | updated_at | timestamptz | |
+
+**Test sandboxes** are schemas, `sandbox_<n>`, in the same database — copies of the tables a test
+needs, plus `PGC_Memory` and `PGC_Workflow`, one at a time, made and dropped through
+`/serv/sandbox/*`. Nothing in `public` refers to them. See `docs/arch-sandbox.md`.
 
 ##### PGC_WorkflowRunStep
 Append-only audit log — one row per step execution attempt. Never updated after insert.
@@ -677,85 +682,7 @@ GROUP BY workflow_id;
 
 ---
 
-#### 4.3.7 PGC Design Registry Tables
-
-Two tables holding workflow design knowledge as retrievable rows rather than as prose inside
-design prompts, so a pattern is loaded only when it is selected. Design reference:
-`docs/arch-minds-eye.md` §12.3 and §12.9.
-
-They compose rather than classify: an **archetype** is a procedure — what a workflow does, with
-a verb, a topology, and slots — and declares named interaction points in that topology. A
-**dialog strategy** is how the user interacts at one such point. One archetype's points may be
-filled by several different strategies, and one strategy plugs into unrelated archetypes, which
-is why they are two tables and not one table with a `kind` discriminator.
-
-> **Not yet bootstrapped.** Both templates and seeds are committed on `design/archetype-registry`
-> and wired into `init-brain.mjs`, but no live instance has run `POST /api/v1/serv/bootstrap`
-> since. Seed rows are `status: 'draft'` and no consumer reads them.
-
-##### PGC_Archetype
-
-Procedures. Retrieved by semantic match on `aliases`, then filtered by `preconditions`.
-
-| Column | Type | Notes |
-|---|---|---|
-| id | serial PK | |
-| name | text UNIQUE NOT NULL | Stable snake_case identifier |
-| description | text | One line — the shape of workflow this describes |
-| aliases | jsonb NOT NULL `'[]'` | Retrieval vocabulary — the only column reaching the embedding |
-| preconditions | jsonb NOT NULL `'{}'` | Machine-checkable applicability, so matching is not purely semantic — e.g. the source table carries a self-referential FK |
-| slots | jsonb NOT NULL `'[]'` | Declared **data** bindings: `[{ name, type, resolved_from, required }]` — table, columns, labels, ceilings |
-| interaction_points | jsonb NOT NULL `'[]'` | The named holes in `topology` where the user interacts. One entry per point: name, what is being decided, which slot supplies its data. A `PGC_DialogStrategy` row fills one |
-| topology | jsonb NOT NULL `'[]'` | Step skeleton — `step_label`, `step_type`, routing fields, slot tokens, interaction points as holes rather than specified gates. Same shape as the `routing_skeleton` built during workflow generation |
-| design_rules | text | Archetype-scoped guidance, injected **only** when this archetype is selected |
-| source_workflow | text | Provenance — the specimen it was derived from |
-| status | text NOT NULL `'draft'` | CHECK `draft` / `live` / `retired` |
-| version | integer NOT NULL `1` | |
-| created_by | text NOT NULL `'seed'` | `seed` or `novia` |
-| embedding | vector | ✦ `embed_source: ["aliases"]`. `resolveEmbedding` uses array-type source fields only, so `aliases` must carry the retrieval terms — listing `name` or `description` would be inert |
-| created_at / updated_at | timestamptz | `set_updated_at()` trigger |
-
-##### PGC_DialogStrategy
-
-Dialog strategies. Same registry and retrieval columns; differs where the two kinds of thing
-differ — no `topology`, `slots` or `interaction_points`.
-
-| Column | Type | Notes |
-|---|---|---|
-| id | serial PK | |
-| name | text UNIQUE NOT NULL | Stable snake_case identifier |
-| description | text | One line — how the user interacts at one point |
-| aliases | jsonb NOT NULL `'[]'` | Retrieval vocabulary — the only column reaching the embedding |
-| applicability | jsonb NOT NULL `'{}'` | Machine-checkable bounds deciding whether this strategy is *feasible* against the live data — option count, field product against the gate field ceiling, hierarchy depth. Evaluated after row counts, so feasibility is computed rather than guessed |
-| emits | jsonb NOT NULL `'{}'` | The gate shape produced: `gate_type`, plus the declared properties the experience layer reads to choose a widget (`option_source`, `ordered`) |
-| design_rules | text | Strategy-scoped guidance, injected **only** when this strategy is selected |
-| source_workflow | text | Provenance |
-| status | text NOT NULL `'draft'` | CHECK `draft` / `live` / `retired` |
-| version | integer NOT NULL `1` | |
-| created_by | text NOT NULL `'seed'` | `seed` or `novia` |
-| embedding | vector | ✦ `embed_source: ["aliases"]` |
-| created_at / updated_at | timestamptz | `set_updated_at()` trigger |
-
-`preconditions` and `applicability` are the same kind of column answering different questions:
-`preconditions` asks whether a procedure fits the *request* and is evaluated once per build;
-`applicability` asks whether a strategy fits the *data at one point* and is evaluated once per
-interaction point.
-
-**Similarity threshold.** `PGC_DomainHelp` uses 0.40 for `pplx-embed-v1-4b`, calibrated against
-domain nouns. Both tables' aliases describe workflow and interaction shapes instead, so each
-needs its own calibration and neither should be assumed to carry over.
-
-**Access.** No new endpoints — `getRows` with a `vectorSearch` descriptor against `embedding`
-(vector columns are stripped from responses), and `insertRow` / `updateRows` for writes. Seeded
-rows are maintained through `dev_scripts/upsert-archetype.mjs` and
-`dev_scripts/upsert-dialog-strategy.mjs`, never by direct `updateRows`. Neither script writes
-`embedding`: SERV computes it from `embed_source` on insert and on any update touching
-`aliases`. Rows inserted before the column was populated need
-`dev_scripts/backfill-embeddings.mjs`, which currently targets `PGC_DomainHelp` only.
-
----
-
-#### 4.3.8 PGC Experience Tables — the web app
+#### 4.3.7 PGC Experience Tables — the web app
 
 Designed for the web front end (`docs/arch-web-app.md`, Sprint 14). **Designed, not yet built:** no
 row below exists in the database until the phase that builds it, and each moves into its table's
@@ -839,7 +766,7 @@ are proposed and settled at the Phase 1 build.
 `updated_at`, which a per-table trigger maintains. A table without `updated_at` accepts no direct
 edits (`arch-home-brain.md` §4.8).
 
-#### 4.3.9 Updated PGC Table Count
+#### 4.3.8 Updated PGC Table Count
 
 | # | Table | Status |
 |---|---|---|
@@ -848,7 +775,7 @@ edits (`arch-home-brain.md` §4.8).
 | 3 | PGC_EntitySchema | `upsert_key` column added |
 | 4 | PGC_DomainHelp | aliases human-confirmed at domain creation (see Section 6.8) |
 | 5 | PGC_Workflow | `domain`, `max_execution_ms`, `max_steps_per_window`, `window_seconds` added |
-| 6 | PGC_WorkflowRun | `trace_id`, `triggered_by`, `state`, `total_execution_ms`, `step_count`, `steps_in_window`, `window_started_at` added; `session_id` nullable integer added Sprint 4; `replay_source_run_id`, `llm_break_policy` + `awaiting_llm_break` status added Sprint 8 (replay harness) |
+| 6 | PGC_WorkflowRun | `trace_id`, `triggered_by`, `state`, `total_execution_ms`, `step_count`, `steps_in_window`, `window_started_at` added; `session_id` nullable integer added Sprint 4; `replay_source_run_id`, `llm_break_policy` + `awaiting_llm_break` status added Sprint 8 (replay harness); `sandbox` added Sprint 15 (test sandbox) |
 | 7 | PGC_WorkflowRunStep | `capability_key`, `retry_count` added |
 | 8 | PGC_Prompt | `input_variables`, `output_schema`, `output_sample`, `error_log`, `memory_config` added |
 | 9 | PGC_IntentMap | written at runtime by create_workflow completion |
@@ -859,20 +786,18 @@ edits (`arch-home-brain.md` §4.8).
 | 14 | PGC_Memory | Sprint 3 — episodic/semantic/procedural memory store; GIN indexes on scope + tags; see §4.3.4 |
 | 15 | PGC_Session | v3.2 — `general_chat` and `llm_call_diagnostic` sessions; see `docs/arch-session.md`. Sprint 8 — `request_fingerprint`, `fingerprint_hash` (indexed), `response_source`, `replayed_from_session_id` added (replay corpus, `docs/arch-replay.md`) |
 | 16 | PGC_SessionEntry | v3.2 — per-turn messages array rows; `reasoning` column for diagnostic metadata |
-| 17 | PGC_Archetype | Design registry — workflow procedures; see §4.3.7. **Committed, not yet bootstrapped** |
-| 18 | PGC_DialogStrategy | Design registry — dialog strategies; see §4.3.7. **Committed, not yet bootstrapped** |
-| 19 | PGC_UiMessage | Web app inbox — every message to a person, all providers; see §4.3.8. **Designed (Sprint 14, Phase 0), not yet built** |
-| 20 | PGC_RecordEdit | Audit of direct edits from the web app; see §4.3.8. **Designed (Phase 1), not yet built** |
-| 21 | PGC_Page | The household's pages of panels — the web app's navigation; see §4.3.8. **Designed (Sprint 14, Phase 0), not yet built** |
+| 17 | PGC_UiMessage | Web app inbox — every message to a person, all providers; see §4.3.7. **Designed (Sprint 14, Phase 0), not yet built** |
+| 18 | PGC_RecordEdit | Audit of direct edits from the web app; see §4.3.7. **Designed (Phase 1), not yet built** |
+| 19 | PGC_Page | The household's pages of panels — the web app's navigation; see §4.3.7. **Designed (Sprint 14, Phase 0), not yet built** |
 | — | PGC_WorkflowStats | SQL view — not a physical table |
 
-**Total: 18 physical PGC tables (14 bootstrapped + 2 session added in v3.2 + 2 design registry
-awaiting bootstrap) + 1 view.** Two more are designed for the web app and not yet built (19–20).
+**Total: 16 physical PGC tables (14 bootstrapped + 2 session added in v3.2) + 1 view.** Three
+more are designed for the web app and not yet built (17–19).
 
 
 ---
 
-#### 4.3.10 Dev Scripts — PGC Data Management
+#### 4.3.9 Dev Scripts — PGC Data Management
 
 These scripts in `dev_scripts/` manage the authoritative data that drives the brain's
 intelligence at runtime. They are not part of the Lambda deployment — they run locally
@@ -893,6 +818,10 @@ node dev_scripts/upsert-workflow.mjs create_workflow
 node dev_scripts/upsert-step-type.mjs js_transform
 node dev_scripts/upsert-system-context.mjs create_domain_example
 ```
+
+`upsert-schema-registry.mjs` pushes the PGC tables' own `PGC_Schema` rows from
+`seed_PGC_Schema.json`, and writes a row only when the live catalog agrees with it — columns,
+nullability, checks and FKs, both ways. `--check` reports without writing.
 
 ---
 

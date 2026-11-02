@@ -185,6 +185,7 @@ No linter or formatter is configured. Code review is done against `docs/code-rev
 | `node dev_scripts/upsert-prompt.mjs` | Push prompts to PGC_Prompt |
 | `node dev_scripts/upsert-step-type.mjs` | Push step type definitions |
 | `node dev_scripts/upsert-system-context.mjs` | Push system context |
+| `node dev_scripts/upsert-schema-registry.mjs [--check]` | Push PGC tables' `PGC_Schema` registry rows from `seed_PGC_Schema.json`; refuses any row the live database disagrees with |
 | `node dev_scripts/pull-prompt.mjs` | Pull prompts from DB to seed file |
 | `node dev_scripts/backfill-embeddings.mjs` | Embed PGC_DomainHelp rows |
 
@@ -243,23 +244,15 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 
 ## Current State
 
-Sprints 7–14: see `docs/sprints/sprint-07.md` through `docs/sprints/sprint-14.md` (outcome, validation, retro).
+Sprints 7–15: see `docs/sprints/sprint-07.md` through `docs/sprints/sprint-15.md` (outcome, validation, retro).
 
-**Sprint 14 closed 2026-10-31 → 8 sessions, branch `sprint/14-web-phase-0`. 1184 → 1185 unit tests.** A design sprint by decision (Javear, 2026-10-30). **AC0 met: `docs/arch-web-app.md` v0.5 approved** — the web app that becomes the main front end (Slack stays an accessory). Platform tentative: CloudFront + S3, Cognito, `WebApiFunction`, React + esbuild, polling. Pages of panels (workflow, data, Novia); a widget is a data representation, never tied to a step or gate type; workflows stepped through as in Slack, from a panel that starts them and lists their runs by label; reports refreshed by re-running their workflow; ceilings owned by the renderer, so a workflow is never written twice. Pages / Domains / Activity menus across the top, Novia on the left. **Phase 0** draws the household's own pages (Home, Money, Inventory — `PGC_Page` rows written by `upsert-page.mjs` from a household file, never system seeds) read-only; the page editor, Novia's region and editing records are Phase 1. Mock-up: <https://claude.ai/artifact/V13D3yERqnvQDkm8Xsuu8z>.
+**Sprint 15 closed 2026-11-02 → 2 sessions, branch `sprint/15-encrypt-novia-self-test`. 1185 → 1334 unit tests. All 11 ACs met.** **Encryption at rest:** prod on `aws/rds`, template `IN_SYNC`, no unencrypted copy left (`docs/ops-encryption-at-rest.md`). **Novia tests her own work:** a sandbox schema per test (`docs/arch-sandbox.md` — `x-sandbox` → `search_path`, PGD writes outside it refused); `read_workflow_run`; `gate_id` + `POST /proc/gates/{runId}/responses`; test runs (`callback.provider: 'novia'`) wake her session instead of reaching Slack; `run_workflow { test: true }`, `answer_gate`, `replay_run`, `resolve_replay_break` record her wait before acting and the run's next event becomes their result; *Apply and test* on the commit gate; `sop_test_cycle` (`docs/arch-minds-eye.md` §4.4). Proven live: session 1284 found and fixed four spaced-repetition defects in `flashcard_quiz_session` (v3 → v4, `docs/flashcard-quiz-sm2-analysis.md`) — $1.79, 96% cache reads, household rows unchanged; session 1287 replayed `process_receipt` run 946 with no LLM call. **Also:** PGC template / seed / registry / database agree four ways (`dev_scripts/upsert-schema-registry.mjs`, `PGC_Archetype` removed); a SERV connection leak fixed; a replay reads its source run's clock (`docs/arch-replay.md` §9a). **Decided:** the Anthropic-direct move is not needed for self-testing (AC5).
 
-**Shipped:** Novia's prompt-cache fixes (`b6cba4c`); Node's October 21 security release, all four functions on Node 22.23.4 (`ops/node-oct-2026`, `3529a1c`). **Measured:** the gateway's `/v1/agent` ignores a 1h cache TTL. **Moved:** AC1–AC4, AC6 to the web build; AC7, AC9 to Sprint 15.
+Read `docs/sprints/sprint-15.md` (outcome, retro) before scoping Sprint 16.
 
-Read `docs/sprints/sprint-14.md` (outcome, retro) before adding anything to Sprint 15.
+### Open Work (Sprint 16 — not yet scoped)
 
-### Open Work (Sprint 15 — `docs/sprints/CURRENT.md`, PROPOSED, branch `sprint/15-novia-direct`)
-
-**Novia: her cost, and testing her own work** (Javear, 2026-10-30 — her cost is affecting his use of her).
-
-1. **Novia calls Anthropic directly** — `callLlmWithTools` through `@anthropic-ai/sdk`, 1h cache TTL; workflow `llm_call`s, sonar and embeddings stay on Perplexity.
-2. **`answer_gate`** on the provider-neutral `POST /gates/{runId}/responses` with `gate_id`.
-3. **`read_workflow_run`**, **a wake at her run's gate**, and **a test-data policy for prod** — the self-testing loop.
-
-The web app's Phase 0 build follows, from `docs/arch-web-app.md` §10.
+The web app's Phase 0 build, from `docs/arch-web-app.md` §10 (approved v0.5) — `gate_id` and the provider-neutral gate responses endpoint it needs are already built. Sprint 15's findings are in `docs/backlog.md` (High Priority).
 
 ### Deferred
 
@@ -293,6 +286,7 @@ The web app's Phase 0 build follows, from `docs/arch-web-app.md` §10.
 | `docs/arch-session.md` | Session and chat design — PGC_Session/PGC_SessionEntry, `/chat`, `/explain`, diagnostics |
 | `docs/arch-minds-eye.md` | Minds-eye agent — tool catalog, use cases, agentic loop, implementation sequence (Sprint 5) |
 | `docs/arch-home-brain.md` | Home Brain — proposed single-page app: navigation and domain drill-down over REST, workflow execution pushed by the backend as for Slack (console layout, panels, `provider: 'web'` flows, REST resources, phasing) and the multi-tenant flexible-records direction. buildable detail in `arch-web-app.md`; tenancy deferred |
+| `docs/arch-sandbox.md` | The test sandbox — policy, what a sandbox holds, `x-sandbox` routing, Novia's test tools, the uncommitted test copy |
 | `docs/arch-web-app.md` | Web app design, **approved v0.5** — platform, `PGC_UiMessage` inbox, `gate_id`, `PGC_Page`, API surface, the shell (top-bar menus, Novia left, pages of panels and widgets), gate rendering incl. the editable grid, renderer-owned ceilings, domain views, phases, security, languages |
 
 ### Process and reference

@@ -839,7 +839,7 @@ did not.
 > **Kept as the record, not as instructions.** Its premise — that the prefix-cache miss is caused
 > by `buildUserMessage` ordering and the `PGC_Memory` tie — was disproved by the logs and four
 > gateway probes (see Sessions 3 and 4). Fixes (ii) and (iii) below would have measured zero. The
-> SERV composite `orderBy` blocker it found was real and is fixed (`5f82c8b`); the tiebreaker it
+> SERV composite `orderBy` blocker it found was real and is fixed (`356cabd`); the tiebreaker it
 > enables is still worth applying on its own merits, but it is not the cache fix. **Work the
 > rescoped 2c above instead.**
 
@@ -1012,7 +1012,7 @@ fix that as a side effect.
 
 ### Session 5 — 2026-08-08 — Step 1 landed; multi-turn credit confirmed and bounded by one rule
 
-**Step 1 is in (`37ca58d`).** `callLlmWithTools` in `llm-client.mjs`, additive — `callLlm`'s
+**Step 1 is in (`c414d11`).** `callLlmWithTools` in `llm-client.mjs`, additive — `callLlm`'s
 parsed-JSON contract untouched, so no existing caller changes behaviour. `postToGateway` extracted
 because the key check, abort ceiling, timeout-vs-transport split and non-2xx handling were
 byte-identical in both existing callers and a third copy was the wrong answer; the timeout message
@@ -1230,7 +1230,7 @@ numbers instead, that is a finding too.
 ### Session 9 — 2026-08-10 — Run 763: my own fix broke `create_domain`. Inventory domain live, AC6 not met.
 
 **Run 763 died at step 2 on `getRows failed: text.trim is not a function`, and I introduced it**
-in `6babf17` the day before. v57 declared `output_key: "domain_request,candidate_domain"` over an
+in `02ab58a` the day before. v57 declared `output_key: "domain_request,candidate_domain"` over an
 object-returning expression; deleting `candidate_domain` left one key and the object return, and
 the engine destructures an object only when the comma list names more than one key. So
 `local_state.domain_request` held `{ domain_request: "inventory" }`, and step 2's
@@ -1253,7 +1253,7 @@ for `serv_query`: `filters`. AC5 added `vectorSearch` to the `input_contract`, t
 pass-through and `workflow-schema.json` and missed this fourth artifact — the third sprint running
 in which a correct read looked like invention because the registry was incomplete.
 
-Five fixes, `cd55ba1` and `af1dc62`, both deployed:
+Five fixes, `000b0c9` and `bd7c8d4`, both deployed:
 
 | # | Fix | Fault domain |
 |---|---|---|
@@ -1707,10 +1707,10 @@ carries 0.** The fix keys off those items, so a typed follow-up *after a prose r
 forfeits. `toInputItems` cannot recover it from persisted state; the `respond` call has to be
 synthesised at the point the prose reply is stored. Backlog.
 
-**Also shipped, in order:** the `followup` fix (`b982c99`); six capability and scheduling tools,
-gated and honestly stubbed (`1caca50`); `PGC_Capability`'s five external columns deployed live via
-`addColumn`/`modifyConstraint`/`updateTable` (`d8f3df1`); Finnhub registered as three `planned`
-rows with a new `seed_PGC_Capability.json` wired into bootstrap (`71200f8`). 901 → **920** unit
+**Also shipped, in order:** the `followup` fix (`55e593e`); six capability and scheduling tools,
+gated and honestly stubbed (`ae9c32a`); `PGC_Capability`'s five external columns deployed live via
+`addColumn`/`modifyConstraint`/`updateTable` (`b5632fe`); Finnhub registered as three `planned`
+rows with a new `seed_PGC_Capability.json` wired into bootstrap (`cfb394e`). 901 → **920** unit
 tests.
 
 **The bootstrap trap, recorded because it nearly cost the invariant.** `createTableFromTemplate`
@@ -2071,7 +2071,7 @@ aliases — so the scaling design is working. The absolute figure is inflated by
    `{"columns":["id","name"], "vectorSearch":{…}}` returns **16 columns**; without `vectorSearch` it
    returns 3. Candidate rows arrive at ~346 chars instead of ~45 — roughly 8× — carrying
    `created_at`, `updated_at`, `description`, `location`, `condition`, `notes`, `value`,
-   `expiry_date`, almost all null. **Vectors are still nulled, so `52e2393`'s protection holds**;
+   `expiry_date`, almost all null. **Vectors are still nulled, so `e2af253`'s protection holds**;
    this is the projection not surviving the vector path.
 2. **The payload is sent twice.** `llm-harness.mjs:424` sends `userInput || JSON.stringify(resolvedInput)`
    as the user message while `assembleInstructions` has already substituted the same `{{tokens}}`
@@ -2161,7 +2161,7 @@ unconditionally, so for a column the projection excluded `v` is `undefined`, `v 
 the key is written back in as null. The projection honoured by the SELECT, then partly undone on the
 way out. Fixed, redeployed, re-probed: `{"id": 17, "name": "Rustic Sliced Bread", "similarity":
 0.5116...}`, 75 chars. **Whole-row reads are unchanged** — 16 columns, vector truncated to
-`'[0,-8...'` — so `52e2393`'s protection holds.
+`'[0,-8...'` — so `e2af253`'s protection holds.
 
 **On the duplication fix, three things that make it a fix rather than a gamble:**
 

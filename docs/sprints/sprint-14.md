@@ -35,7 +35,7 @@ provider, and that a grid answers the bulk-edit ceiling Slack cannot.
 | **4** | **Sign-in for one user.** The site is public-facing, so it needs a real identity even with one user: the browser never holds the internal API key, and identity comes from the token, never the request body (§3.3). Mechanism decided at "start sprint" |
 | ~~**5**~~ | ~~Release readiness R1–R3, moved forward~~ — **R1 moved to `docs/backlog.md` at "start sprint" (Javear, 2026-10-22).** R2 is blocked by R1 and held with it. Consequence, accepted: the site is built against prod |
 | **6** | **Encryption at rest for PostgreSQL (Javear, 2026-10-22).** RDS `StorageEncrypted` is absent and cannot be switched on in place: snapshot → encrypted copy → restore. Two things make it more than a toggle: `EvoMindDB` is a CloudFormation resource with a custom `DBInstanceIdentifier`, so setting `StorageEncrypted: true` in `template.yaml` asks CloudFormation for a replacement it cannot perform under a custom name; and writes after the snapshot are lost unless the system is quiet during the cut. Plan (endpoint kept by renaming the restored instance to `SYSRDSEvoMind`, template brought back in line with the live instance, KMS key choice — AWS-managed free vs customer-managed ~$1/month) written and agreed before any AWS action. No longer waits for the Aurora decision (R5) |
-| **7** | **Novia's prompt cache holds across a session (Javear, 2026-10-24 — added in-sprint).** Oct 24 cost $14.67 for 50 Opus calls: session 1261 had grown to 234K tokens over three days, and 20 of its calls rewrote the whole prefix at $5/M where a read is $0.20/M. Three causes, all Execution: (a) Layer 1 lists every workflow's version inside `instructions`, so each approved `propose_workflow_fix` invalidates the prefix (4 misses, $4.11); (b) a prose reply rebuilds as an assistant message plus a user turn, not as the respond call it stands for, and every round started after one read back only tools + instructions (4 of 4, vs 1 of 1 hit after a respond call; $2.44 on Oct 24); (c) the 5-minute TTL expires between Javear's turns (7 misses, $5.35) — **not fixable on `/v1/agent` (measured 2026-10-24):** the gateway accepts `prompt_cache_options: { ttl: '1h' }` (an unknown field is a 400) but ignores it — the write is billed at the 5-minute rate (1.25×, not 2×) and the identical request 7 minutes later rewrote all 13,171 tokens with no read. (a) and (b) ✅ DONE, deployed (`b6cba4c`) |
+| **7** | **Novia's prompt cache holds across a session (Javear, 2026-10-24 — added in-sprint).** Oct 24 cost $14.67 for 50 Opus calls: session 1261 had grown to 234K tokens over three days, and 20 of its calls rewrote the whole prefix at $5/M where a read is $0.20/M. Three causes, all Execution: (a) Layer 1 lists every workflow's version inside `instructions`, so each approved `propose_workflow_fix` invalidates the prefix (4 misses, $4.11); (b) a prose reply rebuilds as an assistant message plus a user turn, not as the respond call it stands for, and every round started after one read back only tools + instructions (4 of 4, vs 1 of 1 hit after a respond call; $2.44 on Oct 24); (c) the 5-minute TTL expires between Javear's turns (7 misses, $5.35) — **not fixable on `/v1/agent` (measured 2026-10-24):** the gateway accepts `prompt_cache_options: { ttl: '1h' }` (an unknown field is a 400) but ignores it — the write is billed at the 5-minute rate (1.25×, not 2×) and the identical request 7 minutes later rewrote all 13,171 tokens with no read. (a) and (b) ✅ DONE, deployed (`3f30b43`) |
 | ~~**8**~~ | ~~`read_workflow_run` — a Novia read tool for run data~~ — **moved to `docs/backlog.md` the day it was added (Javear, 2026-10-25)**, with the wake and the test-data policy |
 | **9** | **`answer_gate` — Novia answers a gate in a run she started (Javear, 2026-10-25 — added in-sprint).** The first step towards Novia testing her own builds, fixes and enhancements inside the cache TTL, keeping Javear out of the test-troubleshoot-repair loop. Built on scope item 1's provider-neutral `POST /gates/{runId}/responses` with `gate_id`, not a second resume path. Refused for any run she did not start (`triggered_by: 'minds_eye'` in her session) and always for the gates that guard her own gated writes — those remain Javear's. Not in scope: waking her when her run reaches a gate (a run outlives her round budget), and a policy for test data written to prod (she handled it by hand for the receipt test — see session 5) |
 
@@ -156,7 +156,7 @@ all fixed by `npm audit fix` without a major bump. **Proposed, awaiting Javear's
 `ops/node-oct-2026` branch — update Node on this box, `npm audit fix`, unit tests, log
 `process.version` at cold start, deploy all four functions, confirm ≥ 22.23.4 from the logs.
 
-**Patched and deployed the same session (Javear's go), branch `ops/node-oct-2026` (`3529a1c`):**
+**Patched and deployed the same session (Javear's go), branch `ops/node-oct-2026` (`b22d395`):**
 build host on Node 22.23.4 (dnf); `npm audit fix` (axios 1.21.0, form-data 4.0.6, fast-uri 3.1.9,
 follow-redirects 1.16.2, uuid 11.1.1) — production audit 0 vulnerabilities; a `cold start { node }`
 log in `lambda-utils.mjs`; 1185 tests pass; all four functions redeployed onto runtime
@@ -226,11 +226,11 @@ proc logs put **$14.67** on Novia's 50 Opus calls. Session 1261 (one Slack threa
 where a read is $0.20/M. Causes, all Execution: Layer 1 workflow versions in `instructions` (4,
 $4.11); prose replies rebuilt as assistant + user turn (every within-TTL round after one read back
 only 17,270 tokens, 4 of 4; $2.44); the 5-minute TTL across Javear's pauses (7, $5.35). **Fixed and
-deployed (`b6cba4c`):** versions dropped from Layer 1; a respond with no gateway call rebuilds as a
+deployed (`3f30b43`):** versions dropped from Layer 1; a respond with no gateway call rebuilds as a
 respond call. 1185 tests. **The 1h TTL is not available on `/v1/agent`** — accepted, ignored
 (billed at the 5-minute rate, gone after 7 minutes). **Unexplained:** Javear's dashboard shows
 ~$0.10–0.15 on Oct 18 and 22 where the logs record $6.10 and $1.38. Novia calling Anthropic
-directly is now the backlog's top priority (`7dad024`); it needs an Anthropic Console key, which
+directly is now the backlog's top priority (`d2d4249`); it needs an Anthropic Console key, which
 Javear stores in SSM when it is built.
 
 **Docs:** `arch-home-brain.md` §3.3 habits 4–5 (request order for caching; cache isolation between
@@ -292,7 +292,7 @@ was `anthropic/claude-sonnet-4-6`; every call since — session 1236, 14:27–14
 **360 v10 (her first work on Opus):** Delete is an `option` with `condition:
 local_state.edit_state.edit_id`, hidden for a new record — closing Sprint 13 AC7's one accepted gap.
 She also split step 11 into `serv_insert` (11a) / `serv_update` (11b) on a **false diagnosis** —
-*"saving a new expense has never worked"*, from runs 903/904, which predate `3ce72e9`; runs 905/913
+*"saving a new expense has never worked"*, from runs 903/904, which predate `7529d23`; runs 905/913
 had inserted rows 289–303 through the upsert. Sound and harmless, but it repeated the habit her own
 retrospective lists second: diagnosing without reading the later runs.
 
@@ -324,8 +324,8 @@ Five versions in ten days: v0.1 platform, v0.2 pages of widgets, v0.3 menu group
 the console, v0.5 menus on top.
 
 **Shipped, deployed:** Novia's prompt cache — Layer 1's workflow versions out of `instructions`, and
-prose replies rebuilt as respond calls (`b6cba4c`, AC7 (a) and (b)); Node's October 21 security
-release and `npm audit fix` on `ops/node-oct-2026` (`3529a1c`, all four functions on Node 22.23.4).
+prose replies rebuilt as respond calls (`3f30b43`, AC7 (a) and (b)); Node's October 21 security
+release and `npm audit fix` on `ops/node-oct-2026` (`b22d395`, all four functions on Node 22.23.4).
 
 **Measured, not fixable here:** the gateway's `/v1/agent` accepts a 1h cache TTL and ignores it,
 with or without a cache key — the reason Sprint 15 moves Novia to the Anthropic API.

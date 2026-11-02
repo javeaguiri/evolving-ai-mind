@@ -151,7 +151,7 @@ Each item is a backlog row in `docs/backlog.md`.
 | **F4** | Bastion SSH open to any address | `template.yaml` `BastionSecurityGroup`, marked TODO | Medium | Yes |
 | **F5** | One internal key for every PROC and SERV caller | §3 | Medium | Yes (S4) |
 | **F6** | Memory written from untrusted content is replayed into later prompts | §6 | Medium | Yes |
-| **F7** | Encryption at rest absent | `EvoMindDB` has no `StorageEncrypted` | Medium | **Sprint 14, AC6** |
+| **F7** | Encryption at rest absent | `EvoMindDB` had no `StorageEncrypted` | Medium | **Closed 2026-11-02** (Sprint 15 AC1) — `StorageEncrypted: true`, AWS-managed `aws/rds` key; no unencrypted instance, snapshot or backup remains. `docs/ops-encryption-at-rest.md` |
 | **F8** | Secrets in logs | `docs/ops-release-readiness.md` R4 | Low | R4 |
 
 **Accepted by final decision:** secrets are SSM `String` parameters resolved into Lambda

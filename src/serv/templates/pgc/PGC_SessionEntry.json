@@ -9,7 +9,8 @@
     { "name": "role",            "type": "varchar(15)", "nullable": false },
     { "name": "content",         "type": "text",        "nullable": false },
     { "name": "reasoning",       "type": "text",        "nullable": true },
-    { "name": "created_at",      "type": "timestamptz", "nullable": false, "default": "now()" }
+    { "name": "created_at",      "type": "timestamptz", "nullable": false, "default": "now()" },
+    { "name": "compressed",      "type": "boolean",     "nullable": true }
   ],
   "foreign_keys": [
     {
@@ -21,7 +22,7 @@
   ],
   "constraints": [
     { "type": "unique", "name": "uq_pgc_sessionentry_session_seq", "columns": ["session_id", "sequence_number"] },
-    { "type": "check",  "name": "chk_pgc_sessionentry_role", "expression": "role IN ('system', 'user', 'assistant')" }
+    { "type": "check",  "name": "chk_pgc_sessionentry_role", "expression": "role IN ('system', 'user', 'assistant', 'tool')" }
   ],
   "triggers": []
 }

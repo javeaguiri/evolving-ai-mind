@@ -28,6 +28,29 @@ const sqs = new SQSClient({});
  * @returns {Promise<void>}
  */
 export async function enqueueCallback(callback, payload) {
+  // A test run Novia started reports to her session, never to a person: every message the run
+  // would have sent becomes a wake, and minds-eye.mjs decides which ones end her wait
+  // (docs/arch-minds-eye.md §4.4). callback.reply is her own thread, for her to answer in.
+  if (callback?.provider === 'novia') {
+    const { callback: _runCallback, ...runEvent } = payload;
+    await sqs.send(new SendMessageCommand({
+      QueueUrl:    process.env.SQS_WORKFLOW_URL,
+      MessageBody: JSON.stringify({
+        type:       'MINDS_EYE_RESUME',
+        resumeType: 'run_event',
+        sessionId:  callback.sessionId,
+        runEvent,
+        callback:   callback.reply ?? null,
+        traceId:    payload.traceId,
+      }),
+    }));
+    console.info('sqs-callback: run event sent to Novia', { type: payload.type, sessionId: callback.sessionId, traceId: payload.traceId });
+    return;
+  }
+
+  // Only a test run listens for completion; no person is sent one.
+  if (payload.type === 'WORKFLOW_COMPLETED') return;
+
   await sqs.send(new SendMessageCommand({
     QueueUrl:    process.env.SQS_SLACK_RESULTS_URL,
     MessageBody: JSON.stringify({

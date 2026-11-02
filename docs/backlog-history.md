@@ -4,6 +4,20 @@ Completed and closed tasks from backlog.md, preserved for reference. Items moved
 
 ---
 
+## Sprint 15 — closed items (2026-11-02)
+
+| Item | Resolution |
+|---|---|
+| **DEFERRED (Javear, 2026-11-02) — Novia calls Anthropic directly, not through the Perplexity gateway (Javear, 2026-10-24).** Chosen for a 1h TTL across a human-paced test cycle; Sprint 15 AC5 measures whether a self-paced one fits the 5-minute TTL, and decides whether this returns | **Not needed for self-testing — Sprint 15 AC5.** Session 1284's whole self-test cycle (43 calls) cost $1.79 at 96% cache reads: every wake arrived within seconds and read its full prefix, so the 5-minute TTL suffices. The 1h TTL was for a human-paced cycle, which self-testing removed. Reopen only on new evidence about human-paced sessions. |
+| **Novia tests her own work — `read_workflow_run` (Javear, 2026-10-25; added to Sprint 14 as scope item 8, moved here the same day)** | **Done Sprint 15 (scope 3).** `projectWorkflowRun` reads the stack or `state`, renders a waiting gate with `buildDialog`, and returns each step's value at its `output_key`. Tool live in `minds_eye_tool_schemas`. |
+| **Novia tests her own work — wake her when her run reaches a gate (Javear, 2026-10-25)** | **Done Sprint 15 (scope 5).** A `novia` run's messages become `run_event` wakes; `run_workflow { test: true }`, `answer_gate`, `replay_run` and `resolve_replay_break` record her wait first and the event becomes their result (no `await_run`). Bounded by `max_test_events`. Proven live, session 1284. |
+| **IN SPRINT 15 (Javear, 2026-11-02) — decided: option A, a sandbox schema. Novia tests her own work — a test-data policy for prod (Javear, 2026-10-25)** | **Done Sprint 15 (scope 2, AC2, AC6).** `docs/arch-sandbox.md`: `sandbox_<n>` schemas, `search_path` via `x-sandbox`, PGD writes outside the sandbox refused. Household rows proven unchanged across runs 955–960. |
+| **IN SPRINT 15 (Javear, 2026-11-02) — A turn whose tool arguments will not parse is never persisted (2026-08-30)** | **Done Sprint 15 (scope 8–9, AC9).** Persisted with the turn's own items; unit-tested. |
+| **IN SPRINT 15 (Javear, 2026-11-02) — `PGC_SessionEntry.json` template omits `tool` from its role check (2026-08-30)** | **Done Sprint 15 (scope 8, AC9), and widened to the four-way schema audit (scope 11, AC11).** |
+| **IN SPRINT 15 (Javear, 2026-11-02) — last in the sprint, through the sandbox. Give Novia the replay harness as a tool (2026-08-26)** | **Done Sprint 15 (scope 10, AC10).** `replay_run` / `resolve_replay_break`; a replay reads its source run's clock (`arch-replay.md` §9a). Proven live, session 1287: run 946 replayed with no LLM call. |
+
+---
+
 ## Sprint 7 — closed items (2026-06-30)
 
 | Item | Resolution |
@@ -33,9 +47,9 @@ Completed and closed tasks from backlog.md, preserved for reference. Items moved
 
 | # | Status | Task | Resolution |
 |---|--------|------|------------|
-| 3 | ✅ done | Add typeof string guard to run-workflow.mjs output_key split | commit `1e687d8` — `typeof` guard added to `output_key.split()` call in `run-workflow.mjs` to prevent crash on non-string output_key values. Complements the same guard added to L1/L2 in `step-executor.mjs` (commit `8ebce82`) |
-| 4 | ✅ done | Update flat_loop_example to document optional input_key and multi-output | commit `1e687d8` — `seed_PGC_SystemContext.json` updated; pushed to DB |
-| 5 | ✅ done | Retest `/m create workflow Spanish flashcard quiz` | Run 321 succeeded — `spanish_flashcard_quiz` registered. `review-output` false-positive cancel check fixed (commit `beb99c7`) |
+| 3 | ✅ done | Add typeof string guard to run-workflow.mjs output_key split | commit `a6b873b` — `typeof` guard added to `output_key.split()` call in `run-workflow.mjs` to prevent crash on non-string output_key values. Complements the same guard added to L1/L2 in `step-executor.mjs` (commit `35e0a81`) |
+| 4 | ✅ done | Update flat_loop_example to document optional input_key and multi-output | commit `a6b873b` — `seed_PGC_SystemContext.json` updated; pushed to DB |
+| 5 | ✅ done | Retest `/m create workflow Spanish flashcard quiz` | Run 321 succeeded — `spanish_flashcard_quiz` registered. `review-output` false-positive cancel check fixed (commit `db83267`) |
 | 7 | ✅ done | Fix conditional increment in serv_update | Resolved in run 321 — LLM pre-computed delta values in step 8 js_transform (`card_updates`) and used flat references in step 9 |
 
 ---

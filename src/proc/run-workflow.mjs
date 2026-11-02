@@ -33,9 +33,9 @@ import { randomUUID }           from 'crypto';
 import { ok, err }              from '../shared/lambda-utils.mjs';
 import { enqueueCallback, enqueueWorkflow }
                                 from '../shared/sqs-callback.mjs';
-import { getRows, insertRow, updateRows }
+import { getRows, insertRow, updateRows, sandboxScope, setSandbox }
                                 from '../shared/serv-client.mjs';
-import { executeStep, buildDialog, resolveGateOptions, resolveFormFields }
+import { executeStep, buildDialog, resolveGateOptions, resolveFormFields, replayDate }
                                 from './step-executor.mjs';
 import { resolvePath }          from './template-resolver.mjs';
 import { resolveOutputWrites }  from './state-utils.mjs';
@@ -57,14 +57,14 @@ export async function handle(req) {
   }
 
   try {
-    const result = await dispatch({
+    const result = await sandboxScope(() => dispatch({
       action,
       workflowRunId,
       userResponse: body.userResponse,
       responseData: body.responseData,
       traceId,
       source: req.source ?? 'http',
-    });
+    }));
     if (req.source === 'http') return ok(result, req.correlationId);
   } catch (error) {
     console.error('run-workflow: unhandled error', { error: error.message, traceId });
@@ -80,18 +80,19 @@ export async function handle(req) {
 // ---------------------------------------------------------------------------
 
 export async function dispatchSqs(message) {
-  const { action, workflowRunId, userResponse, responseData, message_ts, traceId, stepExecutionId } = message;
-  return dispatch({ action, workflowRunId, userResponse, responseData, message_ts, traceId, source: 'sqs', stepExecutionId });
+  const { action, workflowRunId, gateId, userResponse, responseData, message_ts, traceId, stepExecutionId } = message;
+  // A scope per message, so one run's sandbox can never reach the next message in the batch.
+  return sandboxScope(() => dispatch({ action, workflowRunId, gateId, userResponse, responseData, message_ts, traceId, source: 'sqs', stepExecutionId }));
 }
 
 // ---------------------------------------------------------------------------
 // Core dispatch
 // ---------------------------------------------------------------------------
 
-async function dispatch({ action, workflowRunId, userResponse, responseData, message_ts, traceId, source, stepExecutionId }) {
+async function dispatch({ action, workflowRunId, gateId, userResponse, responseData, message_ts, traceId, source, stepExecutionId }) {
   switch (action) {
     case 'execute_top': return executeTop({ workflowRunId, traceId, source, stepExecutionId });
-    case 'resume_gate': return resumeGate({ workflowRunId, userResponse, responseData, message_ts, traceId, source });
+    case 'resume_gate': return resumeGate({ workflowRunId, gateId, userResponse, responseData, message_ts, traceId, source });
     case 'resume_llm':  return resumeLlm({ workflowRunId, traceId });
     case 'cancel':      return cancelRun({ workflowRunId, traceId });
     default:
@@ -444,6 +445,9 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
       frame_id:      randomUUID(),
       type:          'human_gate',
       status:        'awaiting',
+      // A gate is answered by run AND gate (arch-web-app.md §2.2): an answer naming any other
+      // gate_id is refused, so a stale answer is never applied to the gate that replaced it.
+      gate_id:       randomUUID(),
       gate_type:     step.gate_type,
       step_ref:      resolvedStepRef,
       step_number:   frame.current_step,
@@ -462,7 +466,7 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
       }
     );
 
-    await enqueueCallback(run.callback, result.gatePayload);
+    await enqueueCallback(run.callback, withGateId(result.gatePayload, gateFrame.gate_id));
 
     console.info('run-workflow: human_gate suspended', {
       workflowRunId: run.id, gateType: step.gate_type, traceId,
@@ -515,6 +519,9 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
       }
     );
     console.info('run-workflow: workflow completed', { workflowRunId: run.id, traceId });
+    if (run.callback) {
+      await enqueueCallback(run.callback, { type: 'WORKFLOW_COMPLETED', workflowRunId: run.id, traceId });
+    }
     if (shouldWriteEpisodicMemory(run)) {
       await enqueueWorkflow({
         type:         'MEMORY_WRITE',
@@ -550,7 +557,7 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
 // resume_gate
 // ---------------------------------------------------------------------------
 
-async function resumeGate({ workflowRunId, userResponse, responseData, message_ts, traceId, source }) {
+async function resumeGate({ workflowRunId, gateId, userResponse, responseData, message_ts, traceId, source }) {
 
   const run   = await loadRun(workflowRunId, traceId);
   const frame = topFrame(run);
@@ -567,6 +574,15 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
       workflowRunId, status: run.status, traceId,
     });
     return { skipped: true, reason: 'not_awaiting' };
+  }
+
+  // An answer that names a gate is applied to that gate only. One that names none — a Slack
+  // button posted before gates carried an id — is accepted as it always was.
+  if (gateId && gateId !== frame.gate_id) {
+    console.warn('run-workflow: resume_gate — answer is for another gate', {
+      workflowRunId, gateId, waitingGateId: frame.gate_id ?? null, traceId,
+    });
+    return { skipped: true, reason: 'gate_moved' };
   }
 
   const { gate_type: gateType, step_ref: stepRef, local_state: localState } = frame;
@@ -638,7 +654,7 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
   // the decision entirely. Re-render in place instead, the same stay-suspended pattern
   // list_selection and form use.
   if (isChoice && !matchedOption && choiceResponse !== 'cancel') {
-    const dialogForRetry = buildDialog(stepRef, localState);
+    const dialogForRetry = { ...buildDialog(stepRef, localState), gate_id: frame.gate_id ?? null };
     dialogForRetry.fields.unshift({
       type:  'typography',
       value: '⚠️ Choose an option before selecting.',
@@ -682,7 +698,7 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
   // A selection that doesn't resolve to a selectable row re-renders the same gate in
   // place with an error line — it never silently advances on an unresolved value.
   if (itemActionMatch) {
-    const dialogForLookup = buildDialog(stepRef, localState);
+    const dialogForLookup = { ...buildDialog(stepRef, localState), gate_id: frame.gate_id ?? null };
     const listItems = dialogForLookup.fields.find(f => f.type === 'list')?.items ?? [];
     const typedId   = responseData?.inputValue?.trim();
     const { item: matchedItem, problem } = matchListSelection(listItems, typedId, responseData?.listGroup);
@@ -725,7 +741,7 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
       .map(f => f.label ?? f.name);
 
     if (missing.length > 0) {
-      const dialogForForm = buildDialog(stepRef, localState);
+      const dialogForForm = { ...buildDialog(stepRef, localState), gate_id: frame.gate_id ?? null };
       dialogForForm.fields.unshift({
         type:  'typography',
         value: `⚠️ Please complete: ${missing.join(', ')}.`,
@@ -1425,6 +1441,7 @@ async function executeIteratorInline({ run, frame, traceId }) {
         frame_id:      randomUUID(),
         type:          'human_gate',
         status:        'awaiting',
+        gate_id:       randomUUID(),
         gate_type:     itemStep.gate_type,
         step_ref:      resolvedStepRef,
         step_number:   frame.parent_step,
@@ -1441,7 +1458,7 @@ async function executeIteratorInline({ run, frame, traceId }) {
           step_count: (run.step_count ?? 0) + 1,
         }
       );
-      await enqueueCallback(run.callback, result.gatePayload);
+      await enqueueCallback(run.callback, withGateId(result.gatePayload, gateFrame.gate_id));
       console.info('run-workflow: iterator item human_gate suspended', {
         workflowRunId: run.id, index: frame.current_index, traceId,
       });
@@ -1652,7 +1669,7 @@ async function cancelRun({ workflowRunId, traceId }) {
 // replay_source_run_id + llm_break_policy MUST be here: the replay harness reads the
 // break policy off the run row at the seam (docs/arch-replay.md §7a). Omit them and they
 // arrive undefined — failing closed to `never` and silently billing a run meant to replay.
-export const LOAD_RUN_COLUMNS = ['id', 'workflow_id', 'status', 'input', 'stack', 'callback', 'step_count', 'error', 'replay_source_run_id', 'llm_break_policy'];
+export const LOAD_RUN_COLUMNS = ['id', 'workflow_id', 'status', 'input', 'stack', 'callback', 'step_count', 'error', 'replay_source_run_id', 'llm_break_policy', 'sandbox', 'created_at'];
 
 async function loadRun(workflowRunId, traceId) {
   const resp = await getRows(
@@ -1664,6 +1681,19 @@ async function loadRun(workflowRunId, traceId) {
     throw new Error(`WorkflowRun ${workflowRunId} not found`);
   }
   const run = resp.rows[0];
+
+  // A test run's every SERV call from here on goes to its sandbox (docs/arch-sandbox.md §3):
+  // its steps, its PGD reads and writes, its memory — and the steps themselves, so a test copy
+  // of the workflow in the sandbox's PGC_Workflow is the one that runs.
+  setSandbox(run.sandbox);
+
+  // A replay's expressions read the source run's clock (replayDate), so a workflow that reads
+  // the time puts the same value into its prompts as the run being replayed.
+  if (run.replay_source_run_id != null) {
+    const src = await getRows('PGC_WorkflowRun', [{ column: 'id', op: 'eq', value: run.replay_source_run_id }],
+      undefined, 1, undefined, ['created_at']);
+    run.clock = replayDate(Date.parse(src.rows[0].created_at) - Date.parse(run.created_at));
+  }
 
   // Resolve workflow name if not cached in run
   if (!run.workflow_name) {
@@ -1692,6 +1722,14 @@ async function loadSteps(workflowName, traceId) {
 
 function findStep(steps, stepKey) {
   return steps.find(s => String(s.step) === String(stepKey)) ?? null;
+}
+
+/**
+ * A HUMAN_GATE payload whose dialog carries the gate's id, so any surface that renders it
+ * can answer by run and gate.
+ */
+export function withGateId(gatePayload, gateId) {
+  return { ...gatePayload, dialog: { ...gatePayload.dialog, gate_id: gateId } };
 }
 
 function topFrame(run) {

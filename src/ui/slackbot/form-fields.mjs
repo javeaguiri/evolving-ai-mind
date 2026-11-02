@@ -8,6 +8,12 @@
 // back to rebuild the answers as a map. Keeping the prefix and the parser in one
 // place means the two cannot drift apart.
 
+import { readNumber } from '../../shared/number-rule.mjs';
+
+// readNumber is the number field's rule on every surface — Slack here, /proc's gate
+// responses endpoint for the web and for Novia — so it lives in src/shared.
+export { readNumber };
+
 // A form field's answer is identified by the field name encoded in its block_id:
 //   form_field_<workflowRunId>::<fieldName>
 // '::' separates the run id from the name — field names may contain underscores, so
@@ -143,27 +149,6 @@ export function parseNumberActionId(actionId) {
   };
 }
 
-/**
- * Read what was typed into a number field.
- *
- * A decimal comma is read as the decimal point when it is the only separator — `12,50`
- * is 12.5 — because a household entering euros types it that way. Anything else that is
- * not a plain number is refused, never guessed at.
- *
- * @param {string} text  the typed value, trimmed and non-empty
- * @param {{ decimal: boolean, min?: number, max?: number }} rule
- * @returns {{ value: number } | { problem: string }}  problem completes "<label> …"
- */
-export function readNumber(text, rule) {
-  let t = String(text).trim();
-  if (/^[+-]?\d+,\d+$/.test(t)) t = t.replace(',', '.');
-  if (!/^[+-]?(\d+(\.\d*)?|\.\d+)$/.test(t)) return { problem: 'must be a number' };
-  const n = Number(t);
-  if (!rule.decimal && !Number.isInteger(n))      return { problem: 'must be a whole number' };
-  if (rule.min !== undefined && n < rule.min)    return { problem: `must be at least ${rule.min}` };
-  if (rule.max !== undefined && n > rule.max)    return { problem: `must be at most ${rule.max}` };
-  return { value: n };
-}
 
 /**
  * The number fields on a form gate whose typed value is not an acceptable number.

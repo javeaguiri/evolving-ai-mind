@@ -167,6 +167,7 @@ All single-table lookups use `SERV getRows` directly — no new endpoints requir
 | `list_tables` | SERV `listTables` | Registered tables per PGC_TableMap |
 | `list_physical_tables` | SERV `listPhysicalTables` | What the database actually holds — the registry may not assert it |
 | `run_sql` | SERV | Direct read of live data — the tool that lets Novia see what a workflow will operate on |
+| `read_workflow_run` | PROC — run row, its top frame, `PGC_WorkflowRunStep` | Status, version, test flag, error; the waiting gate's `gate_id`, `gate_type` and dialog from `buildDialog`; `outline` / `steps` projections, bounded like `read_workflow`. Reads the stack, never `PGC_WorkflowRun.state`, which is written only at completion. Any run (§4.4) |
 | `get_run_history` | Three `getRows` calls chained via session_id FK | See §3.3. **Requires X1 applied.** Shape of step-level call depends on W1 decision. |
 
 **FK join paths (documented in `minds_eye_context_index` seed):**
@@ -192,6 +193,7 @@ count against `max_actions_per_session`.
 | Gated write | `register_workflow`, `propose_workflow_fix`, `propose_schema_fix`, `delete_data`, `drop_table`, `create_view`, `drop_view` | HUMAN_GATE before execution |
 | Trigger | `run_workflow` | Dispatches a registered workflow to the step-executor engine |
 | Housekeeping | `write_memory` | None — silent episodic write |
+| Test | `start_test`, `reset_test`, `end_test`, `answer_gate`; `sandbox: true` on the data tools and `propose_workflow_fix`; `test: true` on `run_workflow` | None — confined to the sandbox and to her own test runs (§4.4) |
 
 **`register_workflow`** (Sprint 9, AC4) — `{ name, domain?, description, steps, intentPhrases?,
 intentKeywords? }`. Creates a workflow: one `PGC_Workflow` row at version 1, and one
@@ -290,6 +292,47 @@ call, and `update_data` already permits far more damage without a gate.
 - Modifying `PGC_StepType` definitions
 - Modifying `PGC_TableMap` permissions
 - Fixing Execution domain failures (harness bugs) — these require code changes
+
+### 4.4 Test tools — Novia tests her own work (Sprint 15)
+
+A test runs a workflow end to end in the **sandbox** (`docs/arch-sandbox.md`), against a plan the
+user approved. The procedure she follows is the `sop_test_cycle` row; the tools are below.
+
+**The loop.** The call that sets a test run moving is the call that waits for it.
+`run_workflow { test: true }` starts a run with `sandbox` set and
+`callback: { provider: 'novia', sessionId, reply }`, and `answer_gate` answers its gate; each records
+its open call as a `__pending__` entry **before** the run is dispatched or the answer sent, and
+the round ends. For a `novia` run `enqueueCallback` sends nothing to Slack: every message the run
+would have sent becomes a `MINDS_EYE_RESUME` with `resumeType: 'run_event'` for her session, and
+`handleRunEvent` resolves the open call when the message ends the wait (`describeRunEvent`) — a
+gate (with the dialog as sent, so a redrawn form carries its warning), a replay break (`LLM_BREAK`,
+with the drift and the resolutions offered), an error, completion
+(`WORKFLOW_COMPLETED`, which no person is sent), or any message once the run has stopped. A
+notification on the way to the next gate does not; what a notify step said reaches her in the
+event's `steps_since`. Because the wait is recorded first, nothing the run does can arrive before
+she is waiting for it. The resolution closes the pending call as an approved action gate does, so
+her transcript only appends and its cached prefix holds; `(session_id, sequence_number)` is unique,
+so two racing events resolve it once. Events per session are bounded by
+`minds_eye_preferences.max_test_events`.
+
+| Tool | Does | Boundary |
+|---|---|---|
+| `start_test { tables: [{ name, rows }] }` | Creates the sandbox; `rows` is `all`, `none` or a filters array | Replaces any earlier sandbox |
+| `reset_test` | Back to the data `start_test` copied | — |
+| `end_test` | Drops the sandbox | Run records stay |
+| `run_workflow { ..., test: true }` | Starts a test run in the sandbox, then waits; its first event is the result | Refused with no sandbox; bounded per session |
+| `answer_gate { runId, gateId, action, formValues?, inputValue?, listGroup?, selectedValue? }` | `answerGate` (`POST /gates/{runId}/responses`), then waits; the next event is the result | Her own test runs only — every other run's gates belong to the user. A `gateId` that is not the waiting gate is `409 gate_moved` |
+| `sandbox: true` on `query_table`, `run_sql`, `update_data`, `insert_data`, `upsert_data`, `delete_data` | Reads or writes the sandbox | Ungated — `delete_data` included |
+| `propose_workflow_fix { sandbox: true }` | Writes an uncommitted test copy into the sandbox's `PGC_Workflow` | Ungated, validated as any patch; gone at `end_test` |
+| `replay_run { sourceRunId, breakPolicy? }` | Replays a run in the sandbox, `llm_call` steps served from its recordings (`docs/arch-replay.md` §9), then waits | Refused with no sandbox; bounded per session |
+| `resolve_replay_break { runId, resolution, sessionId?, response? }` | `use_recorded`, `call_live`, `supplied` or `abort` at the break she is waiting on, then waits | Her own replays only |
+
+**Apply and test.** `gateButtonConfig` gives the approval gate of `propose_workflow_fix` and
+`register_workflow` a `testLabel` (*Apply and test*, *Register and test*); `callback.mjs` draws it
+as a second approve button (`mindsEyeGateButtons`), and its click carries `test: true` through
+`interactive.mjs` to `MINDS_EYE_RESUME`. When the change is applied, `withTestRequest` marks the
+result `test_requested`: she plans the test under `sop_test_cycle` and responds with the plan for
+approval. A refused change asks for nothing.
 
 ---
 
@@ -634,7 +677,7 @@ Sprint 5 build order:
 
 > **Status (2026-07-29).** Direction set — `create_workflow` is dissolved into Novia, gated on
 > evaluating her capability first (§12.7). **Sprint 9 is scoped and branched against this
-> section**: `docs/sprints/CURRENT.md`, branch `sprint/09-novia-builds-workflows`.
+> section**: `docs/sprints/sprint-09.md`, branch `sprint/09-novia-builds-workflows`.
 >
 > Measurements throughout are point-in-time findings against the live database and seed files,
 > not configuration. Each carries the date it was taken.
@@ -643,24 +686,21 @@ Sprint 5 build order:
 > already write code. What she lacks is *this system's conventions*. So what gets written for her
 > states **what the engine accepts** and **what each tier owns** — never a fill-in-the-blank
 > structure, a required ordering, or a syntax she must emit. Sprint 9 writes a convention bridge
-> on that basis and lets archetypes follow from what real builds turn out to need.
+> on that basis. A new workflow takes its shape from a working one, read with `read_workflow`: the
+> live workflows are the pattern library, and they cannot go stale against themselves.
 >
 > | Subsection | Status |
 > |---|---|
 > | 12.1–12.2 the measured problem | Evidence, 2026-07-26 |
-> | 12.3 the two registries | **Settled** — procedures and dialog strategies are two tables |
 > | 12.4 phases become guidelines | Direction; not built |
 > | 12.5–12.6 removals, dependencies | Direction |
-> | 12.7 open questions | Three remain; OQ2 closed 2026-07-29 |
+> | 12.7 open questions | One open — whether the final step array stays a tool |
 > | 12.8 defects | Register. **Do not run `create_workflow` while these stand** |
-> | 12.9 table schemas | Templates committed, **not bootstrapped**; no consumer reads them |
-> | 12.10 distillation | **Settled** — four procedures + one fragment, three interaction points |
-> | 12.11–12.12 worked specimens | Findings stand; **notation parked** — see the banner in §12.11 |
-> | 12.13 the cut list | Register, Sprint 9 A4. The `overstep` rows are the Sprint 10 archetype evidence |
+> | 12.13 the cut list | Register, Sprint 9 A4 |
 
 The proposal is to dissolve `create_workflow` — today a 73-step `PGC_Workflow` row at v85 —
-into a set of tools Novia orchestrates, with workflow design patterns held as searchable
-entities rather than as prose inside prompts.
+into a set of tools Novia orchestrates, with workflow design patterns read from the live
+workflows rather than held as prose inside prompts.
 
 ### 12.1 The measured problem
 
@@ -697,153 +737,13 @@ in `generate_workflow_steps`, 23% of the prompt performs the task the prompt is 
 
 | Category | Present as | Belongs |
 |---|---|---|
-| **Archetype knowledge** | `RAW INPUT PARSING STEPS` (64 lines, pivot tables), `FLAT LOOP PATTERN`, the FK-dependency block, the options/reveals feed rules, the reveal-vs-two-gate boundary, all 16.6 KB of `step_usage_patterns` | Retrieved on relevance |
+| **Shape knowledge** — how one kind of workflow is built | `RAW INPUT PARSING STEPS` (64 lines, pivot tables), `FLAT LOOP PATTERN`, the FK-dependency block, the options/reveals feed rules, the reveal-vs-two-gate boundary, all 16.6 KB of `step_usage_patterns` | Read from a working workflow of that shape |
 | **Orchestration** | `CORRECTION MODE` (59 lines); the revision, consolidation and routing-repair passes in `design_workflow_process`; `PREPARATION-STEP RULE` | Deleted — the agentic loop is the orchestrator |
 | **Registry transcribed as prose** | A hand-maintained list of 20 prompt names; `step_type_contracts` resident in three prompts; a literal CHECK-constraint enum | Queried at need |
 | **Capability instruction** | `TRANSLATION RULES`, `DATA PROVENANCE CHECK`, `SCOPE`, `ECONOMY`, Guards 1 and 3 | Retained |
 
 Corroboration: `analyze_workflow_gaps` is the shortest of the four (75 lines), carries almost
-no archetype content, does one job, and is not a source of recurring defects.
-
-### 12.3 Archetype registry
-
-Six archetypes are recoverable from the existing prompt text — they are already written there,
-as prose, where they cannot be searched, versioned, or selectively retrieved. Four correspond
-to workflows that survive in `PGC_Workflow` today.
-
-| Archetype | Stated today in | Specimen |
-|---|---|---|
-| Select-scope → list → edit-one → save → re-list | `design_workflow_process` (save-and-continue rules), `design_workflow_dialogs` (`action_key`), `workflow_routing_rules` 6b | `edit_budget` |
-| Per-row form, bounded by a gate field ceiling | `design_workflow_process` (data-driven form rule), `design_workflow_dialogs` (data-driven field lists) | `edit_budget` |
-| Hierarchical select — self-referential FK, reveals per parent, options per leaf | `design_workflow_process` (hierarchical trigger), `design_workflow_dialogs` (accordion) | flashcard decks |
-| Stimulus → reveal → rate, one gate | `design_workflow_process` (reveal vs two-gate), `design_workflow_dialogs` (summary-with-details) | `flashcard_quiz_session` |
-| Paste → parse → FK-gap resolve → bulk insert | `design_workflow_process` FK-dependency block; `generate_workflow_steps` raw-input section | `import_budget_spreadsheet` |
-| Query → aggregate → format → report | `analyze_workflow_gaps` (deterministic formatting test), `design_workflow_dialogs` (tabular reveal) | `budget_vs_expense_report` |
-
-The FK-dependency block in `design_workflow_process` is already a parameterised template with
-slots (`load_<ref>_records` → `check_missing_refs` → `has_missing_refs` → `confirm_new_refs` →
-`insert_ref_records`). The system has independently arrived at archetypes and stored them in
-the one place they cannot be used selectively — every generation pays for them, including
-generations with no FK dependency.
-
-#### Procedures and dialog strategies are two tables
-
-The table above, and the six rows seeded from it, mix **procedures** with **presentation
-strategies**. The seed's own text gives it away: `bulk_row_form.design_rules` states that when
-the field product exceeds the gate ceiling *"this archetype does not apply: design a
-list_selection gate to pick ONE row followed by a small form to edit that row"* — which is
-`scoped_row_editor`. One archetype degrading into another on a row count is not two archetypes.
-It is one procedure with two presentations, selected by a computable condition.
-
-| Kind | Definition | Present in the seeded six as |
-|---|---|---|
-| **Procedure** | What the workflow does. Has a verb, a topology, and slots | edit tabular data; iterate and capture per item; ingest, parse, resolve references, insert; query, aggregate, report |
-| **Dialog strategy** | How the user interacts at one interaction point | one-row selector; per-row bulk form; hierarchy as reveals-per-parent with options-per-leaf; one gate with reveal versus two gates; `list_selection` with `item_action`; `choice` with a per-option iterator |
-
-`hierarchical_selector` has no verb — it is a way of presenting a selection that plugs into any
-procedure needing the user to pick a row. `reveal_and_rate` carries a presentation choice in its
-name while its own rules state when two gates should replace the reveal.
-
-An archetype must describe the shape of *editing a table of data*, not of editing one particular
-kind of record. The domain belongs in the slot bindings, never in the archetype.
-
-**Composition:** a procedure declares that an interaction happens at a point in its topology; a
-dialog strategy fills that point. The relationship is compositional rather than taxonomic, so
-they are two tables — `PGC_Archetype` holds procedures, `PGC_DialogStrategy` holds strategies —
-rather than one table with a `kind` discriminator. A discriminator column can record that a row
-is one kind or the other, but it cannot express that a procedure *has* interaction points and a
-strategy *fills one*: the composition would live nowhere. Their columns differ accordingly — a
-procedure carries `topology` and `slots`, a strategy carries the gate shape it emits and
-computable applicability bounds.
-
-`flashcard_quiz_session` v3 is the specimen that makes the composition concrete. It is **one**
-procedure — iterate over items, present a stimulus, capture a response per item, write it — with
-**two different strategies at two different interaction points**:
-
-| Point | Step | Strategy | Emitted gate |
-|---|---|---|---|
-| Select the scope to iterate over | 3 | hierarchy as reveals-per-parent with options-per-leaf | `choice` + `reveals`, options from an `iterator` |
-| Capture the response for one item | 12 | fixed ordered scale, all values visible | `choice`, six authored options |
-
-Neither strategy is derivable from the procedure, and the same two plug into unrelated
-procedures: the step 3 strategy is the same one `edit_budget` uses to pick a period, inside a
-procedure that edits tabular data rather than iterating. One workflow, one procedure, two
-strategies is not representable in one table without the composition becoming implicit.
-
-**Consequence for the preference conversation.** Which dialog strategies are *available* is
-computable from the data — a row count against the gate field ceiling, an option count against
-the threshold past which `choice` renders as a dropdown. Which of the feasible ones is *wanted*
-is genuine user preference: all values as buttons or a dropdown, detail revealed on demand or
-shown inline, one row at a time or the whole table. This is where the preference questions in
-step 2 of the build procedure come from — the applicable templates given the live data — rather
-than from domain research. Model selection for any generated `llm_call` step (`cheap` versus
-`smart`) is the same kind of user-visible preference and should be surfaced, not decided
-silently.
-
-Of the seeded six, `scoped_row_editor`, `paste_parse_resolve_insert` and `aggregate_report` are
-procedures; `hierarchical_selector` and `bulk_row_form` are dialog strategies; `reveal_and_rate`
-is a procedure (iterate and capture per item) fused with the strategy its name carries. The
-rows are `status: draft` and no consumer reads them, so the restructure is a seed rewrite with
-no migration.
-
-#### What a dialog strategy declares — show, ask, draw
-
-An interaction point resolves three separate questions, which `gate_type` currently answers with
-one enum value:
-
-| | Question | Owner |
-|---|---|---|
-| **Show** | What does the user read in order to decide? | Procedure layer — markdown, tables, `reveal`/`reveals`, key-value pairs. No `output_key`, no routing |
-| **Ask** | What is collected, and what does it route to? | Procedure layer — carries `output_key` and/or `on_select` |
-| **Draw** | Which widget carries it? | Experience layer |
-
-Decomposed this way the six gate types stop being types. Three of them exist mostly to describe
-**show**, and the enum is five frozen (show, ask) pairings:
-
-| `gate_type` | Show | Ask |
-|---|---|---|
-| `confirm` | — | acknowledge |
-| `review_object` | key-value pairs | acknowledge |
-| `list_selection` | markdown table | one row from a set |
-| `choice` (+ `reveals`) | reveal panels | one value from a set |
-| `form` | — | n typed values |
-
-**Draw stays in the experience layer** — that half of the partition rule is correct. What is
-missing is its input. `human_gate` gives a workflow no way to characterise an option set beyond
-how many options it holds, so `callback.mjs` renders from a count, and a count cannot separate a
-six-point rating scale from a twelve-month picker (§12.8). The distinguishing property is
-whether the option set is **authored** at design time or **derived** from data at runtime: a
-derived set may hold three entries or three hundred, so collapsing it past a handful is a fair
-trade; an authored ordered scale has a count that is a property of the design, and the
-simultaneous visibility of every value *is* the interaction.
-
-So a strategy declares the properties its emitted gate carries — `option_source`,
-`ordered`, and the bounds below — and the renderer applies mechanics to them: *derived and
-numerous → collapse to a single control; authored and ordered → always inline*. No domain
-vocabulary crosses the boundary; the renderer never learns what a flashcard is. This is the same
-correction Sprint 7 already applied one level down, where a `form` field's `type` names what is
-collected and never a widget — applied there to `form.fields[]` and not to `choice.options[]`.
-
-A `PGC_DialogStrategy` row therefore holds:
-
-| Column | Purpose |
-|---|---|
-| `name`, `description`, `aliases` | Identity and retrieval, as for a procedure |
-| `applicability` | Computable bounds deciding whether this strategy is *feasible* on the live data — option count, field product against the gate ceiling, hierarchy depth |
-| `emits` | The gate shape produced: `gate_type`, and the declared properties the renderer reads |
-| `design_rules` | The strategy-scoped prose extracted from `design_workflow_dialogs`, loaded only on selection |
-
-Feasibility is computed; which feasible strategy is *wanted* is the preference question above.
-
-**Storage.** Both tables carry a vector column with `embed_source`, which gains semantic
-search with no code change (`architecture.md` §10) and is reachable through the existing
-`vectorSearch` descriptor on `getRows`. Both are data, so Novia adding a row is an insert, not a
-deploy — consistent with the Static System vs Evolving Artifacts boundary and with her Extender
-role (§1.2).
-
-**Effect on the phases.** On a matched archetype, process design narrows to binding schema
-columns to declared slots, and translation may reduce to a deterministic template fill with
-no LLM call at all.
+no shape knowledge, does one job, and is not a source of recurring defects.
 
 ### 12.4 The phases become guidelines, not tools
 
@@ -864,7 +764,6 @@ and the phases can go back to being what they describe: an order of work.
 |---|---|
 | `simulate_workflow` — L1/L2 over a candidate step array | research and option-framing |
 | `query_table`, `run_sql` — read the data the workflow will operate on | gap analysis |
-| `search_archetypes` — match a shape (new) | process design |
 | `validate_workflow_shape` — L0 structural validation (new) | dialog design |
 | `register_workflow` — write `PGC_Workflow` + `PGC_IntentMap` (new, gated) | |
 
@@ -883,13 +782,14 @@ depart from with cause, not a topology:
 2. **Propose and choose, with the user.** Surface the options that materially change the shape
    of the workflow, framed against what the data showed, and settle them in conversation. Only
    raise a question whose answer changes the design.
-3. **Match an archetype.** On a match, its `design_rules` and `topology` load; on no match,
-   design the sequence from the capability instruction.
+3. **Read a working workflow of the same shape.** `read_workflow` on the closest existing
+   workflow gives a topology that already runs; with none, design the sequence from the
+   capability instruction.
 4. **Settle the shape, and test its assumptions against the data.** Where the topology comes
    from depends on step 3:
-   - **Archetype matched** — there is no skeleton to build. `topology` is retrieved and was
-     validated when the archetype was authored. Bind slots and move to content.
-   - **No match** — sketch the flow and run L0 and L1 on the sketch immediately. Both are
+   - **Shape taken from a working workflow** — its topology already runs. Adapt it to this
+     domain's tables and move to content.
+   - **No workflow of this shape** — sketch the flow and run L0 and L1 on the sketch immediately. Both are
      deterministic, need no LLM, and cost nothing to repeat. Then **describe the shape to the
      user in plain language before investing in content.** A workflow whose save button routes
      forward instead of back is a perfectly well-formed graph — reachable, terminating, no dead
@@ -922,8 +822,8 @@ be a rule generalised from the workflows that happened to have loops.
 
 - **How to build any workflow** — a `PGC_SystemContext` row injected into
   `minds_eye_system_prompt`. Always resident, so it must stay small.
-- **How this shape of workflow behaves** — `PGC_Archetype.design_rules`, loaded only on a
-  match (§12.9).
+- **How this shape of workflow behaves** — a working workflow of that shape, read with
+  `read_workflow`.
 - **What the engine will accept** — queried, not transcribed: `PGC_StepType`, `PGC_Prompt`,
   `PGC_Schema`.
 
@@ -932,7 +832,7 @@ Dialog design is the clearest case, because the current prompt fuses all three:
 | Knowledge | Source | Loaded |
 |---|---|---|
 | Gate types; `form` is the only type that collects input; `output_key` writes only on form, confirm-with-`context_key`, and choice; a field `type` names what is collected, never a widget; option-count caps; `list_selection` requires `item_action` | `PGC_StepType` `human_gate` contract | Queried |
-| Reveal versus two gates; hierarchy as reveals-per-parent with options-per-leaf; per-option `iterator` for data-driven buttons; per-row form and its field ceiling | `PGC_Archetype.design_rules` | On match |
+| Reveal versus two gates; hierarchy as reveals-per-parent with options-per-leaf; per-option `iterator` for data-driven buttons; per-row form and its field ceiling | A working workflow of that shape | Read on demand |
 | The fields are the display — do not restate field values in the message body | `PGC_SystemContext` | Always |
 
 Gate mechanics are currently asserted in three places — the `human_gate` contract in
@@ -990,13 +890,9 @@ L0 belongs to the Validation fault domain and is system code, consistent with th
 ### 12.7 Open questions
 
 **Direction set — `create_workflow` is dissolved outright**, rather than retained as a
-deterministic path for archetype-matched requests. Gated on evaluating Novia's capability first:
+deterministic path. Gated on evaluating Novia's capability first:
 the hybrid stays available as a fallback only if that evaluation fails, and is not designed for
 in advance.
-
-**Settled — procedures and dialog strategies are two tables**, `PGC_Archetype` and
-`PGC_DialogStrategy` (§12.3). They compose rather than classify, and a `kind` discriminator on
-one table cannot express the composition.
 
 Remaining open:
 
@@ -1018,19 +914,10 @@ Remaining open:
    quantity OQ1 actually names, is not $1.42 for the baseline either.
    **The dissolution decision should not be taken on this number as it stands.** Re-measure after
    the prefix-cache fix, on a build that does not pay for defects since closed.
-2. Whether `reconcile_missing_rows` earns its place as a shared fragment. Its two instances
-   share a topology but differ in gap computation, target count and whether the inserted ids are
-   needed, so its `gap` slot is an expression rather than a table or column binding (§12.12).
-   Revisit once a third instance exists.
-3. Whether a generated gate names the strategy that produced it or declares the properties that
-   strategy implies (§12.3). Naming it couples step JSON to the registry and makes the
-   experience layer a consumer of the registry; declaring properties keeps the registry a
-   design-time artifact the renderer never needs to know exists.
-4. Whether producing the final step array stays a tool. It is bulk mechanical output, which suits
-   a focused single-shot call and keeps a large JSON artifact out of the transcript — but on a
-   matched archetype it may be a deterministic fill needing no LLM call at all. The only phase
-   whose side of the tool/guidance line is undecided.
-5. ◐ **Partly answered — Sprint 9 raised all three budgets and none was the one that binds.**
+2. Whether producing the final step array stays a tool. It is bulk mechanical output, which suits
+   a focused single-shot call and keeps a large JSON artifact out of the transcript. The only
+   phase whose side of the tool/guidance line is undecided.
+3. ◐ **Partly answered — Sprint 9 raised all three budgets and none was the one that binds.**
    `turn_limit` 8 → 12, `max_actions_per_session` 5 → 8, `max_output_tokens` 8192 → 10240 (which
    was absent from `minds_eye_preferences` entirely and falling through to a default). But the
    round runs its turns inside **one 240s Lambda invocation**, so a round dies at turn 3–4 and
@@ -1038,7 +925,7 @@ Remaining open:
    room to finish. **Session compression at the turn-limit gate remains unexercised**, because a
    round still cannot reach that gate — it carries to Sprint 10 behind the transcript fix, which
    is what makes turns cheap enough for a round to get there.
-6. ✅ **CLOSED — Sprint 9, B1. A `level` selector, not a new tool.** L0 is `level: 0` on
+4. ✅ **CLOSED — Sprint 9, B1. A `level` selector, not a new tool.** L0 is `level: 0` on
    `runSimulation` and on the existing `/proc/simulate-workflow` endpoint, so "validate, then
    simulate" is `simulate_workflow { steps, level: 0 }` with no new surface for Novia to learn.
    The `skeleton: true` flag it replaces is gone from the engine and accepted only as a retired
@@ -1090,561 +977,7 @@ Found 2026-07-29, in the gate contract rather than the design prompts:
   workflow could say the set is authored and ordered. Raising the threshold to six would be a
   rule generalised from one specimen and fails at the next one. The discriminating property is
   already present in the step JSON by accident: the gates that should collapse carry an
-  `iterator` on their options and the one that should not does not (§12.3).
-
-### 12.9 `PGC_Archetype` and `PGC_DialogStrategy` — implementation outline
-
-A seventeenth and eighteenth PGC table. System config, so `PGC_` prefixed, `target: pgc`, and
-subject to the same bootstrap-and-seed treatment as the existing sixteen. `PGC_Archetype` holds
-procedures, `PGC_DialogStrategy` holds the strategies that fill their interaction points
-(§12.3).
-
-#### `PGC_Archetype` shape
-
-Modelled on `PGC_DomainHelp`, which is the existing table that combines a registry with
-semantic retrieval.
-
-| Column | Type | Purpose |
-|---|---|---|
-| `id` | serial PK | |
-| `name` | text, not null, unique | Stable identifier, snake_case |
-| `description` | text | One line — what shape of workflow this is |
-| `aliases` | jsonb, default `'[]'` | Retrieval vocabulary. **This is what the embedding is built from** |
-| `preconditions` | jsonb, default `'{}'` | Machine-checkable applicability, so matching is not purely semantic — e.g. the source table carries a self-referential FK, or the request names an existing populated table |
-| `slots` | jsonb, not null, default `'[]'` | Declared **data** bindings the archetype needs — table, columns, labels, ceilings. One entry per slot: name, type, how it is resolved |
-| `interaction_points` | jsonb, not null, default `'[]'` | The named holes in `topology` where the user interacts. One entry per point: name, what is being decided, which slot supplies its data. A `PGC_DialogStrategy` row fills one |
-| `topology` | jsonb, not null, default `'[]'` | The step skeleton — step_labels, step types, routing fields, slot tokens, and interaction points as holes rather than specified gates. Same shape as the `routing_skeleton` the current pipeline builds at step 21a |
-| `design_rules` | text | The archetype-scoped prose extracted from the four prompts. Injected **only** when this archetype is selected |
-| `source_workflow` | text, nullable | Provenance — the specimen it was derived from |
-| `status` | text, default `'live'` | `live` / `draft`, mirroring `PGC_StepType` |
-| `version` | integer, default 1 | |
-| `created_by` | text | `seed` or `novia` |
-| `embedding` | vector, nullable | `embed_source: ["aliases"]` |
-| `created_at` / `updated_at` | timestamptz, default `now()` | With the standard `set_updated_at()` trigger |
-
-**`embed_source` must name array columns.** `resolveEmbedding` in `table.mjs` uses only
-array-type source fields — scalar columns listed there contribute nothing, because generic
-description text pulls the centroid away from user vocabulary (`architecture.md` §10). So
-`aliases` has to carry the retrieval terms; listing `name` or `description` alongside it would
-be inert.
-
-**`design_rules` is the destination for the extracted category-1 content** in §12.2. Its value
-is that it is *conditional*: the FK-dependency block is loaded when the FK archetype matches
-and not otherwise, which is the whole difference from the prose-in-prompt arrangement.
-
-#### `PGC_DialogStrategy` shape
-
-Identical in its registry and retrieval columns — `id`, `name`, `description`, `aliases`,
-`design_rules`, `source_workflow`, `status`, `version`, `created_by`, `embedding`, timestamps —
-so the same `embed_source: ["aliases"]` rule applies. It differs where the two kinds of thing
-differ (§12.3): no `topology`, no `slots`, no `interaction_points`, and instead —
-
-| Column | Type | Purpose |
-|---|---|---|
-| `applicability` | jsonb, not null, default `'{}'` | Machine-checkable bounds deciding whether this strategy is *feasible* against the live data — option count, field product against the gate ceiling, hierarchy depth. Evaluated after the row counts of step 1 of the build procedure, so feasibility is computed rather than guessed |
-| `emits` | jsonb, not null, default `'{}'` | The gate shape produced: `gate_type`, and the declared properties the experience layer reads to choose a widget (`option_source`, `ordered`) |
-
-`applicability` and `preconditions` on `PGC_Archetype` are the same kind of column serving
-different questions: `preconditions` asks whether a procedure *fits the request*, `applicability`
-asks whether a strategy *fits the data at one point*. A procedure is matched once per build; a
-strategy is matched once per interaction point.
-
-#### Creation path — one path, not two
-
-`createTableFromTemplate` issues `CREATE TABLE IF NOT EXISTS`, so bootstrap is idempotent and
-re-running it on the live instance creates only the tables that are missing. There is no need
-for a separate `schema/createTable` call, and none should be made — both tables are created the
-same way the other sixteen were:
-
-1. `src/serv/templates/pgc/PGC_Archetype.json` and `PGC_DialogStrategy.json` — static ES module
-   imports in `init-brain.mjs`, appended to `PGC_TEMPLATES`. Bundled by esbuild, never read
-   via `fs`.
-2. Registration rows appended to `seed_PGC_Schema.json` and `seed_PGC_TableMap.json`, one pair
-   per table. `PGC_TableMap` is not optional: `table.mjs` gates all row access on it, and
-   `seedPGCTableMap` skips any table with no `PGC_Schema` row, so both are required.
-3. `POST /api/v1/serv/bootstrap` after deploy. Existing tables report as already present.
-
-#### Seeding and maintenance
-
-- `seed_PGC_Archetype.json` (procedures) and `seed_PGC_DialogStrategy.json` (strategies) in
-  `src/serv/templates/pgc/seeds/`, seeded by `seedPGCArchetype` and `seedPGCDialogStrategy` as
-  bootstrap steps 12 and 13.
-- `ON CONFLICT (name) DO UPDATE` on the seeded columns. `created_by` is deliberately excluded
-  so a row Novia authored keeps its provenance if it is later moved into the seed file.
-  Rows Novia writes are not in the seed file and are never touched by bootstrap.
-- `dev_scripts/upsert-archetype.mjs` and `dev_scripts/upsert-dialog-strategy.mjs`, following
-  the `upsert-step-type.mjs` pattern — content-fingerprint comparison, then `updateRows` or
-  `insertRow`. Seeded rows are never edited by direct `updateRows`.
-- The script never writes `embedding`. SERV computes it from `embed_source` on insert, and on
-  any update whose payload touches `aliases`. Rows inserted before the column was populated
-  need `dev_scripts/backfill-embeddings.mjs`, which currently targets `PGC_DomainHelp` only and
-  would need extending.
-
-#### Access
-
-- **Read** — no new endpoint. `getRows` on either table with a `vectorSearch` descriptor against
-  `embedding`. Vector columns are stripped from `getRows` responses, so the payload stays small.
-  Surfaced to Novia as two read tools, `search_archetypes` and `search_dialog_strategies`,
-  alongside the existing `query_table` / `run_sql`. They are separate tools because they are
-  called at different moments — a procedure once per build, a strategy once per interaction
-  point — and a single tool would have to be told which it was searching for.
-- **Write** — `insertRow` / `updateRows`. Novia adding a row to either table is a system-config
-  change, so it belongs in `GATED_WRITE_TOOLS` (§4.2) rather than executing inline.
-- **Threshold** — `PGC_DomainHelp` uses 0.40 for `pplx-embed-v1-4b`, calibrated against domain
-  aliases. Both tables' aliases describe workflow shapes and interaction shapes rather than
-  domain nouns, so each needs its own calibration against real requests and neither should be
-  assumed to carry over.
-
-#### Documentation required at implementation
-
-- `docs/arch-data.md` — both PGC table definitions and any curl additions to §5.5.
-- `docs/architecture.md` — §1.5 PGC table groups; §3.4 directory listing for the two dev scripts.
-- `openapi.yaml` — no change expected; both tables are reached through the generic `getRows` /
-  `insertRow` routes.
-
-### 12.10 Distillation of the four surviving workflows (OQ3)
-
-Read 2026-07-29 from the live `PGC_Workflow` rows: `edit_budget` v1 (12 steps),
-`flashcard_quiz_session` v3 (21), `import_budget_spreadsheet` v1 (16),
-`budget_vs_expense_report` v5 (15). These four are the entire surviving output of 98
-`create_workflow` runs, so they are the whole evidence base for what `topology`, `slots` and
-`interaction_points` hold.
-
-#### Interaction points are real and separable
-
-Eight human gates across the four workflows reduce to **three** interaction points, filled by
-**five** different strategies:
-
-| Interaction point | Instances | Strategies observed |
-|---|---|---|
-| **select_scope** — narrow the data to operate on | `edit_budget` 3, `budget_vs_expense_report` 1, `flashcard_quiz_session` 3 | `choice` with an option `iterator` over twelve periods; `text_input` free prose; `choice` with `iterator` + `reveals` as hierarchy |
-| **approve_writes** — confirm rows before they are written | `import_budget_spreadsheet` 8 and 12, `budget_vs_expense_report` 8 | `confirm` in all three |
-| **capture_values** — collect the user's input for the current scope or item | `edit_budget` 7, `flashcard_quiz_session` 12 | `form`, one field pair per row; `choice`, fixed ordered scale |
-
-One point filled three different ways in three unrelated procedures is the composition model
-working. It also exposes a defect that only becomes visible once the point is named: **the same
-decision is made well in one workflow and badly in another.** `edit_budget` step 3 selects a
-year-month period with a deterministic picker built from rows that already exist.
-`budget_vs_expense_report` step 1 collects the same kind of value as free prose, and step 2
-exists solely to parse it back apart.
-
-That is the derive-before-consume defect in its resolved form, and it shows the defect class is
-**structural rather than instructional**. A composite value only needs decomposing because a
-strategy collected it composite. Bind `select_scope` to a typed picker and step 2 has nothing to
-do — the whole class disappears without a prompt rule, a validator, or the bounded-drift
-relaxation that was Sprint 9's candidate lead item.
-
-#### Procedures nest
-
-One sub-shape appears inside two unrelated procedures, in the same order both times:
-
-| | `import_budget_spreadsheet` | `budget_vs_expense_report` |
-|---|---|---|
-| load existing reference rows | 5 | 3, 4, 5 |
-| compute the gap | 6 | 6 |
-| gate on whether there is one | 7 | 7 |
-| confirm the additions | 8 | 8 |
-| insert them | 9 | 9, 9a |
-| reload and bind ids | 10, 11 | — |
-
-This is the FK-dependency block §12.3 identified as already being a parameterised template,
-confirmed live. It has a verb, a topology and slots, so it satisfies the definition of a
-procedure — it simply is not a whole workflow. **A procedure's `topology` may therefore reference
-another procedure.** Composition stays within `PGC_Archetype`; no third table is needed. Written
-out in §12.12 the reference resolves to a build-time `include` rather than a call, and the
-fragment is named `reconcile_missing_rows` — the second instance has no foreign key in it, so the
-FK framing inherited from `design_workflow_process` is too narrow.
-
-#### How many procedures there are
-
-Four top-level, one nested — against six seeded rows:
-
-| Procedure | Specimen |
-|---|---|
-| `scoped_row_editor` — select a scope, list its rows, edit, save, return to the refreshed list | `edit_budget` |
-| `iterate_and_capture` — select a scope, walk its items, capture a response per item, write it | `flashcard_quiz_session` |
-| `ingest_and_insert` — accept pasted data, parse it, resolve references, bulk insert | `import_budget_spreadsheet` |
-| `aggregate_report` — query, aggregate, format deterministically, present | `budget_vs_expense_report` |
-| `reconcile_missing_rows` — nested; inlined by the two above that need it | `import_budget_spreadsheet` 5–11 |
-
-`hierarchical_selector` and `bulk_row_form` move to `PGC_DialogStrategy` whole.
-`reveal_and_rate` splits: its procedure half becomes `iterate_and_capture`, its presentation half
-becomes a strategy on `capture_values`.
-
-#### Slots
-
-Recurring data bindings, from what the four actually bind:
-
-| Slot | Appears as |
-|---|---|
-| `source_table` + `rows` | Every workflow's opening `serv_query` |
-| `scope_columns` | `year` + `month`; `deck_id` |
-| `label_column` | The column standing in for a row in a picker or table |
-| `grouping_column` | `type` in both budget workflows — drives both display grouping and subtotals |
-| `write_target` + `natural_key` | `serv_upsert` matched on `(year, month, category_id)` |
-| `reference_table` + `reference_key` | `reconcile_missing_rows` callers only — the table whose rows may be missing, and the column matched on |
-
-`grouping_column` is the one that carries into presentation as well as data: it groups the
-`edit_budget` form, the report's subtotals, and the quiz's parent/child reveal panels. Whether it
-is one slot read by two consumers or two slots is unsettled.
-
-#### Variance that is not procedural
-
-Terminal and label conventions differ across all four — `budget_vs_expense_report` labels a step
-`"end"`, `import_budget_spreadsheet` carries two `end` steps (one for the cancel path, one for
-success), `edit_budget` one; step labels include `"9a"`. Routing field usage is consistent:
-`condition` steps route on `on_success` / `on_else` in all four, never `on_true` / `on_false`.
-None of this belongs in `topology` — it is translation-stage noise, and normalising it is L0's
-job (§12.4).
-
-### 12.11 `scoped_row_editor` written out
-
-> **The notation below is parked (2026-07-29).** `{{slot:name}}`, and `include` / `for_each` in
-> §12.12, are an invented mini-language — the violation pattern `CLAUDE.md` names: inventing a
-> custom syntax and then needing rules to make an LLM emit it. Novia can already write code; what
-> she lacks is this system's conventions, so Sprint 9 writes a convention bridge instead and lets
-> archetypes follow from what real builds turn out to need. The **findings** in §12.11 and §12.12
-> stand as evidence — a strategy expands an interaction point, nesting is inlining, the shared
-> fragment is not about foreign keys, and the specimen defects are live. The notation does not.
-
-The worked specimen that settles the `topology` notation, derived from `edit_budget` v1. Written
-from the shape the procedure should have, not transcribed from the specimen — three defects in
-`edit_budget` are recorded at the end and are not carried in.
-
-#### Not every step in a workflow is a procedure step
-
-Mapping `edit_budget`'s twelve steps against the procedure reveals a third category. Four of
-them exist only to build or decode the payload of an adjacent gate:
-
-| Step | Belongs to | Why |
-|---|---|---|
-| 1 `serv_query` summaries | Procedure | The procedure needs the set of scopes to choose from |
-| 2 `js_transform` → `period_options`, `period_summaries_table` | **Strategy** | Builds the option array and the markdown table one particular picker renders |
-| 3 `human_gate` choice | Interaction point | `select_scope` |
-| 4 `serv_query` categories | Procedure | The reference rows that become the editable line items |
-| 5 `serv_query` existing budgets | Procedure | The current values in scope — the loop return target |
-| 6 `js_transform` → `form_fields` | **Strategy** | Emits one `amount_<id>` / `notes_<id>` field pair per reference row |
-| 7 `human_gate` form | Interaction point | `capture_values` |
-| 8 `js_transform` → `upsert_rows` | **Strategy** | Decodes the same invented field names back into rows |
-| 9 `serv_upsert` | Procedure | The write |
-| 10 `condition` on `action_key` | Procedure | Save-and-continue loop |
-| 11 `notify`, 12 `end` | Procedure | Terminal |
-
-Steps 6 and 8 are a matched pair: the field-name convention `amount_<id>` is invented by 6 and
-understood only by 8. Neither is meaningful without the other, and both are meaningless to a
-procedure that binds a different strategy to the same point. **A strategy expands an interaction
-point into prep steps, a gate, and decode steps** — so a procedure's `topology` is materially
-shorter than the workflow built from it. `scoped_row_editor` is nine entries; `edit_budget` is
-twelve.
-
-This is also what the Sprint 9 candidate lead item was fighting. Translation "adding steps" past
-a locked skeleton is a strategy expanding a hole, and the step-count drift that triggered
-rejection is the expansion becoming visible at the wrong stage.
-
-#### Slots
-
-```json
-[
-  { "name": "source_table",      "type": "table",   "resolved_from": "request",        "required": true },
-  { "name": "scope_source",      "type": "table",   "resolved_from": "schema",         "required": true,
-    "note": "Where scope candidates are read from — often a view aggregating source_table" },
-  { "name": "scope_columns",     "type": "columns", "resolved_from": "schema",         "required": true },
-  { "name": "scope_order",       "type": "orderBy", "resolved_from": "schema",         "required": false },
-  { "name": "reference_table",   "type": "table",   "resolved_from": "schema",         "required": true,
-    "note": "One editable line item per row of this table" },
-  { "name": "reference_label",   "type": "column",  "resolved_from": "pickLabelColumn","required": true },
-  { "name": "reference_group",   "type": "column",  "resolved_from": "schema",         "required": false,
-    "note": "Groups the line items for display and any subtotals" },
-  { "name": "editable_columns",  "type": "columns", "resolved_from": "request",        "required": true },
-  { "name": "natural_key",       "type": "columns", "resolved_from": "schema",         "required": true },
-  { "name": "soft_delete_column","type": "column",  "resolved_from": "schema",         "required": false }
-]
-```
-
-`reference_group` is the `grouping_column` §12.10 left unsettled. Written out, it is one slot
-read by two consumers — the procedure never uses it, both the display strategy and any subtotal
-formatting do — which is consistent with it staying a data slot rather than splitting.
-
-#### Interaction points
-
-```json
-[
-  {
-    "name": "select_scope",
-    "decides": "which scope the edit applies to",
-    "data_from": ["scope_candidates"],
-    "produces": [
-      { "key": "selected_scope", "shape": "one value per scope_columns entry" }
-    ],
-    "constraint": "Must yield one value per scope_columns entry. A strategy that returns a single composite value does not satisfy this point."
-  },
-  {
-    "name": "capture_values",
-    "decides": "new values for editable_columns across every reference row in scope",
-    "data_from": ["reference_rows", "scope_rows"],
-    "produces": [
-      { "key": "write_payload", "shape": "array of rows keyed by natural_key" },
-      { "key": "edit_action",   "shape": "which control the user used" }
-    ]
-  }
-]
-```
-
-`produces` is the contract between a strategy and the procedure: the procedure writes
-`{{write_payload}}` without knowing which strategy built it. `constraint` on `select_scope` is
-derive-before-consume made structural — a picker binding one value per scope column satisfies it,
-free prose returning `"YYYY-MM"` does not, and nothing downstream needs a decomposition step
-either way.
-
-#### Topology
-
-```json
-[
-  { "step_label": "load_scope_candidates", "step_type": "serv_query",
-    "input":   { "tableName": "{{slot:scope_source}}", "orderBy": "{{slot:scope_order}}" },
-    "output_key": "scope_candidates",
-    "on_success": "select_scope", "on_else": "cancel" },
-
-  { "interaction_point": "select_scope",
-    "on_success": "load_reference_rows", "on_cancel": "cancel" },
-
-  { "step_label": "load_reference_rows", "step_type": "serv_query",
-    "input":   { "tableName": "{{slot:reference_table}}" },
-    "output_key": "reference_rows",
-    "on_success": "load_scope_rows", "on_else": "cancel" },
-
-  { "step_label": "load_scope_rows", "step_type": "serv_query",
-    "input":   { "tableName": "{{slot:source_table}}", "filters": "{{scope_filters}}" },
-    "output_key": "scope_rows",
-    "on_success": "capture_values", "on_else": "cancel" },
-
-  { "interaction_point": "capture_values",
-    "on_success": "write_rows", "on_cancel": "cancel" },
-
-  { "step_label": "write_rows", "step_type": "serv_upsert",
-    "input":   { "tableName": "{{slot:source_table}}", "rows": "{{write_payload}}",
-                 "matchColumns": "{{slot:natural_key}}" },
-    "output_key": "write_result",
-    "on_success": "continue_or_finish", "on_else": "cancel" },
-
-  { "step_label": "continue_or_finish", "step_type": "condition",
-    "expression": "{{edit_action}} === 'save'",
-    "on_success": "load_scope_rows", "on_else": "notify_saved" },
-
-  { "step_label": "notify_saved", "step_type": "notify", "on_success": "end" },
-
-  { "step_label": "end", "step_type": "end" }
-]
-```
-
-What the notation has to carry, established by writing it:
-
-- **`step_label` is a name, never an ordinal.** The loop target is `load_scope_rows`, not `5`.
-  Ordinals are why `budget_vs_expense_report` has a step called `9a`.
-- **Two token namespaces.** `{{slot:name}}` is filled once at build time from `slots` and never
-  reaches the runtime resolver; `{{name}}` is ordinary `local_state`. The colon cannot occur in a
-  `local_state` path, so the two cannot collide.
-- **An interaction point is an entry, not a step.** It carries routing and nothing else — no
-  `gate_type`, no `output_key`, no `message_template`. All of that arrives with the strategy.
-- **The loop returns to a procedure step, not to a point.** `continue_or_finish` routes to
-  `load_scope_rows` so the re-read happens before the point is re-entered. Scope is chosen once.
-- **No nested procedure reference is exercised here.** `scoped_row_editor` needs none; the
-  notation for one is still open (§12.7).
-
-#### Defects in the specimen, not carried into the topology
-
-Found while writing this out. Artifact repairs to `edit_budget`, not backlog items, except where
-noted.
-
-- **Step 5 queries a scope that cannot match.** `selected_period` is the string `"2026-07"`, and
-  step 5 filters on `{{selected_period.0}}` and `{{selected_period.1}}`. `resolvePath` in
-  `template-resolver.mjs` applies a numeric key to a non-array by falling through to `cur[key]`,
-  so these resolve to `"2"` and `"0"` — the query asks for year 2, month 0 and returns nothing on
-  every run. The form at step 7 is therefore always built from an empty `existing_budgets`, so
-  saved values never reappear on a loop iteration. Steps 6 and 8 split the same value correctly
-  with `.split('-')`. This confirms the proposed L1 check for `{{key.N}}` indexing on non-arrays
-  as a live defect rather than a hypothetical one, and it is a third instance of the
-  `select_scope` composite-value root cause.
-- **Step 1's filter excludes two thirds of the year.** `year lte 2026 AND month lte 7` matches no
-  month after July in any year, and `limit: 13` caps what survives. Both values were frozen at
-  generation time, as is `var currentPeriod = '2026-07'` hard-coded in step 2, so the workflow
-  degrades silently as soon as the date moves. The row-limit half is the query row-limit
-  discipline item already carried from Sprint 8.
-- **Step 3 emits no `action` on its iterated option**, so `action_key` could not be added to that
-  gate without ambiguity. Not currently reached, since scope is chosen once.
-
-### 12.12 `ingest_and_insert` written out
-
-Derived from `import_budget_spreadsheet` v1, the specimen that exercises the shared sub-shape
-§12.10 identified. Writing it out refines that finding in two ways.
-
-#### The shared sub-shape is not about foreign keys
-
-§12.10 named it `resolve_missing_references`, inherited from the FK-dependency framing in
-`design_workflow_process`. The second instance does not involve a foreign key at all:
-`budget_vs_expense_report` steps 3–9a materialise budget and expense rows from recurring
-templates into the data tables the report then reads. Nothing is being resolved for an FK; rows
-are being made to exist before something depends on them.
-
-What the two instances actually share is the topology — load what exists, compute the gap, gate
-on whether there is one, confirm, insert — so it is renamed **`reconcile_missing_rows`**.
-
-| | `import_budget_spreadsheet` | `budget_vs_expense_report` |
-|---|---|---|
-| Target of the insert | A reference table | The data tables read downstream |
-| How the gap is computed | Set difference on a name column | Derivation from recurring templates for a period |
-| Insert targets under one gate | 1 | 2 |
-| Needs the inserted ids afterwards | Yes — steps 10, 11 reload and bind | No |
-
-#### Nesting is inlining, not calling
-
-Only the topology is genuinely shared. The gap computation differs materially between the two
-instances, the target count differs, and one instance needs an id-binding tail the other does
-not. A call-and-return contract — a `returns` binding, a resolved set handed back — is heavier
-than that evidence supports, and it would put a runtime indirection in the way of what §12.4
-wants to be a deterministic template fill.
-
-So a nested procedure is **inlined at build time**. The fragment declares the `local_state` keys
-it writes; the caller reads them directly, as it reads any other step's output. There is no
-return value and no call frame.
-
-```json
-{ "include": "reconcile_missing_rows",
-  "bind": {
-    "existing_source": "{{slot:reference_table}}",
-    "gap":             "{{slot:reference_gap}}",
-    "targets":         ["{{slot:reference_table}}"]
-  },
-  "on_success": "bind_reference_ids", "on_cancel": "abort" }
-```
-
-Three consequences the exercise forces:
-
-- **`targets` is a list, and the gate covers all of it.** `budget_vs_expense_report` has one
-  confirm gate and two `serv_insert` steps. The fragment's insert entry expands once per bound
-  target; its interaction point does not.
-- **A fragment carries its own interaction point.** `approve_additions` belongs to
-  `reconcile_missing_rows`, not to either caller, and surfaces to the build alongside the
-  caller's own points so a strategy can be bound to it.
-- **`gap` is a slot of type `expression`.** This is a weaker parameterisation than
-  `scoped_row_editor`'s slots, which are all tables and columns. Whether two instances differing
-  this much earn a shared fragment, or are better left as two whole topologies, is worth
-  revisiting once a third instance exists.
-
-#### `reconcile_missing_rows`
-
-Slots: `existing_source` (table), `gap` (expression), `targets` (list of table).
-Writes: `existing_rows`, `gap_rows`, `inserted_rows`, `resolved_rows`.
-
-```json
-[
-  { "step_label": "load_existing", "step_type": "serv_query",
-    "input": { "tableName": "{{slot:existing_source}}" },
-    "output_key": "existing_rows",
-    "on_success": "compute_gap", "on_else": "abort" },
-
-  { "step_label": "compute_gap", "step_type": "js_transform",
-    "expression": "{{slot:gap}}",
-    "output_key": "gap_rows",
-    "on_success": "has_gap" },
-
-  { "step_label": "has_gap", "step_type": "condition",
-    "expression": "{{gap_rows.length}} > 0",
-    "on_success": "approve_additions", "on_else": "reload_resolved" },
-
-  { "interaction_point": "approve_additions",
-    "on_success": "insert_missing", "on_cancel": "abort" },
-
-  { "step_label": "insert_missing", "step_type": "serv_insert",
-    "for_each": "{{slot:targets}}",
-    "input": { "tableName": "{{each}}", "rows": "{{gap_rows}}" },
-    "output_key": "inserted_rows",
-    "on_success": "reload_resolved", "on_else": "abort" },
-
-  { "step_label": "reload_resolved", "step_type": "serv_query",
-    "input": { "tableName": "{{slot:existing_source}}" },
-    "output_key": "resolved_rows",
-    "on_success": "return", "on_else": "abort" }
-]
-```
-
-`reload_resolved` runs on both branches so `resolved_rows` is populated whether or not anything
-was inserted — a caller that needs the ids gets them, and one that does not pays a single query.
-`budget_vs_expense_report` omits this step; keeping it in the fragment is what makes the two
-instances one shape.
-
-#### `ingest_and_insert`
-
-Slots: `target_table`, `natural_key`, `parse_prompt`, `reference_table`, `reference_key`,
-`reference_gap`.
-
-```json
-[
-  { "step_label": "derive_parse_defaults", "step_type": "js_transform",
-    "expression": "runtime date decomposed into the units {{slot:parse_prompt}} declares",
-    "output_key": "parse_defaults",
-    "on_success": "parse_input" },
-
-  { "step_label": "parse_input", "step_type": "llm_call",
-    "input": { "prompt": "{{slot:parse_prompt}}", "user_input": "{{input.userInput}}",
-               "defaults": "{{parse_defaults}}" },
-    "output_key": "parsed",
-    "on_success": "check_parse_errors", "on_else": "abort" },
-
-  { "step_label": "check_parse_errors", "step_type": "condition",
-    "expression": "{{parsed.validation_errors.length}} > 0",
-    "on_success": "report_parse_errors", "on_else": "resolve_references" },
-
-  { "step_label": "report_parse_errors", "step_type": "notify",
-    "on_success": "abort" },
-
-  { "include": "reconcile_missing_rows",
-    "bind": { "existing_source": "{{slot:reference_table}}",
-              "gap":             "{{slot:reference_gap}}",
-              "targets":         ["{{slot:reference_table}}"] },
-    "on_success": "bind_reference_ids", "on_cancel": "abort" },
-
-  { "step_label": "bind_reference_ids", "step_type": "js_transform",
-    "expression": "join {{parsed}} to {{resolved_rows}} on {{slot:reference_key}}",
-    "output_key": "write_payload",
-    "on_success": "approve_writes" },
-
-  { "interaction_point": "approve_writes",
-    "on_success": "write_rows", "on_cancel": "abort" },
-
-  { "step_label": "write_rows", "step_type": "serv_upsert",
-    "input": { "tableName": "{{slot:target_table}}", "rows": "{{write_payload}}",
-               "matchColumns": "{{slot:natural_key}}" },
-    "output_key": "write_result",
-    "on_success": "notify_done", "on_else": "abort" },
-
-  { "step_label": "notify_done", "step_type": "notify", "on_success": "end" },
-  { "step_label": "end",   "step_type": "end" },
-  { "step_label": "abort", "step_type": "end" }
-]
-```
-
-Notation added beyond §12.11: `include` with `bind`; `for_each` over a list-valued slot with
-`{{each}}` inside the entry; and two named terminals, `end` and `abort`, since `on_else` on every
-step needs somewhere to land that is not the success path. `import_budget_spreadsheet` already
-has both terminals (steps 15 and 16) — it just numbers them.
-
-`approve_writes` is the same interaction point as in `budget_vs_expense_report` step 8, filled by
-`confirm` in both, which is the third point from §12.10 appearing in a second procedure.
-
-#### Defects in the specimen, not carried into the topology
-
-- **Step 9 inserts strings where rows are required.** `missing_category_names` is an array of
-  names from step 6, passed as `input.row` to a `serv_insert` on `PGD_SpendingCategories`. The
-  column is `name`; an array of bare strings cannot populate it. The gap computation returns
-  identifiers where the insert needs row objects — which is why `reconcile_missing_rows` above
-  keeps `gap_rows` and the insert payload as the same shape.
-- **The current date is frozen at generation time**, twice: step 1 computes defaults from
-  `new Date('2026-07-02')` and step 2 passes the literal string `"Thursday, July 2, 2026"` to the
-  parse prompt. Same class as `edit_budget` step 2 (§12.11) — a third instance, so it is a
-  generation habit rather than a one-off.
-- **Step 3 branches on a bare length.** `{{parsed_data.validation_errors.length}}` routes on
-  truthiness rather than a comparison. It behaves correctly, but only because `0` is falsy.
+  `iterator` on their options and the one that should not does not.
 
 ### 12.13 The cut list (Sprint 9 A4)
 
@@ -1659,16 +992,14 @@ Source material: the four design prompts and the `PGC_SystemContext` rows inject
 `human_gate_dialog_rules`.
 
 The overstepping test is a per-line judgement, so without a register "we cut it" is
-unfalsifiable. §12.3 claims six archetypes are recoverable from prompt prose; this is that claim
-measured. A cut rule Novia turned out to need, and that no registry row supplied, is a candidate
-`PGC_Archetype` / `PGC_DialogStrategy` row. A cut rule nothing ever asked for is prose that dies
-with its prompt. **If the `overstep` rows are never missed, archetypes are not needed** — that is
-the evidence AC1 produces and Sprint 10 reads.
+unfalsifiable. A cut rule Novia turned out to need goes where she reads it — a step type
+contract, or the convention bridge. A cut rule nothing ever asked for is prose that dies with its
+prompt.
 
 | Disposition | Meaning |
 |---|---|
 | `registry` | Already a queryable row. The bridge points at the table instead of restating it. Not evidence of anything — this is AC2 working. |
-| `overstep` | A design instruction: an ordering, a shape to fill, or a "when X, do Y". Not a statement of what the engine accepts. **The archetype candidates.** |
+| `overstep` | A design instruction: an ordering, a shape to fill, or a "when X, do Y". Not a statement of what the engine accepts. |
 | `stale` | Measurably wrong against the code today. Recorded so it is not re-copied; dies with its prompt. |
 
 #### `registry` — already a row, the bridge points instead
@@ -1690,13 +1021,13 @@ the evidence AC1 produces and Sprint 10 reads.
 |---|---|---|
 | `flat_loop_example` (whole row) | Guard at step 9, body 10–13, post-loop 14; last body step routes both fields back to the guard; cancel routes to a terminal | A worked skeleton with slots — the fill-in-the-blank shape the framing rule excludes. The engine fact under it, that a backward edge needs a gate on the path, is carried. |
 | `workflow_routing_rules` 6a | A loop's exit option must name the first step after the loop body, never "next" | A correctness rule about one topology. The engine fact under it — "next" is positional — is carried; the rest is loop design. |
-| `workflow_routing_rules` 6b | A save-and-continue back-edge lands on the re-query step, not the format step | The strongest archetype candidate here: it is `scoped_row_editor`'s defining hazard and a real finding (the saved value appears to revert). Belongs to a procedure, not to the engine. |
+| `workflow_routing_rules` 6b | A save-and-continue back-edge lands on the re-query step, not the format step | A real finding (the saved value appears to revert), but about one topology — it belongs to a workflow of that shape, not to the engine. |
 | `workflow_routing_rules` 5 | A condition's false branch must not reach a gate that branch should not encounter | Design rule; the simulator already checks the reachability form of it. |
 | `workflow_routing_rules` 7 | How to interpret "Path X has no decision entry for human_gate step N" | Guidance on reading a simulator error. Belongs with the simulator's error text. |
-| `step_usage_patterns` § iterator + human_gate | The preference-gate pattern: js_transform builds options → condition guards → iterator presents one choice gate per item | A dialog strategy (§12.3), written as a four-step fill-in. |
+| `step_usage_patterns` § iterator + human_gate | The preference-gate pattern: js_transform builds options → condition guards → iterator presents one choice gate per item | A dialog pattern, written as a four-step fill-in. |
 | `step_usage_patterns` § choice with option `iterator` | "Do NOT add a preceding js_transform to build the options array" | The engine fact — an option's `iterator` expands it per element — is on the human_gate contract. "Do not add a step" is a design instruction. |
 | `step_usage_patterns` § form | "Never collect a date or an enumerable value as free text and then parse it with an llm_call" | A design judgement about cost and determinism. Correct, and not a statement of what the engine accepts. Already duplicated onto the human_gate contract by an earlier sprint — resolve when those prompts retire. |
-| `workflow_constraints` § suspending iterator vs flat loop | Choose by whether iterations share state | A selection rule between two topologies — archetype territory. |
+| `workflow_constraints` § suspending iterator vs flat loop | Choose by whether iterations share state | A selection rule between two topologies — a design choice, not an engine fact. |
 | `template_syntax` § message_template | Transform Handlebars into indexed dot-notation | An instruction to a translation stage that does not exist in Novia's path. The engine fact — only double braces are recognised, everything else passes through literally — is carried. |
 | `runtime_bindings` § input.* | What `input` contains for create_workflow runs and for `*_entity` runs | Specimen-specific, not an engine fact. Read the workflow row. |
 
@@ -1719,6 +1050,5 @@ the evidence AC1 produces and Sprint 10 reads.
 | `overstep` | 11 |
 | `stale` | 6 |
 
-The eleven `overstep` rows are the Sprint 10 evidence base. Five concern loop and
-save-and-continue topology across four different rows — one procedure (`scoped_row_editor`)
-stated five times in four places, which is §12.10's finding measured from the cut side.
+Five of the eleven `overstep` rows concern loop and save-and-continue topology across four
+different rows — one shape stated five times in four places.

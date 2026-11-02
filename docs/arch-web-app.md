@@ -144,7 +144,7 @@ A run is listed by what it was about — *Mercadona · 17 Oct* — not by its id
   `display.label` and its start date, formatted by the app in the user's locale.
 
 This is an Execution change in `run-workflow.mjs` and a column on `PGC_WorkflowRun`
-(`arch-data.md` §4.3.8).
+(`arch-data.md` §4.3.7).
 
 ### 2.5 Session topics
 
@@ -156,7 +156,7 @@ A Novia panel (§4.2) lists the sessions on one topic, so a session carries one:
 - **A session begun elsewhere** — her region, Slack — has no topic. It is listed in her region by
   its first message, and in no Novia panel.
 
-Phase 1; a column on `PGC_Session` (`arch-data.md` §4.3.8).
+Phase 1; a column on `PGC_Session` (`arch-data.md` §4.3.7).
 
 ### 2.6 A workflow's latest output
 

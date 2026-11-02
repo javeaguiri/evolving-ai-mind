@@ -244,6 +244,11 @@ Resources:
                   - cloudformation:GetTemplateSummary
                   - cloudformation:ValidateTemplate
                   - cloudformation:ContinueUpdateRollback
+                  - cloudformation:DescribeStackResource
+                  - cloudformation:DetectStackDrift
+                  - cloudformation:DetectStackResourceDrift
+                  - cloudformation:DescribeStackResourceDrifts
+                  - cloudformation:DescribeStackDriftDetectionStatus
                 Resource: "*"
               # S3 — sam build artifact upload / download
               - Effect: Allow
@@ -340,6 +345,8 @@ Resources:
                   - rds:AddTagsToResource
                   - rds:RemoveTagsFromResource
                   - rds:ListTagsForResource
+                  - rds:DescribeDBSnapshots
+                  - rds:DescribeDBInstanceAutomatedBackups
                 Resource: "*"
               # IAM — PassRole to Lambda + manage roles/instance profiles defined in template
               - Effect: Allow
@@ -558,9 +565,13 @@ Resources:
   # --- DATABASE: PostgreSQL ---
   EvoMindDB:
     Type: AWS::RDS::DBInstance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Engine: postgres
-      EngineVersion: "16.6" 
+      EngineVersion: "16" # major only — auto minor upgrades never leave the template behind
+      StorageEncrypted: true # aws/rds key; docs/ops-encryption-at-rest.md
+      StorageType: gp2
       PubliclyAccessible: true
       DBInstanceClass: db.t4g.micro # Changed for lower cost/free tier
       DBInstanceIdentifier: SYSRDSEvoMind # This is the "Pretty" name
