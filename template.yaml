@@ -246,6 +246,7 @@ Resources:
                   - cloudformation:ContinueUpdateRollback
                   - cloudformation:DescribeStackResource
                   - cloudformation:DetectStackDrift
+                  - cloudformation:DetectStackResourceDrift
                   - cloudformation:DescribeStackResourceDrifts
                   - cloudformation:DescribeStackDriftDetectionStatus
                 Resource: "*"
@@ -583,6 +584,30 @@ Resources:
         log_connections: "1"
         log_disconnections: "1"
 
+  # --- DATABASE: PostgreSQL ---
+  EvoMindDB:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Engine: postgres
+      EngineVersion: "16" # major only — auto minor upgrades never leave the template behind
+      StorageEncrypted: true # aws/rds key; docs/ops-encryption-at-rest.md
+      StorageType: gp2
+      PubliclyAccessible: true
+      DBInstanceClass: db.t4g.micro # Changed for lower cost/free tier
+      DBInstanceIdentifier: SYSRDSEvoMind # This is the "Pretty" name
+      DBName: !Ref DBName
+      MasterUsername: !Ref DBUser 
+      MasterUserPassword: !Ref DBPassword
+      DBSubnetGroupName: !Ref EvoMindDBSubnetGroup
+      VPCSecurityGroups:
+        - !GetAtt RDSSecurityGroup.GroupId
+      AllocatedStorage: '20'
+      DBParameterGroupName: !Ref EvoMindDBParameterGroup
+      DeletionProtection: true
+      BackupRetentionPeriod: 7
+
   BastionHost:
     Type: AWS::EC2::Instance
     Properties:
@@ -841,6 +866,10 @@ Outputs:
     Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod'
     Export:
       Name: !Sub '${AWS::StackName}-ApiBaseUrl'
+
+  RDSEndpoint:
+    Description: 'PostgreSQL endpoint for direct connections (bastion / Excel)'
+    Value: !GetAtt EvoMindDB.Endpoint.Address
 
   SlackbotFunctionArn:
     Value: !GetAtt SlackbotFunction.Arn
