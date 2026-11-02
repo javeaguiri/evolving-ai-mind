@@ -23,6 +23,7 @@
     { "name": "session_id",          "type": "integer",     "nullable": true },
     { "name": "replay_source_run_id", "type": "integer",    "nullable": true },
     { "name": "llm_break_policy",    "type": "text",        "nullable": true },
+    { "name": "sandbox",             "type": "text",        "nullable": true },
     { "name": "created_at",          "type": "timestamptz", "nullable": false, "default": "now()" },
     { "name": "updated_at",          "type": "timestamptz", "nullable": false, "default": "now()" }
   ],

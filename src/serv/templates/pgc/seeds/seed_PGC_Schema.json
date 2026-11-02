@@ -596,6 +596,11 @@
         "nullable": true
       },
       {
+        "name": "sandbox",
+        "type": "text",
+        "nullable": true
+      },
+      {
         "name": "created_at",
         "type": "timestamptz",
         "nullable": false,

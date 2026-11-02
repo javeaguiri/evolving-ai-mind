@@ -2795,6 +2795,7 @@ export function projectWorkflowRun({ run, workflow = null, stepRows = [], outlin
     workflow_version:    workflow?.version ?? null,
     status:              run.status,
     triggered_by:        run.triggered_by ?? null,
+    test_run:            run.sandbox != null,
     started_at:          run.started_at ?? null,
     completed_at:        run.completed_at ?? null,
     current_step:        top?.current_step ?? top?.step_number ?? null,
@@ -2987,7 +2988,7 @@ async function executeReadTool(action, params, traceId, session) {
           'PGC_WorkflowRun',
           [{ column: 'id', op: 'eq', value: runId }],
           undefined, 1, undefined,
-          ['id', 'workflow_id', 'status', 'triggered_by', 'stack', 'state', 'error', 'started_at', 'completed_at']
+          ['id', 'workflow_id', 'status', 'triggered_by', 'sandbox', 'stack', 'state', 'error', 'started_at', 'completed_at']
         );
         const run = runResp.rows?.[0];
         if (!run) return { error: `Workflow run ${runId} not found` };

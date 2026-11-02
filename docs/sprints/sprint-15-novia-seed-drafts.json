@@ -194,6 +194,5 @@
         }
       }
     }
-  },
-  "_pending_note_read_workflow_run": "When the sandbox column lands, add 'whether it is a test run' back to read_workflow_run's description and a test_run field to projectWorkflowRun."
+  }
 }

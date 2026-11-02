@@ -20,7 +20,9 @@ const SYSTEM_WORKFLOWS = new Set([
  * - run.workflow_name is not in the system workflow exclusion set
  */
 export function shouldWriteEpisodicMemory(run) {
-  return run.input?.domain != null && !SYSTEM_WORKFLOWS.has(run.workflow_name);
+  // A test run's summary is not household history: Novia reports the test, and anything its
+  // steps write to memory stays in the sandbox (docs/arch-sandbox.md §2).
+  return run.sandbox == null && run.input?.domain != null && !SYSTEM_WORKFLOWS.has(run.workflow_name);
 }
 
 export async function handle(req, { _getRows = getRows, _insertRow = insertRow } = {}) {

@@ -8,6 +8,47 @@
 // All methods attach statusCode to the parsed response body so callers
 // can inspect it without a separate resp.status check.
 
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+// ---------------------------------------------------------------------------
+// The test sandbox (docs/arch-sandbox.md §3)
+// ---------------------------------------------------------------------------
+// A test run's SERV calls carry x-sandbox, and SERV points them at the sandbox. The context is
+// set once — run-workflow.mjs opens a scope per message and names the run's sandbox when it
+// loads the run — so step code, the LLM harness and the memory writer call SERV unchanged.
+
+const sandboxContext = new AsyncLocalStorage();
+
+/** Run fn in a fresh scope with no sandbox; setSandbox inside it names one for the rest of it. */
+export function sandboxScope(fn) {
+  return sandboxContext.run({ sandbox: null }, fn);
+}
+
+/** Name the sandbox for the rest of the current scope. Outside a scope it does nothing. */
+export function setSandbox(sandbox) {
+  const store = sandboxContext.getStore();
+  if (store) store.sandbox = sandbox ?? null;
+}
+
+/** Run fn with every SERV call it makes pointed at `sandbox`. */
+export function withSandbox(sandbox, fn) {
+  return sandboxContext.run({ sandbox: sandbox ?? null }, fn);
+}
+
+/** The sandbox the current SERV calls go to, or null. */
+export function currentSandbox() {
+  return sandboxContext.getStore()?.sandbox ?? null;
+}
+
+function servHeaders() {
+  const sandbox = currentSandbox();
+  return {
+    'Content-Type': 'application/json',
+    'x-api-key':    process.env.INTERNAL_API_KEY ?? '',
+    ...(sandbox ? { 'x-sandbox': sandbox } : {}),
+  };
+}
+
 /**
  * POST to a SERV endpoint and return the parsed JSON body.
  * Attaches statusCode to the body so callers can check it inline.
@@ -20,10 +61,7 @@ export async function servPost(path, body) {
   const url  = `${process.env.SERV_API_URL}${path}`;
   const resp = await fetch(url, {
     method:  'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key':    process.env.INTERNAL_API_KEY ?? '',
-    },
+    headers: servHeaders(),
     body:    JSON.stringify(body),
   });
   const parsed      = await resp.json();
@@ -42,10 +80,7 @@ export async function servGet(path) {
   const url  = `${process.env.SERV_API_URL}${path}`;
   const resp = await fetch(url, {
     method:  'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key':    process.env.INTERNAL_API_KEY ?? '',
-    },
+    headers: servHeaders(),
   });
   const parsed      = await resp.json();
   parsed.statusCode = resp.status;

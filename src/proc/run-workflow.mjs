@@ -33,7 +33,7 @@ import { randomUUID }           from 'crypto';
 import { ok, err }              from '../shared/lambda-utils.mjs';
 import { enqueueCallback, enqueueWorkflow }
                                 from '../shared/sqs-callback.mjs';
-import { getRows, insertRow, updateRows }
+import { getRows, insertRow, updateRows, sandboxScope, setSandbox }
                                 from '../shared/serv-client.mjs';
 import { executeStep, buildDialog, resolveGateOptions, resolveFormFields }
                                 from './step-executor.mjs';
@@ -57,14 +57,14 @@ export async function handle(req) {
   }
 
   try {
-    const result = await dispatch({
+    const result = await sandboxScope(() => dispatch({
       action,
       workflowRunId,
       userResponse: body.userResponse,
       responseData: body.responseData,
       traceId,
       source: req.source ?? 'http',
-    });
+    }));
     if (req.source === 'http') return ok(result, req.correlationId);
   } catch (error) {
     console.error('run-workflow: unhandled error', { error: error.message, traceId });
@@ -81,7 +81,8 @@ export async function handle(req) {
 
 export async function dispatchSqs(message) {
   const { action, workflowRunId, gateId, userResponse, responseData, message_ts, traceId, stepExecutionId } = message;
-  return dispatch({ action, workflowRunId, gateId, userResponse, responseData, message_ts, traceId, source: 'sqs', stepExecutionId });
+  // A scope per message, so one run's sandbox can never reach the next message in the batch.
+  return sandboxScope(() => dispatch({ action, workflowRunId, gateId, userResponse, responseData, message_ts, traceId, source: 'sqs', stepExecutionId }));
 }
 
 // ---------------------------------------------------------------------------
@@ -1665,7 +1666,7 @@ async function cancelRun({ workflowRunId, traceId }) {
 // replay_source_run_id + llm_break_policy MUST be here: the replay harness reads the
 // break policy off the run row at the seam (docs/arch-replay.md §7a). Omit them and they
 // arrive undefined — failing closed to `never` and silently billing a run meant to replay.
-export const LOAD_RUN_COLUMNS = ['id', 'workflow_id', 'status', 'input', 'stack', 'callback', 'step_count', 'error', 'replay_source_run_id', 'llm_break_policy'];
+export const LOAD_RUN_COLUMNS = ['id', 'workflow_id', 'status', 'input', 'stack', 'callback', 'step_count', 'error', 'replay_source_run_id', 'llm_break_policy', 'sandbox'];
 
 async function loadRun(workflowRunId, traceId) {
   const resp = await getRows(
@@ -1677,6 +1678,11 @@ async function loadRun(workflowRunId, traceId) {
     throw new Error(`WorkflowRun ${workflowRunId} not found`);
   }
   const run = resp.rows[0];
+
+  // A test run's every SERV call from here on goes to its sandbox (docs/arch-sandbox.md §3):
+  // its steps, its PGD reads and writes, its memory — and the steps themselves, so a test copy
+  // of the workflow in the sandbox's PGC_Workflow is the one that runs.
+  setSandbox(run.sandbox);
 
   // Resolve workflow name if not cached in run
   if (!run.workflow_name) {

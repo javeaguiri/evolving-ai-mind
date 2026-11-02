@@ -40,7 +40,7 @@
 
 import vm                   from 'node:vm';
 import * as acorn           from 'acorn';
-import { servPost, getRows, insertRow, insertRows, updateRows, deleteRows, upsertRows, listEntities, getEntityById } from '../shared/serv-client.mjs';
+import { servPost, getRows, insertRow, insertRows, updateRows, deleteRows, upsertRows, listEntities, getEntityById, currentSandbox } from '../shared/serv-client.mjs';
 import { executeLlmCall }               from './llm-harness.mjs';
 import {
   resolvePath,
@@ -785,6 +785,15 @@ async function executeServSchema({ step, localState, traceId }) {
   const schemaObj = resolveInput(step.input, localState);
   const isView    = typeof schemaObj.selectSql === 'string';
   const endpoint  = isView ? 'createView' : 'createTable';
+
+  // SERV refuses schema changes inside a sandbox too; this names the step and says what it means
+  // for the test, rather than surfacing SERV's 403 (docs/arch-sandbox.md §1.7).
+  if (currentSandbox()) {
+    throw new Error(
+      `serv_schema ${endpoint} for "${schemaObj.tableName}" cannot run in a test run — a test cannot ` +
+      'create tables or views. This step is not covered by the test.'
+    );
+  }
 
   console.info(`step-executor: serv_schema — ${endpoint}`, {
     tableName: schemaObj.tableName,

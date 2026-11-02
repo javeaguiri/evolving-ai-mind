@@ -106,4 +106,9 @@ describe('projectWorkflowRun — projections', () => {
     assert.equal(out.last_step.status, 'failed');
     assert.equal(out.outline, undefined);
   });
+
+  it('says whether the run is a test run', () => {
+    assert.equal(projectWorkflowRun({ run: waiting, workflow, stepRows }).test_run, false);
+    assert.equal(projectWorkflowRun({ run: { ...waiting, sandbox: 'sandbox_3' }, workflow, stepRows }).test_run, true);
+  });
 });
