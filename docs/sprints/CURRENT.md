@@ -116,7 +116,25 @@ uncommitted test copy, continue → reset → one fix cycle → fresh test), and
 option A, a sandbox schema** — no two-stage commit is possible across a run. Transcript eviction
 stays in the backlog, waiting for its trigger.
 
-### Next session — write the sandbox policy, then the toolkit
+**Built and deployed (same session):** AC2 sandbox policy approved; scope 8, 9 (AC9); schema drift
+four ways, `PGC_Archetype` removed, `fk_intentmap_workflow` added live (AC11); `read_workflow_run`;
+`gate_id` + `POST /proc/gates/{runId}/responses` (the spec file parses again); the sandbox, SERV and
+PROC halves, verified against the live database; a pre-existing SERV connection leak fixed (five
+table routes closed their PGD connection only on success); test runs, the wake and `answer_gate`
+(no `await_run` — the waiting call records itself first); *Apply and test*. **Deployed
+2026-11-02 at `d0d23ea`**: all four functions updated; `upsert-system-context` inserted
+`sop_test_cycle` and updated the prompt (v38), tool schemas (v10) and preferences; registry 16/16;
+smoke checks on the live sandbox and gates routes passed; live catalog 36 tools, none undescribed or
+undispatchable; no errors in any function's logs. 1185 → 1319 tests.
+
+### Next session — the live cycle (AC3–AC8), then scope 10
+
+Javear starts it in Slack: ask Novia to fix the `manage_budget` new-month defect and choose *Apply
+and test*. Evidence to collect: the plan she proposes; her test run's gates never reaching Slack
+(AC7); `answer_gate` resuming it (AC3); household `PGD_*` rows unchanged (AC6 — counts before and
+after); her cache reads across the cycle from the proc logs (AC5). Then scope 10, replay as her tool.
+
+### Superseded — write the sandbox policy, then the toolkit
 
 Read this file, then `docs/arch-web-app.md` §3 (`PGC_UiMessage` provider routing, §3.1
 `POST /gates/{runId}/responses`, `gate_id`) and `docs/arch-minds-eye.md` (tool catalog).
