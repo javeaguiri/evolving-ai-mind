@@ -586,6 +586,8 @@ Resources:
   # --- DATABASE: PostgreSQL ---
   EvoMindDB:
     Type: AWS::RDS::DBInstance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Engine: postgres
       EngineVersion: "16.6" 
