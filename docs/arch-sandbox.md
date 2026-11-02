@@ -9,13 +9,14 @@ Status: **Proposed — Sprint 15 AC2, for Javear's approval.**
 
 ## 1. Policy
 
-1. **A test never touches household data.** Every run Novia starts as a test runs in the sandbox:
-   its reads and writes of `PGD_*` tables go to copies.
-2. **Test data is hers to shape.** She creates, edits and deletes rows in the sandbox freely —
-   no gate, no approval per write. The approved test plan says what she will create.
+1. **A test never writes household data.** Every run Novia starts as a test runs in the sandbox.
+   Its writes to `PGD_*` tables go to copies; a write to a table that was not copied is refused.
+2. **Test data is hers to shape.** She chooses which tables are copied and which of their rows,
+   and creates, edits and deletes sandbox rows freely — no gate, no approval per write. The
+   approved test plan says what she will copy and create.
 3. **Real data stays gated.** Her writes outside the sandbox are gated exactly as today.
-4. **One sandbox, one test cycle.** She creates it when a test cycle starts and drops it when she
-   reports. Creating a sandbox drops any earlier one.
+4. **One sandbox, one test cycle.** She creates it when a test cycle starts, resets it to its
+   starting data to retest, and drops it when she reports. Creating a sandbox drops any earlier one.
 5. **The record of the test is real.** The run, its steps, its session and diagnostics are written
    to the real `PGC_*` tables, so the test can be read and explained afterwards.
 6. **A test run never reaches Slack.** It runs with `callback.provider: 'novia'` (Sprint 15
@@ -25,29 +26,27 @@ Status: **Proposed — Sprint 15 AC2, for Javear's approval.**
 
 ## 2. What the sandbox holds
 
-A Postgres schema, `sandbox_<n>`, in the one database PGC and PGD share. It holds a copy of:
+A Postgres schema, `sandbox_<n>`, in the one database PGC and PGD share.
 
-| Copied | Why |
-|---|---|
-| Every `PGD_*` table, with its rows, indexes, constraints and FKs | The workflow's data. FKs are recreated between the copies so `CASCADE` deletes behave as they do for real |
-| Every `PGD_*` view, recreated over the copied tables | A view binds to the tables it was created over; the real view would read real data |
-| `PGC_Memory` | A test run's memory writes stay out of household memory, and its reads see real memory plus its own |
-| `PGC_Workflow` | The uncommitted test copy of a workflow (§5) replaces the real row here and only here |
+| Copied | How chosen | Rows |
+|---|---|---|
+| The `PGD_*` tables the test needs | Named by Novia, from the workflow's steps and her plan; SERV adds the FK parents of every named table | Per table: `all`, `none`, or SERV filters (the `getRows` filter form) |
+| `PGD_*` views over a copied table | Automatic — every view that depends on a copied table is recreated over the copy | — |
+| `PGC_Memory` | Always | All — a test run reads real memory plus its own, and its writes stay in the sandbox |
+| `PGC_Workflow` | Always | All — the uncommitted test copy of a workflow (§5) replaces the real row here and only here |
 
-Everything else — `PGC_WorkflowRun`, `PGC_WorkflowRunStep`, `PGC_Session*`, the schema registry,
-prompts, system context — is not copied and resolves to the real table.
-
-The whole PGD layer is copied, not just the tables one workflow touches: it is small, and a full
-copy needs no analysis of which tables a workflow reaches or what their FKs pull in.
-
-Each copied table with a `serial` column gets its own sequence, set to the table's current maximum,
-so test inserts never consume real ids.
+- **FKs** are recreated between the copies, so `CASCADE` deletes behave as they do for real. An FK
+  parent is copied with the rows the copied children reference, plus any filter she gave it.
+- **Each `serial` column** gets its own sequence, set to the real table's current maximum, so test
+  inserts never consume real ids.
+- **Tables not copied** — other `PGD_*` tables, and every other `PGC_*` table — resolve to the
+  real ones. A test run may read them; it may not write the `PGD_*` ones.
 
 ## 3. How a test run reaches it
 
 **Postgres `search_path`.** SERV names every table unqualified, so a connection opened with
-`SET search_path TO sandbox_<n>, public` reads and writes the copies, and finds every table
-not copied in `public`. No query changes.
+`SET search_path TO sandbox_<n>, public` reads and writes the copies, and finds every table not
+copied in `public`. No query changes.
 
 ```
 PGC_WorkflowRun.sandbox = 'sandbox_<n>'       ← set when Novia starts a test run
@@ -57,28 +56,35 @@ run-workflow.mjs runs the run inside withSandbox(run.sandbox, …)
 serv-client.mjs  ──  every SERV call made in that context carries  x-sandbox: sandbox_<n>
         │
 SERV  ──  validates the name (pattern + the schema exists),
-          then SET search_path on every connection that request opens
+          SET search_path on every connection that request opens,
+          refuses a PGD write to a table the sandbox does not hold
 ```
 
 - **The context is set once per run**, by `run-workflow.mjs`, with Node's `AsyncLocalStorage`.
   Step code, the LLM harness and the memory writer make their SERV calls unchanged.
 - **The name is validated before it reaches SQL.** `sandbox_` followed by digits only, and present
   in `pg_namespace`; anything else is a 400.
-- **A real run is never affected.** Only requests carrying the header change `search_path`;
-  the household can keep using every workflow while a test runs.
+- **A missed table is an error, not a leak.** The refusal names the table, so she adds it to the
+  sandbox and reruns.
+- **A real run is never affected.** Only requests carrying the header change `search_path`; the
+  household can keep using every workflow while a test runs.
 
-## 4. Lifecycle
+## 4. Novia's tools
 
-| Operation | Who | What |
-|---|---|---|
-| `POST /serv/sandbox/create` | Novia's `start_test` tool | Drops any existing `sandbox_*` schema, creates `sandbox_<n>`, copies §2, returns its name |
-| Test data | Her `insert_data` / `update_data` / `delete_data` / `query_table` / `run_sql` with `sandbox: true` | Ungated inside the sandbox; she reads it to verify outcomes |
-| Test runs | Her `run_workflow` with `test: true` | `sandbox` set on the run, provider `novia` |
-| `POST /serv/sandbox/drop` | Her `end_test` tool, when she reports | Drops the schema; the run records stay |
+| Tool | What it does |
+|---|---|
+| `start_test({ tables: [{ name, rows }] })` | `POST /serv/sandbox/create`: drops any existing sandbox, copies §2, stores the spec in the sandbox, and returns its name and what was copied — named tables, added FK parents, recreated views, row counts |
+| `reset_test()` | Recreates the sandbox from its stored spec: back to its starting data, test-created rows gone |
+| `end_test()` | `POST /serv/sandbox/drop`: drops the schema; the run records stay |
+| `insert_data` / `update_data` / `delete_data` with `sandbox: true` | Shapes test data — ungated, sandbox only |
+| `query_table` / `run_sql` with `sandbox: true` | Reads sandbox data to set up and verify outcomes |
+| `run_workflow` with `test: true` | Starts a run with `sandbox` set and provider `novia`; refused when no sandbox exists |
 
-**On a defect** she finishes every path it does not block, reports, drops the sandbox, and goes
-through the normal fix cycle (simulate → Javear's permission → commit). A fresh test cycle creates
-a fresh sandbox — copied again, so it holds the committed fix and current household data.
+To widen a sandbox mid-cycle she calls `start_test` again with the larger spec.
+
+**On a defect** she finishes every path it does not block, reports, ends the test, and goes through
+the normal fix cycle (simulate → Javear's permission → commit). A fresh test cycle starts a fresh
+sandbox, copied from current household data with the committed fix in `PGC_Workflow`.
 
 ## 5. The uncommitted test copy
 
@@ -96,7 +102,7 @@ with the sandbox.
 | `PGC_WorkflowRun.sandbox` (text, null) | Template + `seed_PGC_Schema.json`, deployed with `addColumn`; `arch-data.md` |
 | `withSandbox` and the `x-sandbox` header | `src/shared/serv-client.mjs` |
 | Running a run inside its sandbox | `src/proc/run-workflow.mjs` |
-| Header validation and `search_path` on every connection | `src/serv/` — one helper used where SERV opens a connection |
-| `create` / `drop` | A new SERV route, spec-first in `openapi.yaml` |
+| Header validation, `search_path` on every connection, the write refusal | `src/serv/` — one helper used where SERV opens a connection |
+| `create` (copy, FK parents, views, sequences, spec) / `drop` | A new SERV route, spec-first in `openapi.yaml` |
 | `serv_schema` refused in a sandbox run | `src/proc/step-executor.mjs` |
-| `start_test`, `end_test`, `sandbox: true`, `test: true` | `src/proc/minds-eye.mjs` + `minds_eye_tool_schemas` |
+| `start_test`, `reset_test`, `end_test`, `sandbox: true`, `test: true` | `src/proc/minds-eye.mjs` + `minds_eye_tool_schemas` |
