@@ -43,7 +43,7 @@ state changes, not at close.**
 | **AC1** | ✅ met 2026-11-02 — encrypted (`aws/rds`), row counts identical, live check passed, drift `IN_SYNC`, no unencrypted instance, snapshot or backup left ([`ops-encryption-at-rest.md`](../ops-encryption-at-rest.md)) | The prod database is encrypted at rest: `StorageEncrypted: true` on the live instance, `template.yaml` matches the live instance (drift `IN_SYNC`), every table's row count unchanged across the cut, the Lambdas reach it with no SSM change or with the change made through a version-pinned deploy, and **no unencrypted copy remains** — the old instance, its automated backups and the pre-encrypt snapshot deleted (Phase 4; added Javear, 2026-11-02) (Sprint 14 AC6) | [1](#scope) | Binary, verified live |
 | **AC2** | ✅ met 2026-11-02 — [`arch-sandbox.md`](../arch-sandbox.md) approved by Javear | A written test-data policy for prod, approved by Javear | [2](#scope) | Approved |
 | **AC3** | 🟡 built 2026-11-02 (`answer_gate`, `/proc/gates`), live check pending | Novia answers a gate in a run she started and the run resumes through `POST /gates/{runId}/responses`; ~~a run she did not start, or a gate guarding her own gated write,~~ any run but her own test run is refused (Javear, 2026-11-02) (Sprint 14 AC9) | [3](#scope), [4](#scope) | Binary, live |
-| **AC4** | ⬜ | She fixes a workflow, offers Submit only / Submit and test, writes a test plan Javear approves, runs it in the sandbox, is woken at its gates, reads them with `read_workflow_run`, answers, resets the sandbox and reports — with no message from Javear between plan approval and report (reworded Javear, 2026-11-02; was "between start and report") | [3](#scope)–[7](#scope) | Binary, live — vehicle: `manage_budget` new-month defect |
+| **AC4** | ⬜ | She fixes a workflow, offers Submit only / Submit and test, writes a test plan Javear approves, runs it in the sandbox, is woken at its gates, reads them with `read_workflow_run`, answers, resets the sandbox and reports — with no message from Javear between plan approval and report (reworded Javear, 2026-11-02; was "between start and report") | [3](#scope)–[7](#scope) | Binary, live — vehicle: `flashcard_quiz_session` spaced repetition (Javear, 2026-11-02; was `manage_budget`) — test as it stands, fix, retest; her plan judged against [`flashcard-quiz-sm2-analysis.md`](../flashcard-quiz-sm2-analysis.md) §2 |
 | **AC5** | ⬜ | Her cache reads across a self-test cycle are measured from the proc logs; the result decides whether the Anthropic API move returns | [3](#scope)–[5](#scope) | Measured, reported |
 | **AC6** | ⬜ | A test run's writes land only in the sandbox: every real `PGD_*` table it touches has identical row counts and content before and after; reset leaves no sandbox table behind | [2](#scope) | Binary, live |
 | **AC7** | 🟡 built 2026-11-02, live check pending | No gate or notification from a run with provider `novia` reaches Slack; she reads the gate's resolved dialog | [6](#scope) | Binary, live |
@@ -94,6 +94,12 @@ pending change after. Single-resource drift needed `DetectStackResourceDrift` (g
 
 **Novia test candidate (Javear, 2026-11-02):** `manage_budget` did not create the new month's budget
 correctly. Left as found — a live defect for AC4, where Novia diagnoses and fixes it herself.
+**Superseded (Javear, later the same day):** the cause is routing, not the workflow — `/m manage
+budget` reaches `manage_expenses` instead of `edit_budget`, an alias Novia can rebind with
+`manage_routing_aliases`. AC4 moved to `flashcard_quiz_session`, where Javear reports cards are not
+retested as spaced repetition intends; four findings read from the live v3 (all-cards selection,
+in-session retries rescheduling, EF lowered on failure, no repetition count) and a four-card
+reference test in [`flashcard-quiz-sm2-analysis.md`](../flashcard-quiz-sm2-analysis.md).
 
 **Phase 4 (same session, Javear: "do phase 4 now… okay delete snapshots"):** `sysrdsevomind-unenc`
 deleted with its automated backups; pre-encrypt snapshot deleted; two unencrypted CloudFormation
@@ -129,8 +135,10 @@ undispatchable; no errors in any function's logs. 1185 → 1319 tests.
 
 ### Next session — the live cycle (AC3–AC8), then scope 10
 
-Javear starts it in Slack: ask Novia to fix the `manage_budget` new-month defect and choose *Apply
-and test*. Evidence to collect: the plan she proposes; her test run's gates never reaching Slack
+Javear starts it in Slack: ask Novia to test `flashcard_quiz_session` as it stands — her plan
+compared with `flashcard-quiz-sm2-analysis.md` §2, the run expected to reproduce F1–F3 — then to fix
+it, choosing *Apply and test*, and retest. F4 (a repetition count column) is Javear's decision before
+it is fixed. Evidence to collect: the plan she proposes; her test run's gates never reaching Slack
 (AC7); `answer_gate` resuming it (AC3); household `PGD_*` rows unchanged (AC6 — counts before and
 after); her cache reads across the cycle from the proc logs (AC5). Then scope 10, replay as her tool.
 
@@ -153,4 +161,4 @@ Read this file, then `docs/arch-web-app.md` §3 (`PGC_UiMessage` provider routin
    code ignores would write household data. The file is deleted when empty.
 4. Build order: 3 `read_workflow_run` → 6 provider `novia` → 4 `answer_gate` + endpoint
    (`openapi.yaml` spec-first) → 5 the wake → 2 the sandbox → 7 → 10 replay.
-AC4's live vehicle: the `manage_budget` new-month defect, left as found.
+AC4's live vehicle: `flashcard_quiz_session` (moved from `manage_budget` — see Session 1's superseded note).
