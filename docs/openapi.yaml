@@ -1378,7 +1378,7 @@ paths:
             application/json:
               example: {}
         '400':
-          description: text is empty. Usage: /delete-domain <domain>
+          description: "text is empty. Usage: /delete-domain <domain>"
         '500':
           description: Slack ACK post failed or SQS enqueue failed
 
@@ -1432,7 +1432,7 @@ paths:
             application/json:
               example: {}
         '400':
-          description: text is empty. Usage: /delete-workflow <name>
+          description: "text is empty. Usage: /delete-workflow <name>"
         '500':
           description: Slack ACK post failed or SQS enqueue failed
 
@@ -1645,6 +1645,51 @@ paths:
         '200': { description: Resolution accepted; resume_llm enqueued }
         '404': { description: Replay run not found }
         '409': { description: Run is not awaiting an llm break }
+
+  /api/v1/proc/gates/{runId}/responses:
+    post:
+      summary: Answer the gate a run is waiting at — provider-neutral
+      description: >
+        Answers a human_gate by run AND gate, never by run alone (docs/arch-web-app.md §2.2,
+        §3.1). The gate is identified by the gate_id its frame received when it was pushed;
+        an answer for any other gate is refused, so a stale answer is never applied to the
+        gate that replaced it. A form's number fields are checked with the same rule Slack
+        applies (src/shared/number-rule.mjs) and handed on as numbers; a field that fails it
+        is refused and the run is not resumed. On success enqueues WORKFLOW_STEP resume_gate
+        carrying gateId; the run keeps its own callback, so an answer never re-points a run at
+        another provider. Callers: Novia's answer_gate (her own test runs only — enforced in
+        minds-eye.mjs), and the web app's POST /gates/{runId}/responses.
+      operationId: answerGate
+      tags: [PROC]
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema: { type: integer }
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [gateId, action]
+              properties:
+                gateId:        { type: string, description: The waiting gate's gate_id, from read_workflow_run or the gate's dialog. }
+                action:        { type: string, description: "The option or button chosen: an option's action, or its value on a choice gate." }
+                formValues:    { type: object, description: "form gate — { fieldName: value }." }
+                inputValue:    { type: string, description: Typed text — a text_input or followup_prompt answer, or a list_selection row's id. }
+                listGroup:     { type: string, description: list_selection — the group (table) whose id box the id was typed in. }
+                selectedValue: { type: string, description: choice — the chosen option's value. }
+            examples:
+              confirm: { value: { gateId: 3f0c9a2e-5b1d-4a7e-9c3f-2d8e6b1a4c70, action: confirm } }
+              form:    { value: { gateId: 3f0c9a2e-5b1d-4a7e-9c3f-2d8e6b1a4c70, action: confirm, formValues: { amount: "12,50" } } }
+      responses:
+        '202': { description: "Accepted; resume_gate enqueued. Body: { runId }" }
+        '400': { description: gateId or action missing }
+        '404': { description: "run_not_found" }
+        '409': { description: "gate_not_waiting — the run is not at a gate; gate_moved — gateId is not the gate it is waiting at. Body carries the waiting gate_id, if any." }
+        '422': { description: "invalid_fields — a number field fails its rule. Body: { fields: [{ name, problem }] }; the run is not resumed." }
 
   /api/v1/proc/ping-db:
     post:

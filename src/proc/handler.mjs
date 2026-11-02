@@ -42,6 +42,7 @@ import { handle as deleteWorkflow }     from './delete-workflow.mjs';
 import { handle as writeMemory }        from './memory-writer.mjs';
 import { handle as mindsEye }           from './minds-eye.mjs';
 import { handle as replay }             from './replay.mjs';
+import { handle as gates }              from './gates.mjs';
 import { processScheduledRun }          from './scheduled-run.mjs';
 
 /**
@@ -273,6 +274,10 @@ async function dispatch(req) {
   // them by the first proxy segment. SQS reqs have no `proxy`, so this never matches them.
   if ((req.proxy || '').split('/').filter(Boolean)[0] === 'replay') {
     return replay(req);
+  }
+  // Gate responses carry the run id in the path, as replay does (/gates/{runId}/responses).
+  if ((req.proxy || '').split('/').filter(Boolean)[0] === 'gates') {
+    return gates(req);
   }
 
   switch (req.route) {
