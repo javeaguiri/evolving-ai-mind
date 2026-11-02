@@ -20,8 +20,8 @@ her test plan is judged against §2.
 | F7 | 20 | The completion message reports `all_cards.length`, not the reviews done *(Novia, session 1284)* | The number reviewed |
 | F4 | 14, `PGD_Cards` | `interval` stands in for the repetition count (0 → 1, 1 → 6, otherwise interval × EF), so the first pass after a failure jumps to 6 days | After a failure the count restarts — 1 day, then 6 — which needs a repetition count `PGD_Cards` does not have |
 
-F1 and F2 match the report — F2 more severely than first read, since a failed card ends further out than before it failed: the whole deck every session, and a card answered wrong coming back in six
-days instead of one. F4 is a contract question (a missing column), decided before it is fixed: add a
+F1 and F2 match the report — F2 more severely than first read, since a failed card ends further out than before it failed: the whole deck every session, and a card answered wrong coming back in
+fifteen days instead of one. F4 is a contract question (a missing column), decided before it is fixed: add a
 repetition count, or accept the jump.
 
 ## 2. Reference test
