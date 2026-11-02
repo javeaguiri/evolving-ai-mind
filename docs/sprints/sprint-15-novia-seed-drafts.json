@@ -15,34 +15,6 @@
   },
   "new_tools": [
     {
-      "name": "read_workflow_run",
-      "description": "Read a workflow run: its workflow and version, status, whether it is a test run, its error if it failed, and - when it is waiting at a gate - that gate's gateId, gate_type and dialog, rendered as the person answering it sees it, with every {{token}} resolved. A running workflow's state lives in its stack; PGC_WorkflowRun.state is written only when the run ends, and this tool reads the right one. Pass outline true for one line per executed step (step, type, status, duration, error, output size), then steps to read the named steps' outputs in full. Works on any run.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "runId": {
-            "type": "integer"
-          },
-          "outline": {
-            "type": "boolean",
-            "description": "One line per executed step instead of the steps' outputs."
-          },
-          "steps": {
-            "type": "array",
-            "description": "Step identifiers whose outputs to return in full, e.g. [\"4\", \"7\"]. The reply names any identifier that has not run."
-          },
-          "reasoning": {
-            "type": "string",
-            "description": "Why this call, in one sentence."
-          }
-        },
-        "required": [
-          "runId",
-          "reasoning"
-        ]
-      }
-    },
-    {
       "name": "await_run",
       "description": "Wait for a test run you started to reach its next gate, complete, or fail. This ends your round: you are called again when the run gets there, and this call's result is that event - the run's status and, at a gate, its gateId, gate_type and dialog. Call it after run_workflow { test: true } and after each answer_gate. Only for your own test runs. The number of waits in a session is bounded; past the bound the call is refused, and you report what you have.",
       "parameters": {
@@ -222,5 +194,6 @@
         }
       }
     }
-  }
+  },
+  "_pending_note_read_workflow_run": "When the sandbox column lands, add 'whether it is a test run' back to read_workflow_run's description and a test_run field to projectWorkflowRun."
 }

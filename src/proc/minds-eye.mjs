@@ -41,6 +41,7 @@ import { enqueueCallback, enqueueWorkflow }                from '../shared/sqs-c
 import { runSimulation, expectedRunInput }                from './simulation-engine.mjs';
 import { loadStepTypeContracts }                          from './step-type-registry.mjs';
 import { resolvePath }                                    from './template-resolver.mjs';
+import { buildDialog }                                    from './step-executor.mjs';
 
 // Closes the round's instructions. Constant, so it rides in the cached prefix rather than
 // being re-sent with every turn.
@@ -72,7 +73,7 @@ const DEFAULT_PREFERENCES = {
 
 const READ_TOOLS = new Set([
   'query_table', 'query_entity', 'read_memory',
-  'read_workflow', 'read_prompt', 'simulate_workflow',
+  'read_workflow', 'read_workflow_run', 'read_prompt', 'simulate_workflow',
   'search_domain_help', 'list_tables', 'list_physical_tables',
   'run_sql', 'read_session_entry',
   'list_capabilities', 'list_schedules',
@@ -2445,6 +2446,7 @@ const NARROWER_READ = {
   query_entity:         'call query_entity again with narrower `filters` or a smaller `limit`',
   read_memory:          'call read_memory again with narrower `filters` or a smaller `limit`',
   read_workflow:        'call read_workflow again with `outline: true`, or `steps` naming only the steps you need',
+  read_workflow_run:    'call read_workflow_run again with `outline: true`, or `steps` naming only the steps you need',
   run_sql:              'call run_sql again with a SELECT that returns only the columns and rows you need',
   list_tables:          'call list_tables again with `domain` or `prefix`',
   list_physical_tables: 'call list_physical_tables again with `prefix`',
@@ -2741,6 +2743,101 @@ export function projectWorkflowSteps(steps, { selected, outline } = {}) {
   return { step_count: all.length, steps: all };
 }
 
+/**
+ * Project a workflow run down to what was asked for, as projectWorkflowSteps does a workflow.
+ *
+ * A run's live state is its stack: PGC_WorkflowRun.state is written only when the run
+ * completes, so the top frame's local_state is read while the run is live or has failed, and
+ * state.local_state once it has completed. A waiting gate is rendered with buildDialog from
+ * the gate frame — the call the resume paths use to redraw it — so the dialog is what the
+ * person answering it sees, every {{token}} resolved.
+ *
+ * A step's output_snapshot is a bounded summary. `steps` therefore also returns the value now
+ * held at that step's output_key, which is the output in full.
+ *
+ * @param {object} args
+ * @param {object} args.run        PGC_WorkflowRun row
+ * @param {object} [args.workflow] The PGC_Workflow row the run executes (its own version)
+ * @param {Array}  args.stepRows   PGC_WorkflowRunStep rows, in execution order
+ * @param {boolean} [args.outline] One line per executed step
+ * @param {Array}  [args.selected] Step identifiers to return in full
+ * @returns {object}
+ */
+export function projectWorkflowRun({ run, workflow = null, stepRows = [], outline, selected }) {
+  const stack      = Array.isArray(run.stack) ? run.stack : [];
+  const top        = stack.length > 0 ? stack[stack.length - 1] : null;
+  const localState = top?.local_state ?? run.state?.local_state ?? null;
+  const stepOf     = (row) => String(row.input_snapshot?.step ?? row.step_number);
+
+  const waitingGate = run.status === 'awaiting_human_gate' && top?.type === 'human_gate'
+    ? {
+        gate_id:       top.gate_id ?? null,
+        gate_type:     top.gate_type,
+        step:          String(top.step_number),
+        waiting_since: top.pushed_at ?? null,
+        dialog:        buildDialog(top.step_ref ?? {}, top.local_state ?? {}),
+      }
+    : null;
+
+  const line = (row) => ({
+    step:         stepOf(row),
+    type:         row.step_type,
+    status:       row.status,
+    duration_ms:  row.duration_ms ?? null,
+    ...(row.retry_count ? { retry_count: row.retry_count } : {}),
+    ...(row.error       ? { error: row.error } : {}),
+    output_chars: row.output_snapshot?.chars ?? null,
+  });
+
+  const summary = {
+    run_id:              run.id,
+    workflow:            workflow?.name ?? null,
+    workflow_version:    workflow?.version ?? null,
+    status:              run.status,
+    triggered_by:        run.triggered_by ?? null,
+    started_at:          run.started_at ?? null,
+    completed_at:        run.completed_at ?? null,
+    current_step:        top?.current_step ?? top?.step_number ?? null,
+    error:               run.error ?? null,
+    waiting_gate:        waitingGate,
+    executed_step_count: stepRows.length,
+  };
+
+  if (outline) {
+    return {
+      ...summary,
+      outline: stepRows.map(line),
+      note:    'Outline only. Call read_workflow_run again with steps: ["<step>"] for those steps\' outputs in full.',
+    };
+  }
+
+  if (Array.isArray(selected) && selected.length > 0) {
+    const wanted   = selected.map(String);
+    const defs     = Array.isArray(workflow?.steps) ? workflow.steps : [];
+    const picked   = stepRows.filter(row => wanted.includes(stepOf(row)));
+    const notRun   = wanted.filter(w => !picked.some(row => stepOf(row) === w));
+    const current  = Object.fromEntries(wanted.map(w => {
+      const outputKey = defs.find(s => String(s?.step) === w)?.output_key;
+      return [w, outputKey
+        ? { output_key: outputKey, value: localState ? resolvePath(localState, outputKey) ?? null : null }
+        : { output_key: null }];
+    }));
+    return {
+      ...summary,
+      executions: picked.map(row => ({ ...line(row), executed_at: row.executed_at ?? null, output_summary: row.output_snapshot?.summary ?? null })),
+      current_output: current,
+      ...(localState ? {} : { note: 'This run kept no state (it was cancelled), so no output value can be read back.' }),
+      ...(notRun.length && { not_run: notRun }),
+    };
+  }
+
+  return {
+    ...summary,
+    last_step: stepRows.length > 0 ? line(stepRows[stepRows.length - 1]) : null,
+    note:      'Pass outline: true for every executed step, or steps: ["<step>"] for named steps\' outputs in full.',
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Execute a read tool and return the result object
 // ---------------------------------------------------------------------------
@@ -2880,6 +2977,29 @@ async function executeReadTool(action, params, traceId, session) {
           // discarded, and omitting one it does read resolves to undefined with no error.
           expected_input: expectedRunInput(wf.steps),
           ...projectWorkflowSteps(wf.steps, { selected, outline }),
+        };
+      }
+
+      case 'read_workflow_run': {
+        const { runId, steps: selected, outline } = params;
+        if (!runId) return { error: 'runId is required' };
+        const runResp = await getRows(
+          'PGC_WorkflowRun',
+          [{ column: 'id', op: 'eq', value: runId }],
+          undefined, 1, undefined,
+          ['id', 'workflow_id', 'status', 'triggered_by', 'stack', 'state', 'error', 'started_at', 'completed_at']
+        );
+        const run = runResp.rows?.[0];
+        if (!run) return { error: `Workflow run ${runId} not found` };
+        const [wfResp, stepResp] = await Promise.all([
+          getRows('PGC_Workflow', [{ column: 'id', op: 'eq', value: run.workflow_id }], undefined, 1, undefined,
+            ['name', 'version', 'steps']),
+          getRows('PGC_WorkflowRunStep', [{ column: 'run_id', op: 'eq', value: runId }], 'id ASC', undefined, undefined,
+            ['step_number', 'step_type', 'status', 'retry_count', 'input_snapshot', 'output_snapshot', 'error', 'duration_ms', 'executed_at']),
+        ]);
+        return {
+          ...projectWorkflowRun({ run, workflow: wfResp.rows?.[0] ?? null, stepRows: stepResp.rows ?? [], outline, selected }),
+          ...(stepResp.limit_applied && { step_rows: withReadProvenance(stepResp) }),
         };
       }
 

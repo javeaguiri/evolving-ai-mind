@@ -1363,7 +1363,7 @@
     "section": "rules",
     "inject_always": false,
     "inject_for": [],
-    "version": 8,
+    "version": 9,
     "content": {
       "tools": [
         {
@@ -2237,6 +2237,34 @@
             },
             "required": [
               "scheduleName",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "read_workflow_run",
+          "description": "Read a workflow run: its workflow and version, status, its error if it failed, and - when it is waiting at a gate - that gate's gateId, gate_type and dialog, rendered as the person answering it sees it, with every {{token}} resolved. A running workflow's state lives in its stack; PGC_WorkflowRun.state is written only when the run ends, and this tool reads the right one. Pass outline true for one line per executed step (step, type, status, duration, error, output size), then steps to read the named steps' outputs in full. Works on any run.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "runId": {
+                "type": "integer"
+              },
+              "outline": {
+                "type": "boolean",
+                "description": "One line per executed step instead of the steps' outputs."
+              },
+              "steps": {
+                "type": "array",
+                "description": "Step identifiers to read in full, e.g. [\"4\", \"7\"]: each execution's status and output summary, and the value the run now holds at that step's output_key. The reply names any identifier that has not run."
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "runId",
               "reasoning"
             ]
           }
