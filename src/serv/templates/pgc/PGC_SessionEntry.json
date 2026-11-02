@@ -9,7 +9,8 @@
     { "name": "role",            "type": "varchar(15)", "nullable": false },
     { "name": "content",         "type": "text",        "nullable": false },
     { "name": "reasoning",       "type": "text",        "nullable": true },
-    { "name": "created_at",      "type": "timestamptz", "nullable": false, "default": "now()" }
+    { "name": "created_at",      "type": "timestamptz", "nullable": false, "default": "now()" },
+    { "name": "compressed",      "type": "boolean",     "nullable": true }
   ],
   "foreign_keys": [
     {

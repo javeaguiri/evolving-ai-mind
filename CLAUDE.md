@@ -185,6 +185,7 @@ No linter or formatter is configured. Code review is done against `docs/code-rev
 | `node dev_scripts/upsert-prompt.mjs` | Push prompts to PGC_Prompt |
 | `node dev_scripts/upsert-step-type.mjs` | Push step type definitions |
 | `node dev_scripts/upsert-system-context.mjs` | Push system context |
+| `node dev_scripts/upsert-schema-registry.mjs [--check]` | Push PGC tables' `PGC_Schema` registry rows from `seed_PGC_Schema.json`; refuses any row the live database disagrees with |
 | `node dev_scripts/pull-prompt.mjs` | Pull prompts from DB to seed file |
 | `node dev_scripts/backfill-embeddings.mjs` | Embed PGC_DomainHelp rows |
 

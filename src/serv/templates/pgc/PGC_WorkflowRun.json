@@ -20,6 +20,7 @@
     { "name": "error",               "type": "jsonb",       "nullable": true },
     { "name": "started_at",          "type": "timestamptz", "nullable": true },
     { "name": "completed_at",        "type": "timestamptz", "nullable": true },
+    { "name": "session_id",          "type": "integer",     "nullable": true },
     { "name": "replay_source_run_id", "type": "integer",    "nullable": true },
     { "name": "llm_break_policy",    "type": "text",        "nullable": true },
     { "name": "created_at",          "type": "timestamptz", "nullable": false, "default": "now()" },
