@@ -165,13 +165,13 @@ Lambda response limit or exhaust available memory — always pass an explicit
 | id | serial PK | |
 | workflow_id | integer FK | → PGC_Workflow.id |
 | trace_id | text | Correlation ID carried end-to-end from Slack message through all hops. Replaces `workflowId` in SQS payloads |
-| triggered_by | text | `slack`, `api`, `workflow`, `system` — who initiated this run |
+| triggered_by | text | `slack`, `api`, `workflow`, `system`, `intent_classify`, `minds_eye` — who initiated this run |
 | status | text | `pending`, `running`, `awaiting_confirmation`, `awaiting_human_gate`, `awaiting_llm_break`, `completed`, `failed`, `cancelled`. `awaiting_llm_break` = suspended for a developer at an `llm_call` seam (replay harness, `docs/arch-replay.md`) — distinct from `awaiting_human_gate` so a break for a developer is never mistaken for a gate for a user |
 | input | jsonb | Original user intent + parameters |
 | stack | jsonb | Execution stack — array of FrameDefinition (see Section 6.3). Controls frame flow only |
 | state | jsonb | **Deprecated.** Previously mirrored `stack[top].local_state` on every write. Now written only at workflow completion (`{ local_state: finalState }`). Do not read or write `state.local_state` during execution — use `stack[top].local_state` directly |
 | output | jsonb | Final workflow output — copied from `state` at completion |
-| callback | jsonb | Provider-agnostic UI callback — `{ provider, channel, threadId }` |
+| callback | jsonb | Provider-agnostic UI callback — `{ provider, channel, threadId }`. A test run Novia started carries `{ provider: 'novia', sessionId, reply }`: its messages wake her session instead of reaching a person, and `reply` is her own thread (`docs/arch-minds-eye.md` §4.4) |
 | total_execution_ms | integer | Running sum of all step `duration_ms` values. Incremented in same UPDATE as stack write. Used by Guard 2 |
 | step_count | integer | Total steps executed this run. Incremented in same UPDATE as stack write |
 | steps_in_window | integer | Steps executed since last `human_gate` completion. Reset to 0 when a human_gate step completes. Used by Guard 1 |
@@ -180,10 +180,15 @@ Lambda response limit or exhaust available memory — always pass an explicit
 | session_id | integer FK | ✦ → PGC_Session.id nullable — set when a Novia session triggers a sub-workflow run via `run_workflow` tool |
 | replay_source_run_id | integer | Nullable, no FK — the run whose corpus + input this run replays (`docs/arch-replay.md` §7a). Not an FK: the source run is a corpus being read and may be deleted by replay cleanup |
 | llm_break_policy | text | Nullable — `never` \| `on_miss` \| `always`; null ⇒ `never`. Read at the `llm_call` seam via `LOAD_RUN_COLUMNS`; drives replay/record break behaviour. Mutable at a break |
+| sandbox | text | Nullable — the `sandbox_<n>` schema a test run reads and writes (`docs/arch-sandbox.md`). Read via `LOAD_RUN_COLUMNS`; `run-workflow.mjs` names it for every SERV call the run makes. Null for every run that is not a test |
 | started_at | timestamptz | |
 | completed_at | timestamptz | |
-| created_at | timestamptz | |
+| created_at | timestamptz | A replay's expressions read the clock from its source run's `created_at` (`docs/arch-replay.md` §9a) |
 | updated_at | timestamptz | |
+
+**Test sandboxes** are schemas, `sandbox_<n>`, in the same database — copies of the tables a test
+needs, plus `PGC_Memory` and `PGC_Workflow`, one at a time, made and dropped through
+`/serv/sandbox/*`. Nothing in `public` refers to them. See `docs/arch-sandbox.md`.
 
 ##### PGC_WorkflowRunStep
 Append-only audit log — one row per step execution attempt. Never updated after insert.
@@ -770,7 +775,7 @@ edits (`arch-home-brain.md` §4.8).
 | 3 | PGC_EntitySchema | `upsert_key` column added |
 | 4 | PGC_DomainHelp | aliases human-confirmed at domain creation (see Section 6.8) |
 | 5 | PGC_Workflow | `domain`, `max_execution_ms`, `max_steps_per_window`, `window_seconds` added |
-| 6 | PGC_WorkflowRun | `trace_id`, `triggered_by`, `state`, `total_execution_ms`, `step_count`, `steps_in_window`, `window_started_at` added; `session_id` nullable integer added Sprint 4; `replay_source_run_id`, `llm_break_policy` + `awaiting_llm_break` status added Sprint 8 (replay harness) |
+| 6 | PGC_WorkflowRun | `trace_id`, `triggered_by`, `state`, `total_execution_ms`, `step_count`, `steps_in_window`, `window_started_at` added; `session_id` nullable integer added Sprint 4; `replay_source_run_id`, `llm_break_policy` + `awaiting_llm_break` status added Sprint 8 (replay harness); `sandbox` added Sprint 15 (test sandbox) |
 | 7 | PGC_WorkflowRunStep | `capability_key`, `retry_count` added |
 | 8 | PGC_Prompt | `input_variables`, `output_schema`, `output_sample`, `error_log`, `memory_config` added |
 | 9 | PGC_IntentMap | written at runtime by create_workflow completion |

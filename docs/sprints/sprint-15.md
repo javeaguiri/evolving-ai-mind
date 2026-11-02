@@ -1,6 +1,6 @@
 # Sprint 15 — Encryption at rest, then Novia tests her own work
 
-**Status: ACTIVE — started 2026-11-02 (Javear).** Re-scoped at start from the proposal of 2026-10-31:
+**Status: CLOSED 2026-11-02 — all 11 ACs met.** Started 2026-11-02 (Javear). Re-scoped at start from the proposal of 2026-10-31:
 the move to the Anthropic API is deferred — it was chosen to fix the 1h TTL for a human-in-the-loop
 test cycle, and if Novia runs the whole cycle herself the 5-minute TTL may be enough (AC5 decides).
 Encryption at rest comes first. Read `docs/sprints/sprint-14.md` §Retro first.
@@ -167,3 +167,74 @@ Read this file, then `docs/arch-web-app.md` §3 (`PGC_UiMessage` provider routin
 4. Build order: 3 `read_workflow_run` → 6 provider `novia` → 4 `answer_gate` + endpoint
    (`openapi.yaml` spec-first) → 5 the wake → 2 the sandbox → 7 → 10 replay.
 AC4's live vehicle: `flashcard_quiz_session` (moved from `manage_budget` — see Session 1's superseded note).
+
+---
+
+## Outcome — closed 2026-11-02
+
+**All 11 ACs met in 2 sessions. 1185 → 1334 unit tests. Prod runs the branch at `e150dd6`.**
+
+- **Encryption at rest (AC1):** prod on `aws/rds`, imported back under the stack `IN_SYNC`, no
+  unencrypted instance, snapshot or backup left; `grant-probe` deleted by Javear.
+- **Novia tests her own work (AC2–AC8, AC10):** the sandbox (`arch-sandbox.md`); test runs that wake
+  her session instead of reaching Slack; `answer_gate` on `/proc/gates` with `gate_id`; *Apply and
+  test*; `sop_test_cycle`; replay as her tool, and a replay that reads its source run's clock.
+  **Session 1284** reviewed `flashcard_quiz_session`, proved four defects in a sandbox, fixed them
+  (v4) and proved the fix, with no message from Javear between each plan approval and its report —
+  **$1.79, 96% cache reads, household rows unchanged**. **Session 1285** declined to answer a
+  person's run. **Session 1287** replayed `process_receipt` run 946 with no LLM call.
+- **Also:** scope 8–9 defects (AC9); the PGC schema made to agree four ways and `PGC_Archetype`
+  removed (AC11); a SERV connection leak fixed; the OpenAPI file parses again.
+- **Decided:** the Anthropic-direct move is not needed for self-testing (AC5).
+
+## Retro
+
+**What went right.**
+
+*A tightly defined sprint, decided quickly.* Javear's verdict at close: the best sprint to date — well
+defined, no added tech debt, every AC met. The scope was re-cut at the start (Anthropic-direct
+deferred to a measurement), every design question was put as a short choice and answered in one
+message (the sandbox option, the tables-only copy, test memories, the AC4 vehicle), and each
+decision went into the AC table the turn it was made. Findings that were not this sprint's work went
+to the backlog or a domain doc as they appeared, so nothing was carried silently.
+
+*Live data corrected the analysis, both ways.* Novia's review of the quiz found that a retry was
+scored from the stale `current_card` — my reading had the mechanism wrong (interval 6, not 15). Her
+run then proved hers. Later the F4 claim of mine was withdrawn on a second look. Each correction went
+into the analysis doc as it happened, so the plan she was judged against stayed true.
+
+*Verifying against the live database before deploying.* Running the real SERV handler locally against
+prod in a throwaway schema checked the sandbox's SQL — sequences, triggers, `NOT VALID` FKs, cascade —
+before any deploy, and a hung test process exposed a connection leak in five routes that had been
+there all along.
+
+*Reasoning about a race before shipping it.* `await_run` was approved, then removed in the build: an
+event landing between `answer_gate` and `await_run` (a redrawn form is the same gate) would have left
+her waiting forever. The call that moves the run now waits itself, and nothing can arrive before it.
+
+*Measuring before deciding.* AC5 settled the Anthropic-direct question with a number from a real
+cycle, not a projection.
+
+**What went wrong, and what it says.**
+
+*I pushed three failing tests.* `fabc29b` committed after a test run whose output was piped to `grep`
+and followed by `;`. **Gate every commit on the test command's exit code** (`&&`), and read the
+summary from a log afterwards.
+
+*Seed text ahead of its code.* The approved tool text went into the seed before the tools existed and
+broke the invariant that the seed describes exactly the dispatchable tools — and a `sandbox: true`
+the code ignored would have written household data. **Text an LLM reads ships in the commit that
+builds what it describes;** drafts wait in a file.
+
+*Replay promised "everything but the LLM" without listing what a run is given.* The clock was an
+input nobody named, found when Novia's first replay broke on step 1b's date. `Math.random` is
+another (backlog). **When a mechanism promises to reproduce a run, enumerate the run's inputs —
+clock, randomness, external reads — before calling it faithful.**
+
+*A smoke check that wasn't read-only.* A `resume { abort }` against a real run was in a verification
+command and was blocked. It would have been refused, but it was still a write aimed at real data.
+**Post-deploy checks read; they never write.**
+
+*AC4's first vehicle wasn't checked.* `manage_budget`'s defect turned out to be a routing alias, not
+the workflow. **Confirm a vehicle's defect before naming it in an AC.**
+

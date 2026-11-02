@@ -2,7 +2,7 @@
 
 Operational procedure for encrypting the prod PostgreSQL instance on disk — `docs/arch-security.md`
 F7, Sprint 15 AC1. Written 2026-11-02. **Agreed before any AWS action; no step below has run until
-its phase is marked done in `docs/sprints/CURRENT.md`.**
+its phase is marked done in `docs/sprints/sprint-15.md`.**
 
 **This document never contains a secret value.** Every database command reads its connection
 string from SSM inside a command substitution, so no password reaches a transcript or a history file.

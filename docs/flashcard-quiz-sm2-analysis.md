@@ -73,3 +73,12 @@ retry; C not offered and unchanged; QA Deck 3 cards, 0 due, 3 learned; summary 2
 0 first time, 2 retried, 0 of 3 due. **Run 957** on the same deck: "Nothing is due in QA Deck right now.
 Next card due: 2026-11-03", no review written. Household cards, review log and deck stats identical
 before and after.
+
+## 5. Open
+
+- **Deck stats drift for decks that are not quizzed.** v4 recounts a deck's `card_count`, `due_count`,
+  `learned_count` and `last_review_date` at the end of a quiz on that deck, and Novia corrected all
+  12 child decks once. Cards added by any other path (`add_entity`, imports) leave the stored numbers
+  stale until that deck is next quizzed; the parent decks show 0. Computing the counts when the
+  picker is shown would remove the drift — a change to `flashcard_quiz_session` steps 1–2, made only
+  if the stale numbers bother Javear.

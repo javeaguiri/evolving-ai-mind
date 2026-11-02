@@ -677,7 +677,7 @@ Sprint 5 build order:
 
 > **Status (2026-07-29).** Direction set — `create_workflow` is dissolved into Novia, gated on
 > evaluating her capability first (§12.7). **Sprint 9 is scoped and branched against this
-> section**: `docs/sprints/CURRENT.md`, branch `sprint/09-novia-builds-workflows`.
+> section**: `docs/sprints/sprint-09.md`, branch `sprint/09-novia-builds-workflows`.
 >
 > Measurements throughout are point-in-time findings against the live database and seed files,
 > not configuration. Each carries the date it was taken.

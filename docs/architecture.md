@@ -3,9 +3,10 @@
 <!-- Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). -->
 <!-- See LICENSE file in the project root for full license terms. -->
 
-Version: 4.1
-Status: Active development — Sprint 14 closed 2026-10-31; Sprint 15 proposed
-Last updated: 2026-10-31 (Sprint 14 close — the web site as the main front end, designed in `docs/arch-web-app.md` v0.5; no `.mjs` added or removed)
+Version: 4.2
+Status: Active development — Sprint 15 closed 2026-11-02; Sprint 16 not yet scoped
+Last updated: 2026-11-02 (Sprint 15 close — encryption at rest; Novia tests her own work: the test sandbox (`docs/arch-sandbox.md`), test runs that wake her session (`callback.provider: 'novia'`), `gate_id` and `POST /proc/gates/{runId}/responses`, replay as her tool, a replay reads its source run's clock. Added `proc/gates.mjs`, `serv/sandbox.mjs`, `serv/sandbox-context.mjs`, `shared/number-rule.mjs`; `PGC_Archetype` removed; new `WORKFLOW_COMPLETED` callback type and `run_event` resume)
+Previously: 4.1 — 2026-10-31 (Sprint 14 close — the web site as the main front end, designed in `docs/arch-web-app.md` v0.5; no `.mjs` added or removed)
 Previously: 2026-10-18 (Sprint 13 close — `gate_type` governs rendering only, no `table_edit` gate; `list_selection` picks by typed ID; a `number` form field validated in the experience layer; `fix-workflow.mjs` and the automatic TROUBLESHOOT→FIX chain retired, a failure sends `WORKFLOW_ERROR` only; an unkeyed upsert row is inserted with its key left to the database; a markdown table is never cut at the section-block 2800, only at Slack's 12,000 payload total)
 Previously: 4.0 — 2026-09-07 (Sprint 12 Track A — the repair loop takes a patch: `propose_workflow_fix` and `simulate_workflow` accept a patch of complete steps merged by `step` identifier; deletion explicit in `removeSteps`; `baseVersion` refuses a write onto a workflow that moved; L0/L1/L2 now runs at both ends of the repair path, having run at neither)
 Previously: 3.9 — 2026-08-30 (Sprint 11 close — bounded views carry their own provenance: capOutput names what it withheld and where the rest is; read_session_entry recall tool; read_workflow outline/steps projection; query_table columns; diffStepFields replacing both DIFF_FIELDS allow-lists; explicit limit on both PGC_SessionEntry loads; output_snapshot as a structural summary)
@@ -279,7 +280,7 @@ entry messages, which carry no run ID and are consumed once.
 | `DELETE_WORKFLOW` | — | 1 — fire-and-forget | SlackbotFunction / classify-intent.mjs | proc/delete-workflow.mjs |
 | `MEMORY_WRITE` | — | 1 — fire-and-forget | run-workflow.mjs (on qualifying domain workflow completion) | proc/memory-writer.mjs |
 | `MINDS_EYE` | — | 1 — fire-and-forget | SlackbotFunction (minds-eye.mjs `/novia`), interactive.mjs (Continue/Follow-up modal) | proc/minds-eye.mjs |
-| `MINDS_EYE_RESUME` | — | 1 — fire-and-forget | interactive.mjs (gate approval or turn-limit Continue) | proc/minds-eye.mjs |
+| `MINDS_EYE_RESUME` | — | 1 — fire-and-forget | interactive.mjs (gate approval — `test: true` for *Apply and test* — or turn-limit Continue); `sqs-callback.mjs` `enqueueCallback` for every message of a run with `callback.provider: 'novia'` (`resumeType: 'run_event'`) | proc/minds-eye.mjs — `handleRunEvent` resolves the test call she is waiting on (`arch-minds-eye.md` §4.4) |
 | `SHUTDOWN` | — | 1 — fire-and-forget | SlackbotFunction (`/shutdown`) | proc/shutdown.mjs — cancels all running/awaiting runs; notifies via HUMAN_NOTIFICATION |
 | `REPLAY` | — | 1 — fire-and-forget | SlackbotFunction (`/replay`) | proc/replay.mjs — starts a replay run (`sourceRunId`) or lists recent runs (none) |
 | `REPLAY_RESUME` | — | 1 — fire-and-forget | interactive.mjs (break-resolution button) | proc/replay.mjs — resumes a broken replay with a payload-free resolution (`abort`/`call_live`/`use_recorded`); routes to the same resume core as the HTTP endpoint. `supplied` carries a response body and stays HTTP-only (A11, `docs/arch-replay.md` §5/§9) |
