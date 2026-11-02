@@ -127,10 +127,12 @@ Read this file, then `docs/arch-web-app.md` §3 (`PGC_UiMessage` provider routin
 2. **Quick wins** — 8 and 9 (unit tests first).
 3. **Prep before code** — ✅ DONE 2026-11-02, approved by Javear: `await_run` (the wake closes her
    open call), `answer_gate` only in her own test runs, **Apply and test** as a second approve button
-   on the commit gate. Seed text written, **not upserted** — `sop_test_cycle` (new), the system
-   prompt's TEST RUNS paragraph, six tool schemas, `sandbox` / `test` parameters; catalog in
-   `arch-minds-eye.md` §4.4. **Upsert these seeds only with the code that honours them**: a
-   `sandbox: true` the current code ignores would write household data.
+   on the commit gate. Seed text held in [`sprint-15-novia-seed-drafts.json`](sprint-15-novia-seed-drafts.json) —
+   `sop_test_cycle`, the system prompt's TEST RUNS paragraph, six tool schemas, `sandbox` / `test`
+   parameters; catalog in `arch-minds-eye.md` §4.4. **Each piece moves into
+   `seed_PGC_SystemContext.json` in the commit that builds its code**: the seed must describe
+   exactly the dispatchable tools (`minds-eye-tool-schemas.test.mjs`), and a `sandbox: true` the
+   code ignores would write household data. The file is deleted when empty.
 4. Build order: 3 `read_workflow_run` → 6 provider `novia` → 4 `answer_gate` + endpoint
    (`openapi.yaml` spec-first) → 5 the wake → 2 the sandbox → 7 → 10 replay.
 AC4's live vehicle: the `manage_budget` new-month defect, left as found.

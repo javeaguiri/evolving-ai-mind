@@ -1,0 +1,226 @@
+{
+  "_note": "Sprint 15 seed drafts for Novia's self-test toolkit, approved by Javear 2026-11-02 (arch-minds-eye.md 4.4). Each piece moves into seed_PGC_SystemContext.json in the same commit as the code that honours it - the seed must describe exactly the tools the loop can dispatch (tests/unit/minds-eye-tool-schemas.test.mjs), and a sandbox flag the code ignores would write household data. Delete this file when it is empty.",
+  "minds_eye_system_prompt": {
+    "insert_after": "- After calling run_workflow, always respond immediately to confirm the workflow was started.\n",
+    "text": "\nTEST RUNS are the exception. A run started with run_workflow { test: true } reads and writes the test sandbox, never household data; its gates and messages come to you, not to the user; and you drive it with await_run and answer_gate. Read sop_test_cycle before planning a test, and never start one without a plan the user approved.\n",
+    "sop_list_add": "sop_test_cycle"
+  },
+  "sop_test_cycle": {
+    "key": "sop_test_cycle",
+    "section": "minds_eye",
+    "inject_always": false,
+    "inject_for": [],
+    "version": 1,
+    "content": "Test cycle SOP \u2014 testing a workflow you built or changed, in the sandbox, against a plan the user approved.\n\nWHEN\nAfter the user approves a change with Apply and test, or asks for a test. Never start testing without an approved plan.\n\n1. GROUND THE PLAN IN THE WORKFLOW AND THE DATA\n   simulate_workflow traces the paths through the committed workflow; read_workflow { outline: true } shows the tables each step reads and writes. Then query_table shows whether the data each path needs exists: a step that branches on an empty result needs a case with rows and one without; a gate whose options come from data needs rows to produce them.\n\n2. WRITE THE PLAN AND RESPOND WITH IT\n   - The paths covered, each once, and the input and gate answers that drive each one.\n   - The sandbox: the tables copied and which of their rows, and the test data you will create or change.\n   - Every loop cut short, and how.\n   - Any test copy of the workflow, with its difference from the real one.\n   - What the plan does not cover, and why \u2014 for example a step that creates tables, or a path no safe data reaches.\n   Wait for the user's approval. Change the plan if asked.\n\n3. CUT LOOPS WITH DATA FIRST\n   A loop that runs until a condition holds is cut by data that starts one step short of it: two items instead of fifty, an item one correct answer from done. That tests the workflow as it ships. Only when no data can shorten a loop \u2014 a count fixed in the steps \u2014 make a test copy with propose_workflow_fix { sandbox: true }. A test copy is not the shipped workflow: name the steps it changed in the plan and in the report.\n\n4. RUN\n   start_test, shape the data with sandbox: true, run_workflow { test: true }, then await_run.\n   At every gate, read the dialog as the user would see it before answering: no literal {{token}}, no empty label, values that match the sandbox data, options that make sense for the question. A wrong value at a gate is a defect even when the run would carry on. Then answer_gate as the plan says, and await_run again.\n   When a run completes, check what it changed with query_table { sandbox: true }, and read_workflow_run { steps } for any step whose output you need.\n   reset_test before a pass that must start from the plan's starting data.\n\n5. ON A DEFECT\n   Note it \u2014 the step, what you saw, what the plan expected \u2014 and carry on with every path it does not block. Do not fix anything mid-cycle: the later paths would test a different workflow from the earlier ones. When the plan is finished or blocked, end_test and report every defect together. Then the normal fix cycle: diagnose, simulate, and propose the fix for the user's approval. Once a fix is applied, offer a fresh test cycle, which starts from a fresh sandbox.\n\n6. REPORT\n   end_test, then respond: the paths that passed, the defects found, what was not covered, and any test copy used. write_memory with the outcome."
+  },
+  "new_tools": [
+    {
+      "name": "read_workflow_run",
+      "description": "Read a workflow run: its workflow and version, status, whether it is a test run, its error if it failed, and - when it is waiting at a gate - that gate's gateId, gate_type and dialog, rendered as the person answering it sees it, with every {{token}} resolved. A running workflow's state lives in its stack; PGC_WorkflowRun.state is written only when the run ends, and this tool reads the right one. Pass outline true for one line per executed step (step, type, status, duration, error, output size), then steps to read the named steps' outputs in full. Works on any run.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "integer"
+          },
+          "outline": {
+            "type": "boolean",
+            "description": "One line per executed step instead of the steps' outputs."
+          },
+          "steps": {
+            "type": "array",
+            "description": "Step identifiers whose outputs to return in full, e.g. [\"4\", \"7\"]. The reply names any identifier that has not run."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why this call, in one sentence."
+          }
+        },
+        "required": [
+          "runId",
+          "reasoning"
+        ]
+      }
+    },
+    {
+      "name": "await_run",
+      "description": "Wait for a test run you started to reach its next gate, complete, or fail. This ends your round: you are called again when the run gets there, and this call's result is that event - the run's status and, at a gate, its gateId, gate_type and dialog. Call it after run_workflow { test: true } and after each answer_gate. Only for your own test runs. The number of waits in a session is bounded; past the bound the call is refused, and you report what you have.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "integer"
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why this call, in one sentence."
+          }
+        },
+        "required": [
+          "runId",
+          "reasoning"
+        ]
+      }
+    },
+    {
+      "name": "answer_gate",
+      "description": "Answer the gate your test run is waiting at, as the person would. Refused for any run that is not your own test run: gates in every other run belong to the user. gateId must be the gate the run is waiting at now; an answer to a gate the run has moved past is refused as gate_moved, so take the gateId from the latest await_run or read_workflow_run. action is the option or button chosen, as the dialog lists it. Supply what the gate_type takes: formValues { field: value } for a form; inputValue for typed text, or for a list_selection row's id, with listGroup when the list is grouped; selectedValue for a choice. Then call await_run.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "integer"
+          },
+          "gateId": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "formValues": {
+            "type": "object"
+          },
+          "inputValue": {
+            "type": "string"
+          },
+          "listGroup": {
+            "type": "string"
+          },
+          "selectedValue": {
+            "type": "string"
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why this call, in one sentence."
+          }
+        },
+        "required": [
+          "runId",
+          "gateId",
+          "action",
+          "reasoning"
+        ]
+      }
+    },
+    {
+      "name": "start_test",
+      "description": "Create the test sandbox for a test cycle: a private copy of the tables a test needs, which test runs and your sandbox: true tools read and write, so household data is never touched. Name every table the workflow under test writes, and any whose data you want to shape; for each, rows is \"all\", \"none\", or a filters array (query_table's form) choosing which rows to copy. Tables a named table's foreign keys point to are copied for you, and every view over a copied table is rebuilt over the copy; the reply lists everything copied, with row counts. PGC_Memory and PGC_Workflow are always copied. A table not copied is read from household data, and a test run that writes one is refused with an error naming it: add it and call start_test again, which replaces the sandbox. Runs immediately, with no gate.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tables": {
+            "type": "array",
+            "description": "[{ name, rows }] - rows is \"all\", \"none\", or a filters array."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why this call, in one sentence."
+          }
+        },
+        "required": [
+          "tables",
+          "reasoning"
+        ]
+      }
+    },
+    {
+      "name": "reset_test",
+      "description": "Return the sandbox to the data start_test copied, discarding every row created or changed since, for a fresh pass over the same plan. Runs immediately, with no gate.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "reasoning": {
+            "type": "string",
+            "description": "Why this call, in one sentence."
+          }
+        },
+        "required": [
+          "reasoning"
+        ]
+      }
+    },
+    {
+      "name": "end_test",
+      "description": "Delete the sandbox. Call it when you report the test's outcome. The test runs' records stay readable with read_workflow_run. Runs immediately, with no gate.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "reasoning": {
+            "type": "string",
+            "description": "Why this call, in one sentence."
+          }
+        },
+        "required": [
+          "reasoning"
+        ]
+      }
+    }
+  ],
+  "existing_tools": {
+    "query_table": {
+      "add_properties": {
+        "sandbox": {
+          "type": "boolean",
+          "description": "true to read the test sandbox (start_test first): copied tables come from the sandbox, every other table from household data."
+        }
+      }
+    },
+    "run_sql": {
+      "add_properties": {
+        "sandbox": {
+          "type": "boolean",
+          "description": "true to read the test sandbox (start_test first): copied tables come from the sandbox, every other table from household data."
+        }
+      }
+    },
+    "update_data": {
+      "add_properties": {
+        "sandbox": {
+          "type": "boolean",
+          "description": "true to act on the test sandbox instead of household data (start_test first). Runs immediately, with no gate."
+        }
+      }
+    },
+    "insert_data": {
+      "add_properties": {
+        "sandbox": {
+          "type": "boolean",
+          "description": "true to act on the test sandbox instead of household data (start_test first). Runs immediately, with no gate."
+        }
+      }
+    },
+    "upsert_data": {
+      "add_properties": {
+        "sandbox": {
+          "type": "boolean",
+          "description": "true to act on the test sandbox instead of household data (start_test first). Runs immediately, with no gate."
+        }
+      }
+    },
+    "propose_workflow_fix": {
+      "add_properties": {
+        "sandbox": {
+          "type": "boolean",
+          "description": "true to write an uncommitted test copy into the sandbox instead of changing the workflow: no gate, validated as any patch is, run only by test runs, and gone at end_test. Show its difference from the real workflow in your test plan."
+        }
+      }
+    },
+    "delete_data": {
+      "add_properties": {
+        "sandbox": {
+          "type": "boolean",
+          "description": "true to act on the test sandbox instead of household data (start_test first). Runs immediately, with no gate."
+        }
+      },
+      "description": "Delete matching rows. Requires human confirmation before it runs, except with sandbox: true, where it runs immediately against the sandbox only."
+    },
+    "run_workflow": {
+      "add_properties": {
+        "test": {
+          "type": "boolean",
+          "description": "true to start a test run: it reads and writes the test sandbox (start_test first), its gates and messages come to you instead of the user, and you follow it with await_run and answer_gate."
+        }
+      }
+    }
+  }
+}
