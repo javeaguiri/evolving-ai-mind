@@ -116,6 +116,9 @@ async function getRows(req) {
   }
 
   const pgcClient = getClient(process.env.PGC_DATABASE_URL);
+  // Closed in finally, never after the query: a failed query or an early return would
+  // otherwise leave the connection open for the life of the Lambda container.
+  let   pgdClient = null;
 
   try {
     await pgcClient.connect();
@@ -177,9 +180,8 @@ async function getRows(req) {
       selectList = columns.map(c => `"${c}"`).join(', ');
     }
 
-    const dbClient = target === 'pgd'
-      ? getClient(process.env.PGD_DATABASE_URL)
-      : pgcClient;
+    if (target === 'pgd') pgdClient = getClient(process.env.PGD_DATABASE_URL);
+    const dbClient = pgdClient ?? pgcClient;
 
     if (target === 'pgd') await dbClient.connect();
 
@@ -254,7 +256,6 @@ async function getRows(req) {
     }
     const truncated = totalMatching > result.rows.length;
 
-    if (target === 'pgd') await dbClient.end();
 
     // Truncate vector columns to 5 chars + '...' — enough to confirm populated
     // vs null without returning the full vector payload.
@@ -290,6 +291,7 @@ async function getRows(req) {
     console.error('table getRows error:', error.message);
     return err(500, `getRows failed: ${error.message}`, req.correlationId);
   } finally {
+    await pgdClient?.end();
     await pgcClient.end();
   }
 }
@@ -446,6 +448,7 @@ async function insertRow(req) {
   const rowsToInsert = isBatch ? rows : [row];
 
   const pgcClient = getClient(process.env.PGC_DATABASE_URL);
+  let   pgdClient = null;
 
   try {
     await pgcClient.connect();
@@ -512,9 +515,8 @@ async function insertRow(req) {
       }
     }
 
-    const dbClient = target === 'pgd'
-      ? getClient(process.env.PGD_DATABASE_URL)
-      : pgcClient;
+    if (target === 'pgd') pgdClient = getClient(process.env.PGD_DATABASE_URL);
+    const dbClient = pgdClient ?? pgcClient;
 
     if (target === 'pgd') await dbClient.connect();
 
@@ -523,7 +525,6 @@ async function insertRow(req) {
       allVals
     );
 
-    if (target === 'pgd') await dbClient.end();
 
     if (isBatch) {
       console.info(`table: inserted ${result.rowCount} row(s) into ${tableName}`);
@@ -552,6 +553,7 @@ async function insertRow(req) {
     console.error('table insertRow error:', error.message);
     return err(500, `insertRow failed: ${error.message}`, req.correlationId);
   } finally {
+    await pgdClient?.end();
     await pgcClient.end();
   }
 }
@@ -575,6 +577,7 @@ async function updateRows(req) {
   }
 
   const pgcClient = getClient(process.env.PGC_DATABASE_URL);
+  let   pgdClient = null;
 
   try {
     await pgcClient.connect();
@@ -610,9 +613,8 @@ async function updateRows(req) {
     if (filterError) return err(400, filterError, req.correlationId);
 
     // --- Setup DB client ---
-    const dbClient = target === 'pgd'
-      ? getClient(process.env.PGD_DATABASE_URL)
-      : pgcClient;
+    if (target === 'pgd') pgdClient = getClient(process.env.PGD_DATABASE_URL);
+    const dbClient = pgdClient ?? pgcClient;
 
     if (target === 'pgd') await dbClient.connect();
 
@@ -672,7 +674,6 @@ async function updateRows(req) {
       [...updateVals, ...filterVals]
     );
 
-    if (target === 'pgd') await dbClient.end();
 
     console.info(`table: updated ${result.rowCount} row(s) in ${tableName}`);
 
@@ -688,6 +689,7 @@ async function updateRows(req) {
     console.error('table updateRows error:', error.message);
     return err(500, `updateRows failed: ${error.message}`, req.correlationId);
   } finally {
+    await pgdClient?.end();
     await pgcClient.end();
   }
 }
@@ -705,6 +707,7 @@ async function deleteRows(req) {
   }
 
   const pgcClient = getClient(process.env.PGC_DATABASE_URL);
+  let   pgdClient = null;
 
   try {
     await pgcClient.connect();
@@ -734,9 +737,8 @@ async function deleteRows(req) {
     // --- Build parameterised WHERE clause ---
     const { whereClause, values } = buildWhereClause(filters);
 
-    const dbClient = target === 'pgd'
-      ? getClient(process.env.PGD_DATABASE_URL)
-      : pgcClient;
+    if (target === 'pgd') pgdClient = getClient(process.env.PGD_DATABASE_URL);
+    const dbClient = pgdClient ?? pgcClient;
 
     if (target === 'pgd') await dbClient.connect();
 
@@ -745,7 +747,6 @@ async function deleteRows(req) {
       values
     );
 
-    if (target === 'pgd') await dbClient.end();
 
     console.info(`table: deleted ${result.rowCount} row(s) from ${tableName}`);
 
@@ -760,6 +761,7 @@ async function deleteRows(req) {
     console.error('table deleteRows error:', error.message);
     return err(500, `deleteRows failed: ${error.message}`, req.correlationId);
   } finally {
+    await pgdClient?.end();
     await pgcClient.end();
   }
 }
@@ -813,6 +815,7 @@ async function upsertRows(req) {
   }
 
   const pgcClient = getClient(process.env.PGC_DATABASE_URL);
+  let   pgdClient = null;
 
   try {
     await pgcClient.connect();
@@ -850,9 +853,8 @@ async function upsertRows(req) {
     const colTypeMap = Object.fromEntries(schemaColumns.map(c => [c.name, c.type]));
     const embedCols  = getEmbedColumns(schemaColumns);
 
-    const dbClient = target === 'pgd'
-      ? getClient(process.env.PGD_DATABASE_URL)
-      : pgcClient;
+    if (target === 'pgd') pgdClient = getClient(process.env.PGD_DATABASE_URL);
+    const dbClient = pgdClient ?? pgcClient;
 
     if (target === 'pgd') await dbClient.connect();
 
@@ -915,7 +917,6 @@ async function upsertRows(req) {
       throw innerError;
     }
 
-    if (target === 'pgd') await dbClient.end();
 
     console.info(`table: upserted ${tableName} — inserted ${inserted.length}, updated ${updated.length}`);
 
@@ -931,6 +932,7 @@ async function upsertRows(req) {
     console.error('table upsertRows error:', error.message);
     return err(500, `upsertRows failed: ${error.message}`, req.correlationId);
   } finally {
+    await pgdClient?.end();
     await pgcClient.end();
   }
 }

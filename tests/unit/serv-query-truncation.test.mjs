@@ -134,7 +134,8 @@ describe('the two ends of the contract stay wired together', () => {
 
   it('the count runs before the connection is closed', () => {
     const countAt = tableSrc.indexOf('SELECT COUNT(*)::int AS total FROM');
-    const closeAt = tableSrc.indexOf("if (target === 'pgd') await dbClient.end();");
+    // getRows' PGD connection closes in its finally block (see serv-table-connections.test.mjs).
+    const closeAt = tableSrc.indexOf('await pgdClient?.end();');
     assert.ok(countAt > -1 && closeAt > -1);
     assert.ok(countAt < closeAt, 'counting after the client is ended throws on every truncated PGD read');
   });
