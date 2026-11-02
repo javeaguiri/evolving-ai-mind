@@ -133,7 +133,12 @@ table routes closed their PGD connection only on success); test runs, the wake a
 smoke checks on the live sandbox and gates routes passed; live catalog 36 tools, none undescribed or
 undispatchable; no errors in any function's logs. 1185 → 1319 tests.
 
-### Next session — the live cycle (AC3–AC8), then scope 10
+**Scope 10 deployed 2026-11-02 at `2e696a0`:** PROC and SERV updated; `sop_test_cycle` v2 and tool
+schemas v11 upserted; live catalog 38 tools, none undescribed or undispatchable; `GET
+/proc/replay/946` unchanged after the refactor. AC10's live vehicle: `process_receipt` run 946
+(31 Oct, completed, its parse step fingerprinted) — Javear asks Novia to replay it in a sandbox.
+
+### Earlier plan — the live cycle (AC3–AC8), then scope 10
 
 Javear starts it in Slack: ask Novia to test `flashcard_quiz_session` as it stands — her plan
 compared with `flashcard-quiz-sm2-analysis.md` §2, the run expected to reproduce F1–F3 — then to fix
