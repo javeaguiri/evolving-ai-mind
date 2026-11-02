@@ -46,8 +46,8 @@ that describes it as it is. CloudFormation accepts an import into a template car
 
 | Grant | Actions | Kept after the sprint? |
 |---|---|---|
-| Snapshot lifecycle | `rds:CreateDBSnapshot`, `rds:CopyDBSnapshot`, `rds:DescribeDBSnapshots`, `rds:DeleteDBSnapshot` | `DescribeDBSnapshots` kept; the rest removed at cleanup |
-| Restore and retire | `rds:RestoreDBInstanceFromDBSnapshot`, `rds:StopDBInstance`, `rds:StartDBInstance`, `rds:DeleteDBInstance` | Removed at cleanup |
+| Snapshot lifecycle | `rds:CreateDBSnapshot`, `rds:CopyDBSnapshot`, `rds:DescribeDBSnapshots`, `rds:DescribeDBInstanceAutomatedBackups`, `rds:DeleteDBSnapshot` | The two Describe actions kept; the rest removed at cleanup |
+| Restore and retire | `rds:RestoreDBInstanceFromDBSnapshot`, `rds:StopDBInstance`, `rds:StartDBInstance`, `rds:DeleteDBInstance`, `rds:DeleteDBInstanceAutomatedBackup` | Removed at cleanup |
 | The key, through RDS only | `kms:DescribeKey`, `kms:CreateGrant` on the `aws/rds` key, conditioned on `kms:ViaService: rds.us-east-2.amazonaws.com` | Removed at cleanup |
 | Stack verification | `cloudformation:DescribeStackResource`, `cloudformation:DetectStackDrift`, `cloudformation:DescribeStackResourceDrifts`, `cloudformation:DescribeStackDriftDetectionStatus` | Kept — read-only |
 
