@@ -609,6 +609,25 @@ It is a wrapper over the three HTTP endpoints and contains no logic of its own.
 
 ---
 
+## 9a. Time is an input
+
+A replay reproduces everything a run was given except what changed on purpose. The clock is
+something a run is given: a `js_transform` that computes today's date, or a `condition` that compares
+against now, puts the time of the run into `local_state`, and from there into a prompt. Replayed on
+another day, that value differs, the next `llm_call` fingerprints with input drift, and the
+disposition refuses the recording — every clock-reading workflow would be replayable only on the
+day it first ran.
+
+So a replay's expressions read the source run's clock. `run-workflow.mjs` sets `run.clock`
+when it loads a run with a `replay_source_run_id`: `replayDate(source.created_at −
+replay.created_at)`, a `Date` whose *now* is shifted by that offset and advances in real time, so
+step-to-step intervals are preserved; a date built from explicit arguments is untouched.
+`js_transform` and `condition` hand it to the expression sandbox (`runSandboxedExpression`) in place
+of the host `Date`. A run that is not a replay has no `run.clock` and sees the real time.
+
+Found live: Novia's replay 959 of `process_receipt` run 946 broke at `parse_receipt` because step 1b,
+`new Date().toISOString().slice(0, 10)`, gave 2 November where the source had 31 October.
+
 ## 10. Replay as a regression test
 
 Because assembly runs for real and every call records its assembled prompt, a replay with a

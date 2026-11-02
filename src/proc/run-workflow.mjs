@@ -35,7 +35,7 @@ import { enqueueCallback, enqueueWorkflow }
                                 from '../shared/sqs-callback.mjs';
 import { getRows, insertRow, updateRows, sandboxScope, setSandbox }
                                 from '../shared/serv-client.mjs';
-import { executeStep, buildDialog, resolveGateOptions, resolveFormFields }
+import { executeStep, buildDialog, resolveGateOptions, resolveFormFields, replayDate }
                                 from './step-executor.mjs';
 import { resolvePath }          from './template-resolver.mjs';
 import { resolveOutputWrites }  from './state-utils.mjs';
@@ -1669,7 +1669,7 @@ async function cancelRun({ workflowRunId, traceId }) {
 // replay_source_run_id + llm_break_policy MUST be here: the replay harness reads the
 // break policy off the run row at the seam (docs/arch-replay.md §7a). Omit them and they
 // arrive undefined — failing closed to `never` and silently billing a run meant to replay.
-export const LOAD_RUN_COLUMNS = ['id', 'workflow_id', 'status', 'input', 'stack', 'callback', 'step_count', 'error', 'replay_source_run_id', 'llm_break_policy', 'sandbox'];
+export const LOAD_RUN_COLUMNS = ['id', 'workflow_id', 'status', 'input', 'stack', 'callback', 'step_count', 'error', 'replay_source_run_id', 'llm_break_policy', 'sandbox', 'created_at'];
 
 async function loadRun(workflowRunId, traceId) {
   const resp = await getRows(
@@ -1686,6 +1686,14 @@ async function loadRun(workflowRunId, traceId) {
   // its steps, its PGD reads and writes, its memory — and the steps themselves, so a test copy
   // of the workflow in the sandbox's PGC_Workflow is the one that runs.
   setSandbox(run.sandbox);
+
+  // A replay's expressions read the source run's clock (replayDate), so a workflow that reads
+  // the time puts the same value into its prompts as the run being replayed.
+  if (run.replay_source_run_id != null) {
+    const src = await getRows('PGC_WorkflowRun', [{ column: 'id', op: 'eq', value: run.replay_source_run_id }],
+      undefined, 1, undefined, ['created_at']);
+    run.clock = replayDate(Date.parse(src.rows[0].created_at) - Date.parse(run.created_at));
+  }
 
   // Resolve workflow name if not cached in run
   if (!run.workflow_name) {

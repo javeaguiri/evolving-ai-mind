@@ -73,7 +73,7 @@ import { pickLabelColumn }              from '../shared/schema-utils.mjs';
 export async function executeStep({ step, localState, run, traceId, breakResolution = null }) {
   switch (step.type) {
     case 'llm_call':     return executeLlmCall({ step, localState, run, traceId, breakResolution });
-    case 'js_transform': return executeJsTransform({ step, localState, traceId });
+    case 'js_transform': return executeJsTransform({ step, localState, traceId, clock: run?.clock });
     case 'human_gate':   return executeHumanGate({ step, localState, run, traceId });
     case 'serv_schema':  return executeServSchema({ step, localState, traceId });
     case 'serv_insert':  return executeServInsert({ step, localState, traceId });
@@ -90,7 +90,7 @@ export async function executeStep({ step, localState, run, traceId, breakResolut
     case 'write_memory': return executeWriteMemory({ step, localState, run, traceId });
     case 'end':          return { outputValue: null, nextAction: 'end' };
     case 'iterator':     return { outputValue: null, nextAction: 'iterator' };
-    case 'condition':    return executeCondition({ step, localState, traceId });
+    case 'condition':    return executeCondition({ step, localState, traceId, clock: run?.clock });
 
     case 'sub_workflow':
       throw new Error(`step type "${step.type}" not yet implemented (Phase 3)`);
@@ -106,7 +106,7 @@ export async function executeStep({ step, localState, run, traceId, breakResolut
 // js_transform
 // ---------------------------------------------------------------------------
 
-async function executeJsTransform({ step, localState, traceId }) {
+async function executeJsTransform({ step, localState, traceId, clock }) {
   const { transform_type: transformType, expression } = step;
 
   // Only expression sandbox is supported — transform_type built-ins are removed.
@@ -123,7 +123,7 @@ async function executeJsTransform({ step, localState, traceId }) {
     if (!step.output_key) throw new Error('js_transform expression step missing output_key');
     // input_key is optional — expressions that read everything from local_state do not need it.
     const items  = step.input_key ? resolvePath(localState, step.input_key) : null;
-    const result = runSandboxedExpression(expression, items, localState, traceId);
+    const result = runSandboxedExpression(expression, items, localState, traceId, clock);
     return { outputValue: result, nextAction: resolveNextAction(step.on_success, null) };
   }
 
@@ -196,7 +196,30 @@ function assertSafeAst(node) {
  * @param {string} traceId
  * @returns {*}                 Expression result
  */
-export function runSandboxedExpression(expression, items, localState, traceId) {
+/**
+ * The Date a replay's expressions see (docs/arch-replay.md §9a): time is an input to a run, so a
+ * replay reads the source run's clock — "now" is shifted by offsetMs and advances in real time,
+ * while a date built from explicit arguments is untouched. Without it a workflow that reads the
+ * clock (a fallback date, a due check) feeds a different value into its prompts on any other day,
+ * and every recording after it drifts.
+ *
+ * @param {number} offsetMs  source run start minus replay run start
+ * @returns {Function} a Date stand-in for the expression sandbox
+ */
+export function replayDate(offsetMs) {
+  const RealDate = Date;
+  function ReplayDate(...args) {
+    if (!new.target) return new RealDate(RealDate.now() + offsetMs).toString();
+    return args.length > 0 ? new RealDate(...args) : new RealDate(RealDate.now() + offsetMs);
+  }
+  ReplayDate.prototype = RealDate.prototype;
+  ReplayDate.now   = () => RealDate.now() + offsetMs;
+  ReplayDate.parse = RealDate.parse;
+  ReplayDate.UTC   = RealDate.UTC;
+  return ReplayDate;
+}
+
+export function runSandboxedExpression(expression, items, localState, traceId, DateImpl = Date) {
   // Parse and gate
   let ast;
   try {
@@ -213,7 +236,7 @@ export function runSandboxedExpression(expression, items, localState, traceId) {
   const sandbox = {
     __ls: JSON.stringify(localState),
     __it: JSON.stringify(items ?? null),
-    JSON, Math, Array, Object, String, Number, Boolean, Date,
+    JSON, Math, Array, Object, String, Number, Boolean, Date: DateImpl,
   };
   const wrapped = `var local_state=JSON.parse(__ls);var items=JSON.parse(__it);(${expression})`;
   let result;
@@ -1794,7 +1817,7 @@ async function executeSimulate({ step, localState, run, traceId }) {
  *
  * No output_key is written — condition steps produce no state output.
  */
-function executeCondition({ step, localState, traceId }) {
+function executeCondition({ step, localState, traceId, clock }) {
   if (!step.expression) throw new Error('condition step missing expression');
   if (!step.on_success) throw new Error('condition step missing on_success');
   if (!step.on_else)    throw new Error('condition step missing on_else');
@@ -1820,7 +1843,7 @@ function executeCondition({ step, localState, traceId }) {
     });
   } else {
     try {
-      const result = runSandboxedExpression(step.expression, null, localState, traceId);
+      const result = runSandboxedExpression(step.expression, null, localState, traceId, clock);
       isTruthy = Boolean(result);
     } catch (err) {
       console.warn('step-executor: condition js eval failed — routing falsy', {
