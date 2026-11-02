@@ -18,11 +18,10 @@ her test plan is judged against §2.
 | F5 | 17 | The in-session retry stops at grade 3 or more *(Novia, session 1284)* | SM-2 repeats an item in the session until it scores 4 or more |
 | F6 | — | `PGD_Decks` statistics (`card_count`, `due_count`, `last_review_date`, `learned_count`) are never updated and have drifted — deck 17 shows 0 cards and holds 45; step 3's reveal shows them *(Novia, session 1284)* | Kept current, or computed when shown |
 | F7 | 20 | The completion message reports `all_cards.length`, not the reviews done *(Novia, session 1284)* | The number reviewed |
-| F4 | 14, `PGD_Cards` | `interval` stands in for the repetition count (0 → 1, 1 → 6, otherwise interval × EF), so the first pass after a failure jumps to 6 days | After a failure the count restarts — 1 day, then 6 — which needs a repetition count `PGD_Cards` does not have |
+| ~~F4~~ | 14 | ~~`interval` stands in for the repetition count, so the first pass after a failure jumps to 6 days~~ **Withdrawn 2026-11-02:** a failure leaves the card at interval 1, and the next successful review is SM-2's second repetition — 6 days — which is what `interval` 1 → 6 gives. No column is needed | — |
 
 F1 and F2 match the report — F2 more severely than first read, since a failed card ends further out than before it failed: the whole deck every session, and a card answered wrong coming back in
-fifteen days instead of one. F4 is a contract question (a missing column), decided before it is fixed: add a
-repetition count, or accept the jump.
+fifteen days instead of one.
 
 ## 2. Reference test
 
@@ -43,3 +42,17 @@ table; household rows unchanged.
 **Covered with no workflow change:** pass, fail-then-retry, and not-due. **Not covered:** shuffle
 order and rollover past a subset of 10 — an uncommitted test copy with `subset_size: 2` covers the
 rollover with the same four cards.
+
+## 3. Test run 955 (Novia, session 1284, 2026-11-02)
+
+Sandbox: all decks; cards and review log empty; a QA Deck with three cards. Confirmed: F2 — card A
+graded 1 (saved interval 1, EF 1.96), then 4 on the retry, saved **interval 15, EF 2.50**, its log row
+recording `interval_before` 6, `EF_before` 2.50; F1 — card C, ten days from due, quizzed and moved
+15 → 35 days; F6 — the QA Deck's stats untouched after four reviews; F7 — "You reviewed 3 cards"
+after four. Correct: card B, new, graded 5 → interval 1, EF 2.6; the retry came back at the end of
+the round; every gate rendered with no literal `{{…}}`. Household rows identical before and after.
+
+**Fixes recommended to Javear:** the in-session retry changes no schedule (only the session's first
+answer counts — her first wording would have scheduled a just-failed card at 6 days); due or
+never-reviewed cards only; mastery at grade 4; deck counts computed when the picker is shown rather
+than stored, since cards are added outside the quiz; the end message counts reviews.
