@@ -56,3 +56,20 @@ the round; every gate rendered with no literal `{{…}}`. Household rows identic
 answer counts — her first wording would have scheduled a just-failed card at 6 days); due or
 never-reviewed cards only; mastery at grade 4; deck counts computed when the picker is shown rather
 than stored, since cards are added outside the quiz; the end message counts reviews.
+
+## 4. Fixed in v4 and retested (runs 956, 957)
+
+Javear approved all five fixes and chose *Apply and test*. Novia's v4 (24 steps): step 4 loads only
+the quiz's columns; step 5 keeps due or never-reviewed cards; a failed card is re-queued carrying
+the schedule just written and flagged `is_retry`, and step 14 leaves a retry's schedule unchanged;
+step 17 keeps a card in the session until it scores 4; new steps 20a–20c recount the quizzed deck's
+stats; step 20 reports reviews, first-time recalls, retries and cards still due. Fix 4 recounts at
+the end of a quiz rather than when the picker is shown, so a deck not quizzed keeps its stored
+numbers; she corrected the 12 child decks' stats in household data once, as offered.
+
+**Run 956** (fresh sandbox, same three cards): A graded 1 then 4 → interval 1, EF 1.96, due the next
+day, its retry's log row recording 1 / 1.96; B graded 3 then 5 → interval 1, EF 2.36, the 3 forcing a
+retry; C not offered and unchanged; QA Deck 3 cards, 0 due, 3 learned; summary 2 studied, 4 reviews,
+0 first time, 2 retried, 0 of 3 due. **Run 957** on the same deck: "Nothing is due in QA Deck right now.
+Next card due: 2026-11-03", no review written. Household cards, review log and deck stats identical
+before and after.
