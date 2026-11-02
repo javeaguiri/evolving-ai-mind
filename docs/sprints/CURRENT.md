@@ -20,7 +20,7 @@ so a build → test → fix cycle finishes without Javear in the loop.**
 
 | # | Item |
 |---|---|
-| **1** | **Encryption at rest for PostgreSQL** — Sprint 14 scope item 6 / AC6, carried; `docs/arch-security.md` F7. Snapshot → encrypted copy → restore, **AWS-managed key `aws/rds`** (decided Javear, 2026-11-02). Not a template toggle: `EvoMindDB` has a custom `DBInstanceIdentifier`, so `StorageEncrypted: true` in `template.yaml` asks CloudFormation for a replacement it cannot perform under that name — and after a restore-and-rename keeps `SYSRDSEvoMind`, the next deploy would still read the property change as a replacement. The plan brings the restored instance back under the stack without one (e.g. `DeletionPolicy: Retain`, remove from stack, resource import with `StorageEncrypted: true`), keeps the endpoint, and is cut in a quiet window so no writes are lost. **Written and agreed before any AWS action** — 🟡 plan approved 2026-11-02: [`docs/ops-encryption-at-rest.md`](../ops-encryption-at-rest.md); Phases 0–2 done 2026-11-02 — prod now on the encrypted instance, row counts identical; awaiting Javear's live check, then Phase 3 (import) and Phase 4 (cleanup, by 2026-11-08) |
+| **1** | **Encryption at rest for PostgreSQL** — Sprint 14 scope item 6 / AC6, carried; `docs/arch-security.md` F7. Snapshot → encrypted copy → restore, **AWS-managed key `aws/rds`** (decided Javear, 2026-11-02). Not a template toggle: `EvoMindDB` has a custom `DBInstanceIdentifier`, so `StorageEncrypted: true` in `template.yaml` asks CloudFormation for a replacement it cannot perform under that name — and after a restore-and-rename keeps `SYSRDSEvoMind`, the next deploy would still read the property change as a replacement. The plan brings the restored instance back under the stack without one (e.g. `DeletionPolicy: Retain`, remove from stack, resource import with `StorageEncrypted: true`), keeps the endpoint, and is cut in a quiet window so no writes are lost. **Written and agreed before any AWS action** — 🟡 plan approved 2026-11-02: [`docs/ops-encryption-at-rest.md`](../ops-encryption-at-rest.md); Phases 0–3 done 2026-11-02 — encrypted, row counts identical, live check passed, back in the stack, drift `IN_SYNC`; **remaining: Phase 4 cleanup by 2026-11-08** (no unencrypted copy) |
 | **2** | **A test-data policy for prod** — from the backlog; decided by Javear before Novia self-tests anything that writes |
 | **3** | **`read_workflow_run`** — from the backlog: the run's status, current step, waiting gate with its `gate_id`, per-step outputs, bounded with provenance |
 | **4** | **`answer_gate`** — Sprint 14 scope item 9, carried. Built on the provider-neutral `POST /gates/{runId}/responses` with `gate_id`, which this sprint builds in PROC first (`arch-web-app.md` §3.1); refused for a run she did not start and for any gate guarding her own gated write |
@@ -33,7 +33,7 @@ state changes, not at close.**
 
 | # | Status | Criterion | Scope | Threshold |
 |---|---|---|---|---|
-| **AC1** | 🟡 plan approved 2026-11-02 ([`ops-encryption-at-rest.md`](../ops-encryption-at-rest.md)); Phases 0–2 done 2026-11-02 — prod now on the encrypted instance, row counts identical; awaiting Javear's live check, then Phase 3 (import) and Phase 4 (cleanup, by 2026-11-08) | The prod database is encrypted at rest: `StorageEncrypted: true` on the live instance, `template.yaml` matches the live instance (drift `IN_SYNC`), every table's row count unchanged across the cut, the Lambdas reach it with no SSM change or with the change made through a version-pinned deploy, and **no unencrypted copy remains** — the old instance, its automated backups and the pre-encrypt snapshot deleted (Phase 4; added Javear, 2026-11-02) (Sprint 14 AC6) | [1](#scope) | Binary, verified live |
+| **AC1** | 🟡 plan approved 2026-11-02 ([`ops-encryption-at-rest.md`](../ops-encryption-at-rest.md)); Phases 0–3 done 2026-11-02 — encrypted, row counts identical, live check passed, back in the stack, drift `IN_SYNC`; **remaining: Phase 4 cleanup by 2026-11-08** (no unencrypted copy) | The prod database is encrypted at rest: `StorageEncrypted: true` on the live instance, `template.yaml` matches the live instance (drift `IN_SYNC`), every table's row count unchanged across the cut, the Lambdas reach it with no SSM change or with the change made through a version-pinned deploy, and **no unencrypted copy remains** — the old instance, its automated backups and the pre-encrypt snapshot deleted (Phase 4; added Javear, 2026-11-02) (Sprint 14 AC6) | [1](#scope) | Binary, verified live |
 | **AC2** | ⬜ | A written test-data policy for prod, approved by Javear | [2](#scope) | Approved |
 | **AC3** | ⬜ | Novia answers a gate in a run she started and the run resumes through `POST /gates/{runId}/responses`; a run she did not start, or a gate guarding her own gated write, is refused (Sprint 14 AC9) | [3](#scope), [4](#scope) | Binary, live |
 | **AC4** | ⬜ | She builds or fixes a workflow, runs it, is woken at its gate, reads it with `read_workflow_run`, answers, and reports the outcome — with no message from Javear between start and report | [3](#scope), [4](#scope), [5](#scope) | Binary, live |
@@ -71,3 +71,13 @@ reaches the new instance (verified by server address before unfreezing). Unfroze
 SERV reads through the Lambda. Runbook corrected with what the cut showed (restore CA flag, rename
 waiter, unfreeze needs a read-write session first). The `aws/rds` key's id was printed once by a
 refused direct `kms:DescribeKey` — an identifier, not key material; no direct KMS call again.
+
+**Phase 3 (same session):** Javear's live check passed (`/ping` e2e, a read, a write). Imported from
+the deployed template plus the block (`CAPABILITY_NAMED_IAM` needed too); one change, `Import`, no
+replacement. Restoring `RDSEndpoint` showed a non-replacing `Modify` of `EvoMindDB` — `sam build`
+metadata and the `!GetAtt` form of `VPCSecurityGroups`, same value — previewed before executing, no
+pending change after. Single-resource drift needed `DetectStackResourceDrift` (granted, own deploy):
+**`IN_SYNC`, no differences.**
+
+**Novia test candidate (Javear, 2026-11-02):** `manage_budget` did not create the new month's budget
+correctly. Left as found — a live defect for AC4, where Novia diagnoses and fixes it herself.
