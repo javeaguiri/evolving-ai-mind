@@ -13,7 +13,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { toInputItems, capOutput } from '../../src/proc/minds-eye.mjs';
+import { toInputItems, capOutput, unparseableCallEntry, UNPARSEABLE_ARGUMENTS_RESULT } from '../../src/proc/minds-eye.mjs';
+
+const sessionEntryRoleCheck = JSON.parse(readFileSync(new URL('../../src/serv/templates/pgc/PGC_SessionEntry.json', import.meta.url)))
+  .constraints.find(c => c.name === 'chk_pgc_sessionentry_role').expression;
 
 const user      = (seq, content) => ({ role: 'user', content, sequence_number: seq });
 const assistant = (seq, message) => ({ role: 'assistant', sequence_number: seq, content: JSON.stringify({ action: 'respond', message, reasoning: 'r', advisory: 'a' }) });
@@ -492,5 +495,33 @@ describe('runReasoningLoop — parallel tool calls', () => {
 
   it('gives only the first call of a turn the turn-level non-call items', () => {
     assert.match(loopSrc, /callIndex === 0 \? \[\.\.\.leadingItems, \{ \.\.\.entry\.call \}\] : \[\{ \.\.\.entry\.call \}\]/);
+  });
+});
+
+describe('toInputItems — a call whose arguments would not parse', () => {
+  const call    = { type: 'function_call', call_id: 'fc_9', name: 'query_table', arguments: '{"table": "PGD_X",' };
+  const leading = { type: 'reasoning', id: 'rs_9', summary: [] };
+  const entry   = { role: 'tool', sequence_number: 9, content: unparseableCallEntry('query_table', [leading, call], 3) };
+
+  it('replays the malformed call as sent, with the error the round returned', () => {
+    const inRoundOutput = capOutput(JSON.stringify(UNPARSEABLE_ARGUMENTS_RESULT), 9, 'query_table');
+    assert.deepEqual(toInputItems([entry]), [
+      leading,
+      call,
+      { type: 'function_call_output', call_id: 'fc_9', output: inRoundOutput },
+    ]);
+  });
+
+  it('is persisted with the tool role the role check admits', () => {
+    assert.equal(JSON.parse(entry.content).tool, 'query_table');
+    assert.ok(sessionEntryRoleCheck.includes("'tool'"));
+  });
+});
+
+describe('runReasoningLoop — a call whose arguments would not parse', () => {
+  it('persists the entry before answering it, so the rebuild has the call', () => {
+    const branch = loopSrc.slice(loopSrc.indexOf('tool arguments would not parse'), loopSrc.indexOf('activeCall = null;\n          continue;'));
+    assert.match(branch, /unparseableCallEntry\(entry\.call\.name, entryItems, turnCount\)/);
+    assert.match(branch, /insertRow\('PGC_SessionEntry'[\s\S]*recordToolOutput\(UNPARSEABLE_ARGUMENTS_RESULT\)[\s\S]*seq \+= 1;/);
   });
 });

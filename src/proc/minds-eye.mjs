@@ -786,7 +786,18 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
           console.warn('proc/minds-eye: tool arguments would not parse — returning the error', {
             action: entry.call.name, traceId,
           });
-          recordToolOutput({ error: 'arguments were not valid JSON — resend this call with valid JSON arguments' });
+          // Persisted like any tool entry, so the rebuild replays the malformed call and its
+          // error exactly as this round sent them.
+          const parseErrorEntry = unparseableCallEntry(entry.call.name, entryItems, turnCount);
+          await insertRow('PGC_SessionEntry', {
+            session_id:      session.id,
+            sequence_number: seq,
+            role:            'tool',
+            content:         parseErrorEntry,
+          });
+          recordToolOutput(UNPARSEABLE_ARGUMENTS_RESULT);
+          workingHistory.push({ role: 'tool', content: parseErrorEntry, sequence_number: seq });
+          seq += 1;
           activeCall = null;
           continue;
         }
@@ -2484,6 +2495,21 @@ export function capOutput(text, seq, tool) {
       ? ` The full result is also stored as session entry sequence ${seq}; read_session_entry({ sequence: ${seq}, offset: ${MAX_TOOL_OUTPUT_CHARS} }) pages it when a narrower read cannot express what you need.`
       : ` The full result is session entry sequence ${seq} — call read_session_entry({ sequence: ${seq}, offset: ${MAX_TOOL_OUTPUT_CHARS} }) to read the rest.`;
   return `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)} ...[truncated: ${MAX_TOOL_OUTPUT_CHARS} of ${text.length} characters shown.${narrower}${recall}]`;
+}
+
+export const UNPARSEABLE_ARGUMENTS_RESULT = { error: 'arguments were not valid JSON — resend this call with valid JSON arguments' };
+
+/**
+ * The session entry for a call whose arguments would not parse. `items` carries the gateway's
+ * own function_call, malformed arguments included, so toInputItems replays the call as sent.
+ *
+ * @param {string} tool          The call's name
+ * @param {Array}  items         The turn's gateway items for this call
+ * @param {number} turn          The turn number
+ * @returns {string}             The entry's content
+ */
+export function unparseableCallEntry(tool, items, turn) {
+  return JSON.stringify({ tool, params: {}, result: UNPARSEABLE_ARGUMENTS_RESULT, items, turn });
 }
 
 /**

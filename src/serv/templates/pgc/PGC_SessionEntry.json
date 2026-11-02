@@ -21,7 +21,7 @@
   ],
   "constraints": [
     { "type": "unique", "name": "uq_pgc_sessionentry_session_seq", "columns": ["session_id", "sequence_number"] },
-    { "type": "check",  "name": "chk_pgc_sessionentry_role", "expression": "role IN ('system', 'user', 'assistant')" }
+    { "type": "check",  "name": "chk_pgc_sessionentry_role", "expression": "role IN ('system', 'user', 'assistant', 'tool')" }
   ],
   "triggers": []
 }
