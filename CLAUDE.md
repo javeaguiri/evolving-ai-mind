@@ -251,15 +251,15 @@ Sprints 7–14: see `docs/sprints/sprint-07.md` through `docs/sprints/sprint-14.
 
 Read `docs/sprints/sprint-14.md` (outcome, retro) before adding anything to Sprint 15.
 
-### Open Work (Sprint 15 — `docs/sprints/CURRENT.md`, PROPOSED, branch `sprint/15-novia-direct`)
+### Open Work (Sprint 15 — `docs/sprints/CURRENT.md`, ACTIVE, branch `sprint/15-encrypt-novia-self-test`)
 
-**Novia: her cost, and testing her own work** (Javear, 2026-10-30 — her cost is affecting his use of her).
+**Encryption at rest, then Novia tests her own work** (started Javear, 2026-11-02).
 
-1. **Novia calls Anthropic directly** — `callLlmWithTools` through `@anthropic-ai/sdk`, 1h cache TTL; workflow `llm_call`s, sonar and embeddings stay on Perplexity.
-2. **`answer_gate`** on the provider-neutral `POST /gates/{runId}/responses` with `gate_id`.
-3. **`read_workflow_run`**, **a wake at her run's gate**, and **a test-data policy for prod** — the self-testing loop.
+1. **Encryption at rest** — snapshot → encrypted copy → restore, AWS-managed key `aws/rds`; plan written and agreed before any AWS action.
+2. **A test-data policy for prod** — decided before she self-tests anything that writes.
+3. **`read_workflow_run`**, **`answer_gate`** on the provider-neutral `POST /gates/{runId}/responses` with `gate_id`, and **a wake at her run's gate** — the self-testing loop.
 
-The web app's Phase 0 build follows, from `docs/arch-web-app.md` §10.
+**Deferred at start:** Novia calling Anthropic directly — AC5 measures whether a self-paced test cycle fits the 5-minute TTL. The web app's Phase 0 build follows, from `docs/arch-web-app.md` §10.
 
 ### Deferred
 
