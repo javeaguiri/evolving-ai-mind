@@ -33,7 +33,6 @@ import PGC_Capability      from './templates/pgc/PGC_Capability.json'      with 
 import PGC_Session         from './templates/pgc/PGC_Session.json'         with { type: 'json' };
 import PGC_SessionEntry    from './templates/pgc/PGC_SessionEntry.json'    with { type: 'json' };
 import PGC_Memory          from './templates/pgc/PGC_Memory.json'          with { type: 'json' };
-import PGC_Archetype       from './templates/pgc/PGC_Archetype.json'       with { type: 'json' };
 import seedSchema        from './templates/pgc/seeds/seed_PGC_Schema.json'         with { type: 'json' };
 import seedTableMap      from './templates/pgc/seeds/seed_PGC_TableMap.json'       with { type: 'json' };
 import seedDomainHelp    from './templates/pgc/seeds/seed_PGC_DomainHelp.json'     with { type: 'json' };
@@ -42,7 +41,6 @@ import seedIntentMap     from './templates/pgc/seeds/seed_PGC_IntentMap.json'   
 import seedPrompt        from './templates/pgc/seeds/seed_PGC_Prompt.json'         with { type: 'json' };
 import seedSystemContext from './templates/pgc/seeds/seed_PGC_SystemContext.json'  with { type: 'json' };
 import seedStepType      from './templates/pgc/seeds/seed_PGC_StepType.json'      with { type: 'json' };
-import seedArchetype     from './templates/pgc/seeds/seed_PGC_Archetype.json'     with { type: 'json' };
 import seedCapability    from './templates/pgc/seeds/seed_PGC_Capability.json'   with { type: 'json' };
 
 const { Client } = pg;
@@ -69,7 +67,6 @@ let cachedReport = null;
 //   PGC_WorkflowRun before PGC_WorkflowRunStep, PGC_WorkflowRunLock (FK)
 //   PGC_Prompt is self-referential — safe to create at any point
 //   PGC_SystemContext, PGC_StepType, PGC_Capability have no FKs — append after
-//   PGC_Archetype has no FKs — append after
 // ---------------------------------------------------------------------------
 const PGC_TEMPLATES = [
   PGC_Schema,
@@ -88,7 +85,6 @@ const PGC_TEMPLATES = [
   PGC_Session,
   PGC_SessionEntry,
   PGC_Memory,
-  PGC_Archetype,
 ];
 
 // ---------------------------------------------------------------------------
@@ -189,10 +185,7 @@ export async function bootstrap(req) {
     // Step 11 — seed PGC_StepType rows (live step type catalogue with contracts)
     await seedPGCStepType(client);
 
-    // Step 12 — seed PGC_Archetype rows (workflow design archetypes)
-    await seedPGCArchetype(client);
-
-    // Step 13 — seed PGC_Capability rows (external service registry)
+    // Step 12 — seed PGC_Capability rows (external service registry)
     await seedPGCCapability(client);
 
     const freshEnvironment = tableResults.some(r => r.status === 'created');
@@ -707,45 +700,4 @@ async function seedPGCCapability(client) {
     );
   }
   console.info('init-brain: PGC_Capability seeded');
-}
-
-async function seedPGCArchetype(client) {
-  const rows = Array.isArray(seedArchetype) ? seedArchetype : [seedArchetype];
-  for (const row of rows) {
-    // ON CONFLICT (name) DO UPDATE — archetypes evolve as patterns are distilled
-    // out of the design prompts. The seed file is authoritative for seeded rows.
-    // Rows Novia authors carry created_by = 'novia' and are not in the seed file,
-    // so they are never touched here. Use upsert-archetype.mjs for single rows.
-    await client.query(
-      `INSERT INTO "PGC_Archetype"
-         (name, description, aliases, preconditions, slots, topology,
-          design_rules, source_workflow, status, version, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       ON CONFLICT (name) DO UPDATE SET
-         description     = EXCLUDED.description,
-         aliases         = EXCLUDED.aliases,
-         preconditions   = EXCLUDED.preconditions,
-         slots           = EXCLUDED.slots,
-         topology        = EXCLUDED.topology,
-         design_rules    = EXCLUDED.design_rules,
-         source_workflow = EXCLUDED.source_workflow,
-         status          = EXCLUDED.status,
-         version         = EXCLUDED.version,
-         updated_at      = now()`,
-      [
-        row.name,
-        row.description ?? null,
-        JSON.stringify(row.aliases       ?? []),
-        JSON.stringify(row.preconditions ?? {}),
-        JSON.stringify(row.slots         ?? []),
-        JSON.stringify(row.topology      ?? []),
-        row.design_rules    ?? null,
-        row.source_workflow ?? null,
-        row.status     ?? 'draft',
-        row.version    ?? 1,
-        row.created_by ?? 'seed',
-      ]
-    );
-  }
-  console.info('init-brain: PGC_Archetype seeded');
 }
