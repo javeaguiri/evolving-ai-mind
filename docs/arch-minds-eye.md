@@ -167,6 +167,7 @@ All single-table lookups use `SERV getRows` directly — no new endpoints requir
 | `list_tables` | SERV `listTables` | Registered tables per PGC_TableMap |
 | `list_physical_tables` | SERV `listPhysicalTables` | What the database actually holds — the registry may not assert it |
 | `run_sql` | SERV | Direct read of live data — the tool that lets Novia see what a workflow will operate on |
+| `read_workflow_run` | PROC — run row, its top frame, `PGC_WorkflowRunStep` | Status, version, test flag, error; the waiting gate's `gate_id`, `gate_type` and dialog from `buildDialog`; `outline` / `steps` projections, bounded like `read_workflow`. Reads the stack, never `PGC_WorkflowRun.state`, which is written only at completion. Any run (§4.4) |
 | `get_run_history` | Three `getRows` calls chained via session_id FK | See §3.3. **Requires X1 applied.** Shape of step-level call depends on W1 decision. |
 
 **FK join paths (documented in `minds_eye_context_index` seed):**
@@ -192,6 +193,7 @@ count against `max_actions_per_session`.
 | Gated write | `register_workflow`, `propose_workflow_fix`, `propose_schema_fix`, `delete_data`, `drop_table`, `create_view`, `drop_view` | HUMAN_GATE before execution |
 | Trigger | `run_workflow` | Dispatches a registered workflow to the step-executor engine |
 | Housekeeping | `write_memory` | None — silent episodic write |
+| Test | `start_test`, `reset_test`, `end_test`, `await_run`, `answer_gate`; `sandbox: true` on the data tools and `propose_workflow_fix`; `test: true` on `run_workflow` | None — confined to the sandbox and to her own test runs (§4.4) |
 
 **`register_workflow`** (Sprint 9, AC4) — `{ name, domain?, description, steps, intentPhrases?,
 intentKeywords? }`. Creates a workflow: one `PGC_Workflow` row at version 1, and one
@@ -290,6 +292,33 @@ call, and `update_data` already permits far more damage without a gate.
 - Modifying `PGC_StepType` definitions
 - Modifying `PGC_TableMap` permissions
 - Fixing Execution domain failures (harness bugs) — these require code changes
+
+### 4.4 Test tools — Novia tests her own work (Sprint 15)
+
+A test runs a workflow end to end in the **sandbox** (`docs/arch-sandbox.md`), against a plan the
+user approved. The procedure she follows is the `sop_test_cycle` row; the tools are below.
+
+**The loop.** `run_workflow { test: true }` starts a run with `sandbox` set and
+`callback.provider: 'novia'`, and she calls `await_run`. For a `novia` run, `enqueueCallback`
+sends nothing to Slack: a gate, completion or failure enqueues `MINDS_EYE_RESUME` for her session,
+and the event — status, and at a gate its `gate_id`, `gate_type` and dialog — becomes the output
+of the `await_run` call she left open. She reads the dialog, calls `answer_gate`, and waits again.
+The wake closes a pending call, as an approved action gate does, so her transcript only appends
+and its cached prefix holds. Waits per session are bounded in `minds_eye_preferences`.
+
+| Tool | Does | Boundary |
+|---|---|---|
+| `start_test { tables: [{ name, rows }] }` | Creates the sandbox; `rows` is `all`, `none` or a filters array | Replaces any earlier sandbox |
+| `reset_test` | Back to the data `start_test` copied | — |
+| `end_test` | Drops the sandbox | Run records stay |
+| `await_run { runId }` | Ends the round; the run's next event is its output | Her own test runs only; bounded per session |
+| `answer_gate { runId, gateId, action, formValues?, inputValue?, listGroup?, selectedValue? }` | `POST /gates/{runId}/responses` | Her own test runs only — every other run's gates belong to the user. A `gateId` that is not the waiting gate is `409 gate_moved` |
+| `sandbox: true` on `query_table`, `run_sql`, `update_data`, `insert_data`, `upsert_data`, `delete_data` | Reads or writes the sandbox | Ungated — `delete_data` included |
+| `propose_workflow_fix { sandbox: true }` | Writes an uncommitted test copy into the sandbox's `PGC_Workflow` | Ungated, validated as any patch; gone at `end_test` |
+
+**Apply and test.** The approval gate of `register_workflow` and `propose_workflow_fix` carries a
+second approve button. It applies the change, and the gate's resolution tells her a test was asked
+for: she plans the test under `sop_test_cycle` and responds with the plan for approval.
 
 ---
 
