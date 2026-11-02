@@ -519,6 +519,9 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
       }
     );
     console.info('run-workflow: workflow completed', { workflowRunId: run.id, traceId });
+    if (run.callback) {
+      await enqueueCallback(run.callback, { type: 'WORKFLOW_COMPLETED', workflowRunId: run.id, traceId });
+    }
     if (shouldWriteEpisodicMemory(run)) {
       await enqueueWorkflow({
         type:         'MEMORY_WRITE',

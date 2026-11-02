@@ -193,7 +193,7 @@ count against `max_actions_per_session`.
 | Gated write | `register_workflow`, `propose_workflow_fix`, `propose_schema_fix`, `delete_data`, `drop_table`, `create_view`, `drop_view` | HUMAN_GATE before execution |
 | Trigger | `run_workflow` | Dispatches a registered workflow to the step-executor engine |
 | Housekeeping | `write_memory` | None — silent episodic write |
-| Test | `start_test`, `reset_test`, `end_test`, `await_run`, `answer_gate`; `sandbox: true` on the data tools and `propose_workflow_fix`; `test: true` on `run_workflow` | None — confined to the sandbox and to her own test runs (§4.4) |
+| Test | `start_test`, `reset_test`, `end_test`, `answer_gate`; `sandbox: true` on the data tools and `propose_workflow_fix`; `test: true` on `run_workflow` | None — confined to the sandbox and to her own test runs (§4.4) |
 
 **`register_workflow`** (Sprint 9, AC4) — `{ name, domain?, description, steps, intentPhrases?,
 intentKeywords? }`. Creates a workflow: one `PGC_Workflow` row at version 1, and one
@@ -298,21 +298,29 @@ call, and `update_data` already permits far more damage without a gate.
 A test runs a workflow end to end in the **sandbox** (`docs/arch-sandbox.md`), against a plan the
 user approved. The procedure she follows is the `sop_test_cycle` row; the tools are below.
 
-**The loop.** `run_workflow { test: true }` starts a run with `sandbox` set and
-`callback.provider: 'novia'`, and she calls `await_run`. For a `novia` run, `enqueueCallback`
-sends nothing to Slack: a gate, completion or failure enqueues `MINDS_EYE_RESUME` for her session,
-and the event — status, and at a gate its `gate_id`, `gate_type` and dialog — becomes the output
-of the `await_run` call she left open. She reads the dialog, calls `answer_gate`, and waits again.
-The wake closes a pending call, as an approved action gate does, so her transcript only appends
-and its cached prefix holds. Waits per session are bounded in `minds_eye_preferences`.
+**The loop.** The call that sets a test run moving is the call that waits for it.
+`run_workflow { test: true }` starts a run with `sandbox` set and
+`callback: { provider: 'novia', sessionId, reply }`, and `answer_gate` answers its gate; each records
+its open call as a `__pending__` entry **before** the run is dispatched or the answer sent, and
+the round ends. For a `novia` run `enqueueCallback` sends nothing to Slack: every message the run
+would have sent becomes a `MINDS_EYE_RESUME` with `resumeType: 'run_event'` for her session, and
+`handleRunEvent` resolves the open call when the message ends the wait (`describeRunEvent`) — a
+gate (with the dialog as sent, so a redrawn form carries its warning), an error, completion
+(`WORKFLOW_COMPLETED`, which no person is sent), or any message once the run has stopped. A
+notification on the way to the next gate does not; what a notify step said reaches her in the
+event's `steps_since`. Because the wait is recorded first, nothing the run does can arrive before
+she is waiting for it. The resolution closes the pending call as an approved action gate does, so
+her transcript only appends and its cached prefix holds; `(session_id, sequence_number)` is unique,
+so two racing events resolve it once. Events per session are bounded by
+`minds_eye_preferences.max_test_events`.
 
 | Tool | Does | Boundary |
 |---|---|---|
 | `start_test { tables: [{ name, rows }] }` | Creates the sandbox; `rows` is `all`, `none` or a filters array | Replaces any earlier sandbox |
 | `reset_test` | Back to the data `start_test` copied | — |
 | `end_test` | Drops the sandbox | Run records stay |
-| `await_run { runId }` | Ends the round; the run's next event is its output | Her own test runs only; bounded per session |
-| `answer_gate { runId, gateId, action, formValues?, inputValue?, listGroup?, selectedValue? }` | `POST /gates/{runId}/responses` | Her own test runs only — every other run's gates belong to the user. A `gateId` that is not the waiting gate is `409 gate_moved` |
+| `run_workflow { ..., test: true }` | Starts a test run in the sandbox, then waits; its first event is the result | Refused with no sandbox; bounded per session |
+| `answer_gate { runId, gateId, action, formValues?, inputValue?, listGroup?, selectedValue? }` | `answerGate` (`POST /gates/{runId}/responses`), then waits; the next event is the result | Her own test runs only — every other run's gates belong to the user. A `gateId` that is not the waiting gate is `409 gate_moved` |
 | `sandbox: true` on `query_table`, `run_sql`, `update_data`, `insert_data`, `upsert_data`, `delete_data` | Reads or writes the sandbox | Ungated — `delete_data` included |
 | `propose_workflow_fix { sandbox: true }` | Writes an uncommitted test copy into the sandbox's `PGC_Workflow` | Ungated, validated as any patch; gone at `end_test` |
 
