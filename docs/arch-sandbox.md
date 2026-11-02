@@ -3,7 +3,7 @@
 <!-- Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). -->
 <!-- See LICENSE file in the project root for full license terms. -->
 
-Status: **Proposed — Sprint 15 AC2, for Javear's approval.**
+Status: **Approved (Javear, 2026-11-02) — SERV half built.** `src/serv/sandbox.mjs`, `src/serv/sandbox-context.mjs`.
 
 ---
 
@@ -35,8 +35,12 @@ A Postgres schema, `sandbox_<n>`, in the one database PGC and PGD share.
 | `PGC_Memory` | Always | All — a test run reads real memory plus its own, and its writes stay in the sandbox |
 | `PGC_Workflow` | Always | All — the uncommitted test copy of a workflow (§5) replaces the real row here and only here |
 
-- **FKs** are recreated between the copies, so `CASCADE` deletes behave as they do for real. An FK
-  parent is copied with the rows the copied children reference, plus any filter she gave it.
+- **FKs** are recreated between the copies, so `CASCADE` deletes behave as they do for real. A
+  parent she did not name is copied with all its rows. The FKs are added `NOT VALID`: a filtered
+  copy is accepted as it stands, and every write made in the sandbox is checked.
+- **Triggers** are recreated on the copies — `LIKE … INCLUDING ALL` does not copy them, and
+  without the `updated_at` triggers a test would see different rows from the ones the household
+  sees.
 - **Each `serial` column** gets its own sequence, set to the real table's current maximum, so test
   inserts never consume real ids.
 - **Tables not copied** — other `PGD_*` tables, and every other `PGC_*` table — resolve to the

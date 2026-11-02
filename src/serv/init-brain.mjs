@@ -42,6 +42,7 @@ import seedPrompt        from './templates/pgc/seeds/seed_PGC_Prompt.json'      
 import seedSystemContext from './templates/pgc/seeds/seed_PGC_SystemContext.json'  with { type: 'json' };
 import seedStepType      from './templates/pgc/seeds/seed_PGC_StepType.json'      with { type: 'json' };
 import seedCapability    from './templates/pgc/seeds/seed_PGC_Capability.json'   with { type: 'json' };
+import { currentSandbox }   from './sandbox-context.mjs';
 
 const { Client } = pg;
 
@@ -99,11 +100,23 @@ const PGC_TEMPLATES = [
  * @returns {pg.Client}
  */
 export function getClient(connectionString) {
-  return new Client({
+  const client = new Client({
     connectionString,
     connectionTimeoutMillis: 5000,
     ssl: SSL_CONFIG,
   });
+  // A request against the test sandbox reads and writes the tables the sandbox holds, and finds
+  // every other table in public — on every connection it opens, so no route needs to know.
+  // The name was validated against SANDBOX_NAME before the request entered the sandbox.
+  const sandbox = currentSandbox();
+  if (sandbox) {
+    const connect = client.connect.bind(client);
+    client.connect = async () => {
+      await connect();
+      await client.query(`SET search_path TO "${sandbox}", public`);
+    };
+  }
+  return client;
 }
 
 /**

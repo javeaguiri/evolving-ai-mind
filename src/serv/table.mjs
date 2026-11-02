@@ -943,7 +943,7 @@ async function upsertRows(req) {
  * Validate filter array — operators and column names.
  * Returns an error string or null if valid.
  */
-function validateFilters(filters, validColumns) {
+export function validateFilters(filters, validColumns) {
   if (!Array.isArray(filters)) return 'filters must be an array';
 
   for (const f of filters) {
@@ -968,7 +968,7 @@ function validateFilters(filters, validColumns) {
  * startIdx — offset for $n placeholders when preceding params exist (e.g. UPDATE SET values).
  * Returns { whereClause, values }.
  */
-function buildWhereClause(filters, startIdx = 1) {
+export function buildWhereClause(filters, startIdx = 1) {
   if (!filters.length) return { whereClause: '', values: [] };
 
   const conditions = [];

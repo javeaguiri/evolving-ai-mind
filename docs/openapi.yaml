@@ -26,6 +26,20 @@ components:
         type: string
         format: uuid
       description: Client-supplied trace ID — generated if omitted
+    Sandbox:
+      name: x-sandbox
+      in: header
+      required: false
+      schema:
+        type: string
+        pattern: '^sandbox_[0-9]+$'
+      description: >
+        Run this request against the test sandbox (docs/arch-sandbox.md). Every connection the
+        request opens has search_path set to the sandbox, then public: tables the sandbox holds
+        are read and written there, every other table in public. A write to a PGD_* table the
+        sandbox does not hold is refused (409), and so is every schema change and bootstrap
+        (403). Sent by PROC for a test run's SERV calls and for Novia's sandbox tools; accepted
+        on every SERV route. An unknown or malformed name is a 400.
 
   schemas:
     CorrelationResponse:
@@ -3342,6 +3356,68 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/serv/sandbox/create:
+    post:
+      summary: Create the test sandbox
+      description: >
+        Drops any existing sandbox_* schema, creates sandbox_<n>, and copies into it the named
+        PGD_* tables (rows all, none, or a getRows-style filters array), the tables their foreign
+        keys point to (all rows), every PGD view over a copied table (rebuilt over the copy),
+        and PGC_Memory and PGC_Workflow (all rows). Each copy keeps its columns, defaults,
+        constraints and indexes, gets its own sequences (set to the copied maximum, so test
+        inserts never take real ids) and its triggers; foreign keys are recreated between the
+        copies NOT VALID, so a filtered copy is accepted and every new write is checked. The
+        spec is stored in the sandbox for reset. docs/arch-sandbox.md §2, §4.
+      operationId: createSandbox
+      tags: [SERV-Sandbox]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tables]
+              properties:
+                tables:
+                  type: array
+                  items:
+                    type: object
+                    required: [name]
+                    properties:
+                      name: { type: string, pattern: '^PGD_[A-Za-z0-9_]+$' }
+                      rows: { description: '"all" (default), "none", or a filters array [{ column, op, value }]' }
+            example: { tables: [{ name: PGD_Cards, rows: [{ column: deck_id, op: eq, value: 3 }] }, { name: PGD_ReviewLog, rows: none }] }
+      responses:
+        '200': { description: "{ sandbox, tables: [{ name, rows, copied, added_as: named|fk_parent }], views, always: [PGC_Memory, PGC_Workflow] }" }
+        '400': { description: A table name is malformed, not a PGD table, not in the database, or a filter names a column it does not have }
+
+  /api/v1/serv/sandbox/reset:
+    post:
+      summary: Return the sandbox to its starting data
+      description: Recreates the current sandbox from the spec it was created with. Same response as create.
+      operationId: resetSandbox
+      tags: [SERV-Sandbox]
+      responses:
+        '200': { description: As create }
+        '404': { description: No sandbox exists }
+
+  /api/v1/serv/sandbox/drop:
+    post:
+      summary: Delete the test sandbox
+      description: Drops every sandbox_* schema. Idempotent.
+      operationId: dropSandbox
+      tags: [SERV-Sandbox]
+      responses:
+        '200': { description: "{ dropped: [names] }" }
+
+  /api/v1/serv/sandbox/current:
+    post:
+      summary: The sandbox that exists now, if any
+      operationId: currentSandbox
+      tags: [SERV-Sandbox]
+      responses:
+        '200': { description: "{ sandbox: name | null, spec }" }
 
   /api/v1/serv/schema/createTable:
     post:
