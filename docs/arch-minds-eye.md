@@ -324,9 +324,12 @@ so two racing events resolve it once. Events per session are bounded by
 | `sandbox: true` on `query_table`, `run_sql`, `update_data`, `insert_data`, `upsert_data`, `delete_data` | Reads or writes the sandbox | Ungated — `delete_data` included |
 | `propose_workflow_fix { sandbox: true }` | Writes an uncommitted test copy into the sandbox's `PGC_Workflow` | Ungated, validated as any patch; gone at `end_test` |
 
-**Apply and test.** The approval gate of `register_workflow` and `propose_workflow_fix` carries a
-second approve button. It applies the change, and the gate's resolution tells her a test was asked
-for: she plans the test under `sop_test_cycle` and responds with the plan for approval.
+**Apply and test.** `gateButtonConfig` gives the approval gate of `propose_workflow_fix` and
+`register_workflow` a `testLabel` (*Apply and test*, *Register and test*); `callback.mjs` draws it
+as a second approve button (`mindsEyeGateButtons`), and its click carries `test: true` through
+`interactive.mjs` to `MINDS_EYE_RESUME`. When the change is applied, `withTestRequest` marks the
+result `test_requested`: she plans the test under `sop_test_cycle` and responds with the plan for
+approval. A refused change asks for nothing.
 
 ---
 

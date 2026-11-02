@@ -341,7 +341,7 @@ export async function handle(req) {
 // ---------------------------------------------------------------------------
 
 async function handleGateResume(body, callback, traceId, req) {
-  const { sessionId, approved, resumeType } = body;
+  const { sessionId, approved, resumeType, test } = body;
 
   const sessResp = await getRows('PGC_Session', [{ column: 'id', op: 'eq', value: sessionId }]);
   const session  = sessResp.rows?.[0] ?? null;
@@ -478,7 +478,7 @@ async function handleGateResume(body, callback, traceId, req) {
   }
 
   // Execute the approved gated action
-  const result    = await executeWriteTool(action, params, traceId);
+  const result    = withTestRequest(await executeWriteTool(action, params, traceId), test);
   const resultStr = JSON.stringify({ tool: action, params, result });
   await insertRow('PGC_SessionEntry', {
     session_id:      session.id,
@@ -1231,13 +1231,15 @@ async function notifyTurnProgress({ callback, traceId, turn, action, reasoning, 
 // Post an action gate — stores __pending__ entry, posts HUMAN_GATE
 // ---------------------------------------------------------------------------
 
-function gateButtonConfig(action, params = {}) {
+export function gateButtonConfig(action, params = {}) {
   if (action === 'delete_data')          return { confirmLabel: 'Delete', confirmStyle: 'danger' };
   if (action === 'drop_table')           return { confirmLabel: 'Drop',   confirmStyle: 'danger' };
   if (action === 'drop_view')            return { confirmLabel: 'Drop',   confirmStyle: 'danger' };
   if (action === 'create_view')          return { confirmLabel: 'Create', confirmStyle: null };
-  if (action === 'register_workflow')    return { confirmLabel: 'Register', confirmStyle: null };
-  if (action === 'propose_workflow_fix') return { confirmLabel: 'Apply',  confirmStyle: null };
+  // A workflow change can be approved with a test: the second approval applies it and asks her to
+  // plan one (sop_test_cycle). Not offered for a test copy, which is never gated.
+  if (action === 'register_workflow')    return { confirmLabel: 'Register', confirmStyle: null, testLabel: 'Register and test' };
+  if (action === 'propose_workflow_fix') return { confirmLabel: 'Apply',  confirmStyle: null, testLabel: 'Apply and test' };
   if (action === 'propose_schema_fix') {
     const isDrop = params.operation === 'dropColumn';
     return { confirmLabel: isDrop ? 'Drop' : 'Apply', confirmStyle: isDrop ? 'danger' : null };
@@ -1247,7 +1249,7 @@ function gateButtonConfig(action, params = {}) {
 
 async function postActionGate({ session, action, params, items, turn, callback, traceId, currentTurnCount, currentSeq }) {
   const gateText = await buildGateText(action, params, traceId);
-  const { confirmLabel, confirmStyle } = gateButtonConfig(action, params);
+  const { confirmLabel, confirmStyle, testLabel } = gateButtonConfig(action, params);
 
   await insertRow('PGC_SessionEntry', {
     session_id:      session.id,
@@ -1269,6 +1271,7 @@ async function postActionGate({ session, action, params, items, turn, callback, 
       dialog:       { fields: [{ type: 'typography', value: gateText }] },
       confirmLabel,
       confirmStyle,
+      ...(testLabel ? { testLabel } : {}),
       traceId,
     });
   }
@@ -2386,6 +2389,15 @@ async function executeTriggerTool(action, params, callback, traceId, threadTs, t
 // ---------------------------------------------------------------------------
 // Test tools — the sandbox, her test runs, and the gates in them (docs/arch-minds-eye.md §4.4)
 // ---------------------------------------------------------------------------
+
+/**
+ * An approved change the user also asked to have tested (Apply and test). Marked on the result
+ * only when the change was applied — there is nothing to test after a refusal.
+ */
+export function withTestRequest(result, test) {
+  if (!test || !result || result.error || result.success === false) return result;
+  return { ...result, test_requested: true, next: 'The user asked you to test this change. Read sop_test_cycle, then respond with a test plan for their approval.' };
+}
 
 /** Whether a run is a test run this session started — the only runs whose gates she answers. */
 export function isOwnTestRun(run, sessionId) {
