@@ -3094,6 +3094,77 @@ export function projectWorkflowSteps(steps, { selected, outline } = {}) {
   return { step_count: all.length, steps: all };
 }
 
+// A PGC_WorkflowRunStep row's step identifier, and its one-line outline.
+const stepOf = (row) => String(row.input_snapshot?.step ?? row.step_number);
+const stepLine = (row) => ({
+  step:         stepOf(row),
+  type:         row.step_type,
+  status:       row.status,
+  duration_ms:  row.duration_ms ?? null,
+  ...(row.retry_count ? { retry_count: row.retry_count } : {}),
+  ...(row.error       ? { error: row.error } : {}),
+  output_chars: row.output_snapshot?.chars ?? null,
+});
+
+// Consecutive executed steps of one type and status, this many or more, are one outline line.
+const COLLAPSE_STEP_RUN = 3;
+
+/**
+ * Collapse runs of consecutive executed steps that share a type and status into one line with
+ * their count. An iterator's passes are the case that matters: in session 1293 one test-run
+ * event listed 111 lines, 51 of them the same `serv_query` once per receipt item, and a run's
+ * outline (194 steps) passed the transcript cap. A line carrying an error, a retry or a notify
+ * step's message is never folded in, because it is the line someone is looking for.
+ *
+ * @param {Array} lines  Outline lines in execution order ({ step, type, status, duration_ms, output_chars, … })
+ * @returns {Array}
+ */
+export function collapseStepLines(lines = []) {
+  const plain = (l) => !('error' in l) && !('retry_count' in l) && !('notified' in l);
+  const sum   = (run, key) => run.every(l => l[key] == null) ? null : run.reduce((t, l) => t + (l[key] ?? 0), 0);
+  const out = [];
+  for (let i = 0; i < lines.length;) {
+    let j = i;
+    while (j + 1 < lines.length && plain(lines[i]) && plain(lines[j + 1])
+      && lines[j + 1].type === lines[i].type && lines[j + 1].status === lines[i].status) j++;
+    const run = lines.slice(i, j + 1);
+    out.push(...(run.length >= COLLAPSE_STEP_RUN
+      ? [{ steps: `${run[0].step}…${run[run.length - 1].step}`, type: run[0].type, status: run[0].status,
+          count: run.length, duration_ms: sum(run, 'duration_ms'), output_chars: sum(run, 'output_chars') }]
+      : run));
+    i = j + 1;
+  }
+  return out;
+}
+
+// A list in a gate dialog longer than this shows its first GATE_LIST_SHOWN entries.
+const GATE_LIST_MAX   = 20;
+const GATE_LIST_SHOWN = 10;
+
+/**
+ * Bound a gate dialog's long lists for a run event, and say where the rest is. A receipt gate
+ * carried all 51 items in its reveal on every event — a few thousand characters re-read on every
+ * later turn. The dialog in full stays one read away: read_workflow_run renders the waiting gate
+ * whole.
+ *
+ * @param {*}      dialog
+ * @param {number} runId
+ * @returns {*}
+ */
+export function boundGateDialog(dialog, runId) {
+  const walk = (v) => {
+    if (Array.isArray(v)) {
+      if (v.length <= GATE_LIST_MAX) return v.map(walk);
+      return [...v.slice(0, GATE_LIST_SHOWN).map(walk), {
+        withheld: `${v.length - GATE_LIST_SHOWN} more of ${v.length}. read_workflow_run({ runId: ${runId} }) shows the waiting gate in full.`,
+      }];
+    }
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)]));
+    return v;
+  };
+  return walk(dialog);
+}
+
 /**
  * What a test run's message means for the call waiting on it, or null when it does not end the
  * wait — a notification the run sent on its way to its next gate. A gate, an error, completion,
@@ -3114,7 +3185,7 @@ export function describeRunEvent({ message, run, workflow = null, stepRows = [] 
     || ((stopped || atBreak) && message?.type === 'HUMAN_NOTIFICATION');
   if (!endsWait) return null;
 
-  const { outline, note: _note, executed_step_count: _count, ...summary } =
+  const { outline: _outline, note: _note, executed_step_count: _count, ...summary } =
     projectWorkflowRun({ run, workflow, stepRows, outline: true });
   // A replay break: the llm_call whose recorded response could not be served. The assembled
   // prompt is left out — it is the size of a whole prompt; the drift says what changed.
@@ -3126,12 +3197,14 @@ export function describeRunEvent({ message, run, workflow = null, stepRows = [] 
     ...(report ? { break: breakSummary, resolutions: (message.breakActions ?? []).map(a => ({ resolution: a.resolution, ...(a.sessionId != null ? { sessionId: a.sessionId } : {}) })) } : {}),
     // The gate as it was sent, which can carry what the plain gate does not — a form redrawn
     // with "Please complete …" is the same gate, and the warning is the whole event.
-    ...(summary.waiting_gate && message.type === 'HUMAN_GATE' && message.dialog
-      ? { waiting_gate: { ...summary.waiting_gate, dialog: message.dialog } } : {}),
-    steps_since: outline.map((line, i) => (
-      stepRows[i]?.step_type === 'notify' && stepRows[i]?.output_snapshot?.summary
-        ? { ...line, notified: stepRows[i].output_snapshot.summary } : line
-    )),
+    ...(summary.waiting_gate
+      ? { waiting_gate: { ...summary.waiting_gate, dialog: boundGateDialog(
+          message.type === 'HUMAN_GATE' && message.dialog ? message.dialog : summary.waiting_gate.dialog, run.id) } }
+      : {}),
+    steps_since: collapseStepLines(stepRows.map(row => (
+      row.step_type === 'notify' && row.output_snapshot?.summary
+        ? { ...stepLine(row), notified: row.output_snapshot.summary } : stepLine(row)
+    ))),
     ...(message.message ? { message: message.message } : {}),
   };
 }
@@ -3160,7 +3233,6 @@ export function projectWorkflowRun({ run, workflow = null, stepRows = [], outlin
   const stack      = Array.isArray(run.stack) ? run.stack : [];
   const top        = stack.length > 0 ? stack[stack.length - 1] : null;
   const localState = top?.local_state ?? run.state?.local_state ?? null;
-  const stepOf     = (row) => String(row.input_snapshot?.step ?? row.step_number);
 
   const waitingGate = run.status === 'awaiting_human_gate' && top?.type === 'human_gate'
     ? {
@@ -3171,16 +3243,6 @@ export function projectWorkflowRun({ run, workflow = null, stepRows = [], outlin
         dialog:        buildDialog(top.step_ref ?? {}, top.local_state ?? {}),
       }
     : null;
-
-  const line = (row) => ({
-    step:         stepOf(row),
-    type:         row.step_type,
-    status:       row.status,
-    duration_ms:  row.duration_ms ?? null,
-    ...(row.retry_count ? { retry_count: row.retry_count } : {}),
-    ...(row.error       ? { error: row.error } : {}),
-    output_chars: row.output_snapshot?.chars ?? null,
-  });
 
   const summary = {
     run_id:              run.id,
@@ -3200,8 +3262,8 @@ export function projectWorkflowRun({ run, workflow = null, stepRows = [], outlin
   if (outline) {
     return {
       ...summary,
-      outline: stepRows.map(line),
-      note:    'Outline only. Call read_workflow_run again with steps: ["<step>"] for those steps\' outputs in full.',
+      outline: collapseStepLines(stepRows.map(stepLine)),
+      note:    'Outline only; consecutive steps of one type and status are one line with their count. Call read_workflow_run again with steps: ["<step>"] for each execution of a step and its output in full.',
     };
   }
 
@@ -3218,7 +3280,7 @@ export function projectWorkflowRun({ run, workflow = null, stepRows = [], outlin
     }));
     return {
       ...summary,
-      executions: picked.map(row => ({ ...line(row), executed_at: row.executed_at ?? null, output_summary: row.output_snapshot?.summary ?? null })),
+      executions: picked.map(row => ({ ...stepLine(row), executed_at: row.executed_at ?? null, output_summary: row.output_snapshot?.summary ?? null })),
       current_output: current,
       ...(localState ? {} : { note: 'This run kept no state (it was cancelled), so no output value can be read back.' }),
       ...(notRun.length && { not_run: notRun }),
@@ -3227,7 +3289,7 @@ export function projectWorkflowRun({ run, workflow = null, stepRows = [], outlin
 
   return {
     ...summary,
-    last_step: stepRows.length > 0 ? line(stepRows[stepRows.length - 1]) : null,
+    last_step: stepRows.length > 0 ? stepLine(stepRows[stepRows.length - 1]) : null,
     note:      'Pass outline: true for every executed step, or steps: ["<step>"] for named steps\' outputs in full.',
   };
 }
