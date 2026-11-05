@@ -3227,9 +3227,11 @@ export function describeRunEvent({ message, run, workflow = null, stepRows = [] 
  * @param {Array}  args.stepRows   PGC_WorkflowRunStep rows, in execution order
  * @param {boolean} [args.outline] One line per executed step
  * @param {Array}  [args.selected] Step identifiers to return in full
+ * @param {string} [args.path]     Dot or JSONPath into each selected step's value — one field
+ *                                 instead of six run_sql calls to dig it out (session 1293)
  * @returns {object}
  */
-export function projectWorkflowRun({ run, workflow = null, stepRows = [], outline, selected }) {
+export function projectWorkflowRun({ run, workflow = null, stepRows = [], outline, selected, path }) {
   const stack      = Array.isArray(run.stack) ? run.stack : [];
   const top        = stack.length > 0 ? stack[stack.length - 1] : null;
   const localState = top?.local_state ?? run.state?.local_state ?? null;
@@ -3274,9 +3276,11 @@ export function projectWorkflowRun({ run, workflow = null, stepRows = [], outlin
     const notRun   = wanted.filter(w => !picked.some(row => stepOf(row) === w));
     const current  = Object.fromEntries(wanted.map(w => {
       const outputKey = defs.find(s => String(s?.step) === w)?.output_key;
-      return [w, outputKey
-        ? { output_key: outputKey, value: localState ? resolvePath(localState, outputKey) ?? null : null }
-        : { output_key: null }];
+      if (!outputKey) return [w, { output_key: null }];
+      const value = localState ? resolvePath(localState, outputKey) ?? null : null;
+      return [w, path
+        ? { output_key: outputKey, path, value: value === null ? null : resolvePath(value, path) ?? null }
+        : { output_key: outputKey, value }];
     }));
     return {
       ...summary,
@@ -3442,7 +3446,7 @@ async function executeReadTool(action, params, traceId, session) {
       }
 
       case 'read_workflow_run': {
-        const { runId, steps: selected, outline } = params;
+        const { runId, steps: selected, outline, path } = params;
         if (!runId) return { error: 'runId is required' };
         const runResp = await getRows(
           'PGC_WorkflowRun',
@@ -3459,7 +3463,7 @@ async function executeReadTool(action, params, traceId, session) {
             ['step_number', 'step_type', 'status', 'retry_count', 'input_snapshot', 'output_snapshot', 'error', 'duration_ms', 'executed_at']),
         ]);
         return {
-          ...projectWorkflowRun({ run, workflow: wfResp.rows?.[0] ?? null, stepRows: stepResp.rows ?? [], outline, selected }),
+          ...projectWorkflowRun({ run, workflow: wfResp.rows?.[0] ?? null, stepRows: stepResp.rows ?? [], outline, selected, path }),
           ...(stepResp.limit_applied && { step_rows: withReadProvenance(stepResp) }),
         };
       }

@@ -114,3 +114,29 @@ describe('projectWorkflowRun — the outline collapses too, and steps still read
     assert.equal(full.waiting_gate.gate_id, 'g-12');
   });
 });
+
+describe('projectWorkflowRun — path reads one field of a step output', () => {
+  const done = { id: 967, workflow_id: 2, status: 'completed', stack: [],
+    state: { local_state: { exact: { matched: [{ name_original: 'CEBOLLA TUBO', inventory_id: 35 }, { name_original: 'PIMIENTO TRICO', inventory_id: 44 }], unmatched: ['A', 'B', 'C'] } } } };
+  const workflow = { name: 'w', version: 14, steps: [{ step: '8e', type: 'js_transform', output_key: 'exact' }] };
+  const stepRows = [{ id: 1, step_number: 13, step_type: 'js_transform', status: 'completed', input_snapshot: { step: '8e' }, output_snapshot: { chars: 999 } }];
+
+  it('returns the field named, with the path it read', () => {
+    const out = projectWorkflowRun({ run: done, workflow, stepRows, selected: ['8e'], path: 'matched[1].inventory_id' });
+    assert.deepEqual(out.current_output['8e'], { output_key: 'exact', path: 'matched[1].inventory_id', value: 44 });
+  });
+
+  it('takes the standard forms: length and a wildcard', () => {
+    assert.equal(projectWorkflowRun({ run: done, workflow, stepRows, selected: ['8e'], path: 'unmatched.length' }).current_output['8e'].value, 3);
+    assert.deepEqual(projectWorkflowRun({ run: done, workflow, stepRows, selected: ['8e'], path: 'matched[*].name_original' }).current_output['8e'].value,
+      ['CEBOLLA TUBO', 'PIMIENTO TRICO']);
+  });
+
+  it('a path that resolves to nothing returns null rather than the whole value', () => {
+    assert.equal(projectWorkflowRun({ run: done, workflow, stepRows, selected: ['8e'], path: 'nope.deeper' }).current_output['8e'].value, null);
+  });
+
+  it('without a path the whole value comes back, as before', () => {
+    assert.deepEqual(projectWorkflowRun({ run: done, workflow, stepRows, selected: ['8e'] }).current_output['8e'].value, done.state.local_state.exact);
+  });
+});
