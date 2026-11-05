@@ -634,7 +634,7 @@ CREATE TABLE "PGC_SessionEntry" (
 | role | varchar(15) NOT NULL | `system` \| `user` \| `assistant` \| `tool` — `tool` rows store Novia tool call results in the reasoning transcript |
 | content | text NOT NULL | Raw message content sent to or received from the LLM |
 | reasoning | text NULL | Diagnostic metadata — populated on `assistant` rows; **never** included in the reconstructed messages array |
-| compressed | boolean NOT NULL DEFAULT FALSE | ✦ When `true`, this entry's content has been summarised into a later compression entry and is excluded from the active context window |
+| compressed | boolean NOT NULL DEFAULT FALSE | ✦ Unused. Novia's transcript is bounded at render time instead, with earlier requests rendered as stubs (`arch-minds-eye.md` §6.1), and no row is changed |
 | created_at | timestamp | |
 
 **`chk_pgc_sessionentry_role` constraint:** `role IN ('system', 'user', 'assistant', 'tool')`

@@ -2795,6 +2795,68 @@ export function unparseableCallEntry(tool, items, turn) {
   return JSON.stringify({ tool, params: {}, result: UNPARSEABLE_ARGUMENTS_RESULT, items, turn });
 }
 
+// An earlier request's tool result or call arguments above this size is rendered as a stub.
+// Small ones ("newVersion": 14, an error) stay: they cost little and are often what a later
+// request refers back to.
+const EARLIER_REQUEST_STUB_CHARS = 1000;
+
+/**
+ * The transcript copy of a tool result. In the current request it is the result, bounded by
+ * capOutput. From an earlier request — before the user's latest typed message — a large one is
+ * a stub naming the entry that holds it.
+ *
+ * Session 1293 is why: seven requests in one session, and every call of the last one re-read
+ * all six before it — 235K tokens of diagnosis and replay output a small checklist change did
+ * not need. Her own replies summarise each request and stay whole; the stub is the recall
+ * handle for the rest, worded as an instruction because the failure it guards against is
+ * rebuilding a withheld value from memory (the step 13 rewrite).
+ *
+ * Pure in (result, seq, tool, earlier): every round of one request renders it identically, so
+ * the cache holds within a request and is rewritten once, smaller, at the next typed message.
+ *
+ * @param {*}       result   The tool's result
+ * @param {number}  [seq]    Sequence number of the entry holding it
+ * @param {string}  [tool]   The tool that produced it
+ * @param {boolean} earlier  Whether the entry precedes the current request
+ * @returns {string}
+ */
+export function renderToolOutput(result, seq, tool, earlier) {
+  const text = JSON.stringify(result ?? null);
+  if (!earlier || text.length <= EARLIER_REQUEST_STUB_CHARS || seq === undefined || seq === null) {
+    return capOutput(text, seq, tool);
+  }
+  return JSON.stringify({
+    earlier_request: `${tool ?? 'This tool'} returned ${text.length} characters during an earlier request. ` +
+      `Recall them with read_session_entry({ sequence: ${seq} }) before building on them, or repeat the call for current data.`,
+  });
+}
+
+/**
+ * An earlier request's function_call items with large arguments replaced by a stub — the same
+ * rule renderToolOutput applies to results. A respond call is never stubbed: her reply is the
+ * request's summary, and the one thing a later request must not lose.
+ *
+ * @param {Array}   callItems  Gateway items of one entry
+ * @param {number}  [seq]      Sequence number of the entry holding the call's params
+ * @param {boolean} earlier    Whether the entry precedes the current request
+ * @returns {Array}
+ */
+export function renderCallItems(callItems, seq, earlier) {
+  if (!earlier || seq === undefined || seq === null) return callItems;
+  return callItems.map(it => {
+    if (it?.type !== 'function_call' || it.name === 'respond') return it;
+    const args = String(it.arguments ?? '');
+    if (args.length <= EARLIER_REQUEST_STUB_CHARS) return it;
+    return {
+      ...it,
+      arguments: JSON.stringify({
+        earlier_request: `This call's ${args.length}-character arguments are withheld. ` +
+          `Recall them with read_session_entry({ sequence: ${seq}, part: "arguments" }) before building on them.`,
+      }),
+    };
+  });
+}
+
 /**
  * Convert persisted PGC_SessionEntry rows into the canonical item array the gateway takes.
  *
@@ -2840,12 +2902,24 @@ export function unparseableCallEntry(tool, items, turn) {
  * Synthesised call_ids (the fallback path) only have to be unique and consistent inside this
  * array. They cannot collide with replayed gateway ids, which carry a provider prefix.
  *
+ * A request starts at each typed user message. Entries before the latest one belong to earlier
+ * requests, and their large results and call arguments render as stubs (renderToolOutput,
+ * renderCallItems). Continue, a gate approval and a test-run wake add no user entry, so they
+ * stay inside the request and render it exactly as the round before did.
+ *
  * @param {Array} workingHistory  PGC_SessionEntry rows in sequence order
  * @returns {Array} canonical items for callLlmWithTools
  */
 export function toInputItems(workingHistory = []) {
   const items   = [];
   let   pending = null;   // { callId, name, kind } — a function_call still waiting for its output
+
+  // The current request starts at the latest typed message; everything before it is earlier.
+  const requestStart = workingHistory.reduce(
+    (latest, e) => (e?.role === 'user' && typeof e.sequence_number === 'number' ? Math.max(latest, e.sequence_number) : latest),
+    -Infinity,
+  );
+  const isEarlier = (entry) => typeof entry?.sequence_number === 'number' && entry.sequence_number < requestStart;
 
   // With no output supplied, what closes the call depends on what opened it: a gated write is
   // still awaiting approval, a respond was already delivered to the user.
@@ -2859,12 +2933,22 @@ export function toInputItems(workingHistory = []) {
   // Replay the gateway's own items for this turn, and report which call the output attaches
   // to. Returns null when the entry predates `items` or carries none the loop can pair an
   // output with, so the caller falls back to synthesising the call.
-  const replayItems = (parsed) => {
+  const replayItems = (parsed, entry) => {
     if (!Array.isArray(parsed?.items) || parsed.items.length === 0) return null;
     const call = parsed.items.find(it => it?.type === 'function_call');
     if (!call?.call_id) return null;
-    items.push(...parsed.items);
+    items.push(...renderCallItems(parsed.items, entry?.sequence_number, isEarlier(entry)));
     return call.call_id;
+  };
+
+  // A call rebuilt from { name, params } when the entry predates `items`.
+  const synthesiseCall = (entry, callId, name, params) => {
+    items.push(...renderCallItems([{
+      type:      'function_call',
+      call_id:   callId,
+      name,
+      arguments: JSON.stringify(params ?? {}),
+    }], entry?.sequence_number, isEarlier(entry)));
   };
 
   workingHistory.forEach((entry, i) => {
@@ -2894,7 +2978,7 @@ export function toInputItems(workingHistory = []) {
       if (pending) closePending();
       // A respond persisted with the gateway's own items comes back as the function_call it
       // actually was, left open for whatever resolves it.
-      const respondId = replayItems(parsed);
+      const respondId = replayItems(parsed, entry);
       if (respondId) {
         pending = { callId: respondId, name: 'respond', kind: 'respond' };
         return;
@@ -2925,15 +3009,8 @@ export function toInputItems(workingHistory = []) {
 
     if (parsed.tool === '__pending__') {
       if (pending) closePending();
-      const replayedId = replayItems(parsed);
-      if (!replayedId) {
-        items.push({
-          type:      'function_call',
-          call_id:   callId,
-          name:      parsed.action,
-          arguments: JSON.stringify(parsed.params ?? {}),
-        });
-      }
+      const replayedId = replayItems(parsed, entry);
+      if (!replayedId) synthesiseCall(entry, callId, parsed.action, parsed.params);
       pending = { callId: replayedId ?? callId, name: parsed.action, kind: 'tool' };
       return;
     }
@@ -2946,25 +3023,18 @@ export function toInputItems(workingHistory = []) {
     // The entry a gate resolves into carries the same action as the pending call, so it
     // becomes that call's output rather than a second call.
     if (pending && pending.name === parsed.tool) {
-      closePending(capOutput(JSON.stringify(parsed.result ?? null), entry?.sequence_number, parsed.tool));
+      closePending(renderToolOutput(parsed.result, entry?.sequence_number, parsed.tool, isEarlier(entry)));
       return;
     }
 
     if (pending) closePending();
 
-    const replayedId = replayItems(parsed);
-    if (!replayedId) {
-      items.push({
-        type:      'function_call',
-        call_id:   callId,
-        name:      parsed.tool,
-        arguments: JSON.stringify(parsed.params ?? {}),
-      });
-    }
+    const replayedId = replayItems(parsed, entry);
+    if (!replayedId) synthesiseCall(entry, callId, parsed.tool, parsed.params);
     items.push({
       type:    'function_call_output',
       call_id: replayedId ?? callId,
-      output:  capOutput(JSON.stringify(parsed.result ?? null), entry?.sequence_number, parsed.tool),
+      output:  renderToolOutput(parsed.result, entry?.sequence_number, parsed.tool, isEarlier(entry)),
     });
   });
 
@@ -3195,7 +3265,7 @@ async function executeReadTool(action, params, traceId, session) {
       // a truncated tail is recoverable rather than lost. Bounded itself, and it says how much
       // is left — paging is the caller's decision, not a silent one.
       case 'read_session_entry': {
-        const { sequence, offset = 0, limit, path } = params;
+        const { sequence, offset = 0, limit, path, part = 'result' } = params;
         if (sequence === undefined || sequence === null) return { error: 'sequence is required' };
         if (!session?.id) return { error: 'read_session_entry is only available inside a session' };
 
@@ -3215,7 +3285,11 @@ async function executeReadTool(action, params, traceId, session) {
         try { stored = JSON.parse(row.content); } catch { /* a plain user message, not a JSON entry */ }
         // The stored envelope is { tool, params, result, items }. `result` is what the model
         // saw; `items` is the gateway's own echo of the call and is noise on the way back.
-        const payload  = stored && 'result' in stored ? stored.result : (stored ?? row.content);
+        // `part: 'arguments'` reads what the call was made with — `params`, the arguments less
+        // reasoning — which an earlier request's stub withholds as well as its result.
+        const payload  = part === 'arguments'
+          ? (stored?.params ?? null)
+          : stored && 'result' in stored ? stored.result : (stored ?? row.content);
         const selected = path ? resolvePath(payload, path) : payload;
         const text     = typeof selected === 'string' ? selected : JSON.stringify(selected ?? null);
 
@@ -3227,6 +3301,7 @@ async function executeReadTool(action, params, traceId, session) {
         return {
           sequence,
           tool:           stored?.tool ?? null,
+          ...(part === 'arguments' && { part }),
           ...(path && { path }),
           total_chars:    text.length,
           offset:         start,

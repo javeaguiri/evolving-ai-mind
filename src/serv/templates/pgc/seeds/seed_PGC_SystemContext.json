@@ -1372,7 +1372,7 @@
     "section": "rules",
     "inject_always": false,
     "inject_for": [],
-    "version": 11,
+    "version": 12,
     "content": {
       "tools": [
         {
@@ -1639,7 +1639,7 @@
         },
         {
           "name": "read_session_entry",
-          "description": "Read back a tool result from earlier in this session, in full. Every tool result is stored complete; only the copy in your transcript is bounded at 15000 characters, and a bounded one says so and names the sequence number holding the rest. Call this with that sequence number to read what was withheld, or to re-read anything that has scrolled out of your working memory. Returns one page at a time and tells you how many characters remain; pass offset to continue. Prefer preventing the volume where you can, with query_table columns or read_workflow steps, because every page you recall is added to this transcript again.",
+          "description": "Read back a tool result, or the arguments of a call you made, from earlier in this session, in full. Every entry is stored complete; only the copy in your transcript is bounded. A result over 15000 characters says so and names the sequence number holding the rest, and a large result or call from an earlier request (before the user's latest message) is shown as a stub naming its sequence number. Call this with that sequence number to read what was withheld, or to re-read anything that has scrolled out of your working memory. Returns one page at a time and tells you how many characters remain; pass offset to continue. Prefer preventing the volume where you can, with query_table columns or read_workflow steps, because every page you recall is added to this transcript again.",
           "parameters": {
             "type": "object",
             "properties": {
@@ -1658,6 +1658,11 @@
               "path": {
                 "type": "string",
                 "description": "Optional dot or JSONPath expression into the stored result, e.g. \"rows[0].state.local_state\". Reads one field instead of paging the whole value."
+              },
+              "part": {
+                "type": "string",
+                "enum": ["result", "arguments"],
+                "description": "Which half of a tool entry to read: what the tool returned (default), or the arguments you called it with."
               },
               "reasoning": {
                 "type": "string",
