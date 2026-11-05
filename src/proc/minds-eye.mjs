@@ -1646,11 +1646,14 @@ function stepRoutesTo(step, targetKey) {
  * receives. Shared by the pre-gate refusal, the gate text and the write so none of the three
  * can form a different opinion about what is being written.
  */
-async function resolveProposedSteps(params, { requireBaseVersion = true } = {}) {
-  const { workflowName, steps, patch, removeSteps = [], baseVersion } = params ?? {};
+export async function resolveProposedSteps(params, { requireBaseVersion = true } = {}) {
+  const { workflowName, steps, patch, removeSteps = [], baseVersion, fromSandbox } = params ?? {};
   if (!workflowName) return { error: 'workflowName is required' };
-  if (!Array.isArray(steps) && !Array.isArray(patch)) {
-    return { error: 'Send either patch (the steps you changed) or steps (the whole array)' };
+  if (fromSandbox && (Array.isArray(steps) || Array.isArray(patch))) {
+    return { error: 'fromSandbox commits the tested copy as it stands — send it without patch or steps.' };
+  }
+  if (!fromSandbox && !Array.isArray(steps) && !Array.isArray(patch)) {
+    return { error: 'Send either patch (the steps you changed), steps (the whole array), or fromSandbox: true to commit the copy you tested' };
   }
 
   const wfResp = await getRows(
@@ -1663,6 +1666,38 @@ async function resolveProposedSteps(params, { requireBaseVersion = true } = {}) 
   if (!wf) return { error: `Workflow "${workflowName}" not found` };
 
   const currentSteps = wf.steps ?? [];
+
+  // The tested copy, committed as tested. Session 1293 sent the same patch three times —
+  // simulate, sandbox, commit — each with a full step-10 prompt; the third is the one a tested
+  // copy makes unnecessary, and the only one that could differ from what passed. The live
+  // version must still be the one the copy was taken from.
+  if (fromSandbox) {
+    if (baseVersion === undefined || baseVersion === null) {
+      return { error: 'baseVersion is required with fromSandbox — pass the live version the test copy was made from.' };
+    }
+    if (Number(baseVersion) !== Number(wf.version)) {
+      return {
+        error:          `Workflow "${workflowName}" has changed since the test copy was made — not committed.`,
+        baseVersion:    Number(baseVersion),
+        currentVersion: wf.version,
+        remedy:         'Read the live workflow, rebuild the change against it, and test again.',
+      };
+    }
+    const sandbox = await activeSandbox();
+    if (!sandbox) return { error: 'No test sandbox exists, so there is no tested copy to commit. Commit before end_test.' };
+    const copyResp = await withSandbox(sandbox, () => getRows(
+      'PGC_Workflow',
+      [{ column: 'name', op: 'eq', value: workflowName }],
+      { column: 'version', direction: 'desc' },
+      1,
+    ));
+    const copy = copyResp.rows?.[0];
+    if (!copy) return { error: `The sandbox holds no copy of "${workflowName}".` };
+    if (JSON.stringify(copy.steps ?? []) === JSON.stringify(currentSteps)) {
+      return { error: `The sandbox copy of "${workflowName}" is the same as the live version — there is nothing to commit.` };
+    }
+    return { wf, currentSteps, merged: copy.steps ?? [], mode: 'from_sandbox', sandbox };
+  }
 
   // Whole-array form: still accepted, and now validated the same way. No version check —
   // it never had one, and the instruction layer steers repairs to the patch form instead.
@@ -2207,9 +2242,11 @@ async function executeWriteTool(action, params, traceId) {
           stepCountAfter:   steps.length,
           stepCountMismatch: currentSteps.length !== steps.length,
           diff,
-          // Under a patch the merged array can be large and she already knows what she sent.
+          // Under a patch, or a commit of the tested copy, the merged array can be large and she
+          // already knows what it holds.
           // Echoing it back spends the round's budget on something she is not missing.
-          ...(mode === 'patch' ? {} : { steps_written: steps }),
+          ...(mode === 'steps' ? { steps_written: steps } : {}),
+          ...(resolved.sandbox ? { committed_from: resolved.sandbox } : {}),
         };
       }
 
@@ -2436,6 +2473,9 @@ async function executeTestTool(action, params, traceId) {
 
 /** A read or write tool, run against the sandbox: every SERV call it makes carries x-sandbox. */
 async function executeInSandbox(action, params, traceId, session) {
+  if (action === 'propose_workflow_fix' && params.fromSandbox) {
+    return { error: 'fromSandbox commits the tested copy to the live workflow — call it without sandbox: true.' };
+  }
   const sandbox = await activeSandbox();
   if (!sandbox) return { error: 'No test sandbox exists. Call start_test first.' };
   const { sandbox: _flag, ...rest } = params;
