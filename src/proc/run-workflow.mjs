@@ -591,6 +591,14 @@ async function resumeGate({ workflowRunId, gateId, userResponse, responseData, m
     workflowRunId: run.id, gateType, userResponse, traceId,
   });
 
+  // The answer, as it was sent, joins the run's audit log beside the row the gate wrote when it
+  // suspended. It was recorded nowhere: only what a form or text field wrote into state survived,
+  // so a replay's gates had to be answered by hand from values dug out of the source run.
+  const belowGate = run.stack[run.stack.length - 2];
+  const answer    = buildGateAnswerRecord({ gateFrame: frame, userResponse, responseData });
+  await recordStepAudit(run.id, belowGate?.frame_id ?? frame.frame_id, answer.stepNumber, 'human_gate',
+    'completed', answer.inputSnapshot, answer.outputSnapshot, null, null, answer.stepKey);
+
   // ── cancel ─────────────────────────────────────────────────────────────
   // An option's ROUTING comes from its on_select, never from its action name. A gate must
   // carry an option with action "cancel" (the routing rules require one), but a workflow is
@@ -1756,6 +1764,33 @@ async function checkIdempotency(runId, frameId, stepKey) {
     undefined, 1, undefined, ['id']
   );
   return resp.success && resp.count > 0;
+}
+
+/**
+ * The audit row for an answered gate. Its step is the gate's own, so it reads beside the row the
+ * gate wrote on suspending; `answer_to` and the `:answer:` key tell the two apart, and the key
+ * stays clear of checkIdempotency's step key. `output_snapshot.answer` is the answer exactly as
+ * sent — the action and the responseData a resume_gate carries — so it can be sent again.
+ *
+ * @param {object} args
+ * @param {object} args.gateFrame     The human_gate frame being answered
+ * @param {string} args.userResponse  The action chosen
+ * @param {object} [args.responseData] formValues / inputValue / listGroup / selectedValue
+ * @returns {{ stepNumber: string, stepKey: string, inputSnapshot: object, outputSnapshot: object }}
+ */
+export function buildGateAnswerRecord({ gateFrame, userResponse, responseData }) {
+  const step = String(gateFrame.step_number);
+  const data = responseData ?? null;
+  return {
+    stepNumber:     step,
+    stepKey:        `${step}:answer:${gateFrame.gate_id ?? gateFrame.frame_id}`,
+    inputSnapshot:  { step, type: 'human_gate', answer_to: gateFrame.gate_id ?? null },
+    outputSnapshot: {
+      summary: `answered: ${userResponse}`,
+      chars:   JSON.stringify(data).length,
+      answer:  { userResponse, responseData: data },
+    },
+  };
 }
 
 async function recordStepAudit(runId, frameId, stepNumber, stepType,

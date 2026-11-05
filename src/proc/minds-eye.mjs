@@ -2492,16 +2492,59 @@ async function executeInSandbox(action, params, traceId, session) {
  * @returns {Promise<{ waiting: true } | { error: string }>}
  */
 async function startAnswerGate(params, session, traceId, pend) {
-  const { runId, gateId, action, formValues, inputValue, listGroup, selectedValue } = params;
+  const { runId, gateId, asSourceRun } = params;
   if (!runId) return { error: 'runId is required' };
-  const run = (await getRows('PGC_WorkflowRun', [{ column: 'id', op: 'eq', value: runId }], undefined, 1, undefined, ['id', 'sandbox', 'callback'])).rows?.[0];
+  const run = (await getRows('PGC_WorkflowRun', [{ column: 'id', op: 'eq', value: runId }], undefined, 1, undefined,
+    ['id', 'sandbox', 'callback', 'stack', 'replay_source_run_id'])).rows?.[0];
   if (!isOwnTestRun(run, session.id)) {
     return { error: "answer_gate answers only the gates of your own test runs. This run's gates belong to the user." };
   }
+  let answer = { action: params.action, formValues: params.formValues, inputValue: params.inputValue,
+    listGroup: params.listGroup, selectedValue: params.selectedValue };
+  if (asSourceRun) {
+    const recorded = await sourceRunAnswer(run);
+    if (recorded.error) return recorded;
+    answer = recorded.answer;
+  }
   const last = await getRows('PGC_WorkflowRunStep', [{ column: 'run_id', op: 'eq', value: runId }], 'id DESC', 1, undefined, ['id']);
   await pend(runId, last.rows?.[0]?.id ?? 0);
-  const { status, body } = await answerGate(runId, { gateId, action, formValues, inputValue, listGroup, selectedValue }, traceId);
+  const { status, body } = await answerGate(runId, { gateId, ...answer }, traceId);
   return status === 202 ? { waiting: true } : body;
+}
+
+/**
+ * The answer a replay's source run gave the gate the replay is waiting at: the same gate step,
+ * the same visit (the n-th time the step is answered in the replay is the n-th in the source).
+ * Session 1293 dug a 4,000-character receipt out of the source run with run_sql and pasted it
+ * back, once per replay.
+ *
+ * @param {Array}  replayRows  The replay's human_gate PGC_WorkflowRunStep rows, in order
+ * @param {Array}  sourceRows  The source run's human_gate PGC_WorkflowRunStep rows, in order
+ * @param {string} step        The gate step the replay is waiting at
+ * @returns {{ userResponse: string, responseData: object|null } | null}
+ */
+export function pickSourceAnswer({ replayRows = [], sourceRows = [], step }) {
+  const answersTo = (rows) => rows.filter(r => r.output_snapshot?.answer && stepOf(r) === String(step));
+  const visit = answersTo(replayRows).length;
+  return answersTo(sourceRows)[visit]?.output_snapshot.answer ?? null;
+}
+
+async function sourceRunAnswer(run) {
+  if (run.replay_source_run_id == null) return { error: 'asSourceRun answers a replay with its source run\'s answers; this run is not a replay.' };
+  const top = Array.isArray(run.stack) ? run.stack[run.stack.length - 1] : null;
+  if (top?.type !== 'human_gate') return { error: `Run ${run.id} is not waiting at a gate.` };
+  const gateRows = (id) => getRows('PGC_WorkflowRunStep',
+    [{ column: 'run_id', op: 'eq', value: id }, { column: 'step_type', op: 'eq', value: 'human_gate' }],
+    'id ASC', undefined, undefined, ['id', 'step_number', 'input_snapshot', 'output_snapshot']);
+  const [replayResp, sourceResp] = await Promise.all([gateRows(run.id), gateRows(run.replay_source_run_id)]);
+  const recorded = pickSourceAnswer({ replayRows: replayResp.rows ?? [], sourceRows: sourceResp.rows ?? [], step: top.step_number });
+  if (!recorded) {
+    return { error: `Source run ${run.replay_source_run_id} has no recorded answer for this visit to gate ${top.step_number}. ` +
+      'Answers are recorded for gates answered since 2026-11-05; answer this one with action and its values.' };
+  }
+  const data = recorded.responseData ?? {};
+  return { answer: { action: recorded.userResponse, formValues: data.formValues, inputValue: data.inputValue,
+    listGroup: data.listGroup, selectedValue: data.selectedValue } };
 }
 
 /**
@@ -3143,6 +3186,7 @@ const stepLine = (row) => ({
   duration_ms:  row.duration_ms ?? null,
   ...(row.retry_count ? { retry_count: row.retry_count } : {}),
   ...(row.error       ? { error: row.error } : {}),
+  ...(row.output_snapshot?.answer ? { answered: row.output_snapshot.answer.userResponse } : {}),
   output_chars: row.output_snapshot?.chars ?? null,
 });
 
@@ -3160,7 +3204,7 @@ const COLLAPSE_STEP_RUN = 3;
  * @returns {Array}
  */
 export function collapseStepLines(lines = []) {
-  const plain = (l) => !('error' in l) && !('retry_count' in l) && !('notified' in l);
+  const plain = (l) => !('error' in l) && !('retry_count' in l) && !('notified' in l) && !('answered' in l);
   const sum   = (run, key) => run.every(l => l[key] == null) ? null : run.reduce((t, l) => t + (l[key] ?? 0), 0);
   const out = [];
   for (let i = 0; i < lines.length;) {

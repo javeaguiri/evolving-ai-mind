@@ -191,8 +191,14 @@ needs, plus `PGC_Memory` and `PGC_Workflow`, one at a time, made and dropped thr
 `/serv/sandbox/*`. Nothing in `public` refers to them. See `docs/arch-sandbox.md`.
 
 ##### PGC_WorkflowRunStep
-Append-only audit log — one row per step execution attempt. Never updated after insert.
-Used for idempotency checks on SQS redelivery and debugging.
+Append-only audit log — one row per step execution attempt, and one per gate answer. Never
+updated after insert. Used for idempotency checks on SQS redelivery and debugging.
+
+**A gate answer** is written by `resumeGate` beside the row the gate wrote on suspending: the same
+step, `input_snapshot.answer_to` the `gate_id`, `step_key` `<step>:answer:<gate_id>`, and
+`output_snapshot.answer` the answer as sent (`{ userResponse, responseData }`). A replay's gates
+are answered from these (`answer_gate { asSourceRun: true }`); gates answered before 2026-11-05
+have none.
 
 **Same caution as `PGC_WorkflowRun`** — `input_snapshot` holds
 that step's resolved input and can be large for steps handling bulk
