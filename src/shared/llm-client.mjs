@@ -133,6 +133,8 @@ export async function callLlmWithTools(model, instructions, input, tools, traceI
     inputTokens:   usage.input_tokens,
     cacheCreation: details.cache_creation_input_tokens,
     cacheRead:     details.cache_read_input_tokens,
+    outputTokens:  usage.output_tokens,
+    reasoningTokens: usage.output_tokens_details?.reasoning_tokens,
     cost:          usage.cost?.total_cost,
     traceId,
   });

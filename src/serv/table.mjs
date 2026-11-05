@@ -257,23 +257,7 @@ async function getRows(req) {
     const truncated = totalMatching > result.rows.length;
 
 
-    // Truncate vector columns to 5 chars + '...' — enough to confirm populated
-    // vs null without returning the full vector payload.
-    const vectorCols = new Set(schemaColumns.filter(c => c.type?.startsWith('vector')).map(c => c.name));
-    const rows = vectorCols.size === 0
-      ? result.rows
-      : result.rows.map(row => {
-          const clean = { ...row };
-          for (const col of vectorCols) {
-            // Only truncate what the projection actually returned. Assigning
-            // unconditionally puts a column the caller excluded back into the row
-            // as null, which undoes part of the projection it just asked for.
-            if (!(col in clean)) continue;
-            const v = clean[col];
-            clean[col] = v == null ? null : String(v).slice(0, 5) + '...';
-          }
-          return clean;
-        });
+    const rows = truncateVectorColumns(result.rows, schemaColumns);
 
     return ok({
       success:       true,
@@ -400,6 +384,33 @@ export function findColumnSetMismatch(rows) {
     if (Object.keys(rows[i]).sort().join(',') !== first) return i;
   }
   return -1;
+}
+
+/**
+ * Truncate vector columns to 5 chars + '...' — enough to confirm populated vs null without
+ * returning the full vector payload. Applied to every row SERV-Table returns, reads and writes
+ * alike: a write echoing its row back with a 2,560-number embedding cost Novia ~9,000
+ * characters per `update_data` call (session 1293).
+ *
+ * @param {Array} rows           Rows as pg returned them
+ * @param {Array} schemaColumns  PGC_Schema.columns for the table
+ * @returns {Array}
+ */
+export function truncateVectorColumns(rows, schemaColumns) {
+  const vectorCols = new Set((schemaColumns ?? []).filter(c => c.type?.startsWith('vector')).map(c => c.name));
+  if (vectorCols.size === 0) return rows;
+  return rows.map(row => {
+    const clean = { ...row };
+    for (const col of vectorCols) {
+      // Only truncate what the projection actually returned. Assigning
+      // unconditionally puts a column the caller excluded back into the row
+      // as null, which undoes part of the projection it just asked for.
+      if (!(col in clean)) continue;
+      const v = clean[col];
+      clean[col] = v == null ? null : String(v).slice(0, 5) + '...';
+    }
+    return clean;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -531,7 +542,7 @@ async function insertRow(req) {
       return ok({
         success:       true,
         tableName,
-        rows:          result.rows,
+        rows:          truncateVectorColumns(result.rows, schemaColumns),
         correlationId: req.correlationId,
       }, req.correlationId);
     }
@@ -540,7 +551,7 @@ async function insertRow(req) {
     return ok({
       success:       true,
       tableName,
-      row:           result.rows[0],
+      row:           truncateVectorColumns(result.rows, schemaColumns)[0],
       correlationId: req.correlationId,
     }, req.correlationId);
 
@@ -681,7 +692,7 @@ async function updateRows(req) {
       success:       true,
       tableName,
       updatedCount:  result.rowCount,
-      rows:          result.rows,
+      rows:          truncateVectorColumns(result.rows, schemaColumns),
       correlationId: req.correlationId,
     }, req.correlationId);
 
@@ -923,8 +934,8 @@ async function upsertRows(req) {
     return ok({
       success:       true,
       tableName,
-      inserted,
-      updated,
+      inserted:      truncateVectorColumns(inserted, schemaColumns),
+      updated:       truncateVectorColumns(updated, schemaColumns),
       correlationId: req.correlationId,
     }, req.correlationId);
 

@@ -352,7 +352,7 @@ async function createEntity(req) {
         success:       true,
         entityName,
         id:            result.rows[0].id,
-        row:           result.rows[0],
+        row:           stripVectors(result.rows[0]),
         correlationId: req.correlationId,
       }, req.correlationId);
 
@@ -444,7 +444,7 @@ async function updateEntity(req) {
         entityName,
         id,
         mode,
-        row:           result.rows[0],
+        row:           stripVectors(result.rows[0]),
         correlationId: req.correlationId,
       }, req.correlationId);
 
@@ -531,7 +531,7 @@ async function upsertEntity(req) {
         success:       true,
         entityName,
         wasInserted,
-        row:           returnedRow,
+        row:           stripVectors(returnedRow),
         correlationId: req.correlationId,
       }, req.correlationId);
 
