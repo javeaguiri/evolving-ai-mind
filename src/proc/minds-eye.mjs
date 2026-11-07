@@ -342,6 +342,51 @@ export async function handle(req) {
 }
 
 // ---------------------------------------------------------------------------
+// A gate click is acted on only while the session still stands where the gate was posted
+// ---------------------------------------------------------------------------
+
+// What a Continue under one of her replies tells her: the user's answer to it.
+export const CONTINUE_AFTER_REPLY = 'Continue — carry on with what you said you would do next.';
+
+/** Whether the session's latest entry is one of her replies. Pure — exported for test. */
+export function endsOnReply(entries = []) {
+  const last = entries.reduce((a, e) => (!a || e.sequence_number > a.sequence_number ? e : a), null);
+  return last?.role === 'assistant';
+}
+
+/**
+ * Why a gate click must not be acted on, or null when it may. A gate is current only while
+ * nothing has been added to the session since it was posted. A click on an older one would
+ * act on a session that has moved on: in 1307 a Continue after a follow-up made her answer
+ * the same question twice. And an Approve resolves "the latest pending action", so a click on
+ * an older gate could run an action already approved, or a newer one it never showed.
+ * Gates posted before atSeq existed carry none; an action gate is still held to its pending
+ * entry being the latest and a gated write. Pure — exported for test.
+ *
+ * @param {object} args
+ * @param {Array}  args.entries        The session's entries
+ * @param {string} args.kind           'continue' or 'action'
+ * @param {number} [args.atSeq]        The entry the gate was posted at, from its button
+ * @param {object} [args.pendingEntry] For an action gate, the latest __pending__ entry
+ * @returns {string|null}
+ */
+export function staleGateRefusal({ entries = [], kind, atSeq = null, pendingEntry = null }) {
+  const latest = Math.max(...entries.map(e => e.sequence_number), 0);
+  const moved  = 'That button is out of date: the session has moved on since it was posted, so nothing was done. Use the latest message in the thread.';
+  if (kind === 'continue') return atSeq != null && latest !== atSeq ? moved : null;
+  if (!pendingEntry || pendingEntry.sequence_number !== latest) return moved;
+  if (atSeq != null && pendingEntry.sequence_number !== atSeq) return moved;
+  let action = null;
+  try { action = JSON.parse(pendingEntry.content)?.action ?? null; } catch { /* unreadable */ }
+  return GATED_WRITE_TOOLS.has(action) ? null : moved;
+}
+
+async function refuseStaleGate(message, session, callback, traceId) {
+  console.warn('proc/minds-eye: stale gate click refused', { sessionId: session.id, traceId });
+  if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', format: 'markdown', traceId, message, sessionId: session.id });
+}
+
+// ---------------------------------------------------------------------------
 // Questions on a respond, and the answers that come back
 // ---------------------------------------------------------------------------
 
@@ -410,7 +455,7 @@ export function composeAnswersPrompt(questions = [], answers = [], note = null) 
 // ---------------------------------------------------------------------------
 
 async function handleGateResume(body, callback, traceId, req) {
-  const { sessionId, approved, resumeType, test } = body;
+  const { sessionId, approved, resumeType, test, atSeq } = body;
 
   const sessResp = await getRows('PGC_Session', [{ column: 'id', op: 'eq', value: sessionId }]);
   const session  = sessResp.rows?.[0] ?? null;
@@ -473,6 +518,8 @@ async function handleGateResume(body, callback, traceId, req) {
   // touchpoint); minds_eye_turn_count is a cumulative lifetime tally that never
   // resets — it's checked against max_lifetime_turns inside runReasoningLoop.
   if (resumeType === 'continue') {
+    const stale = staleGateRefusal({ entries, kind: 'continue', atSeq });
+    if (stale) return refuseStaleGate(stale, session, callback, traceId);
     if (!approved) {
       console.info('proc/minds-eye: continue gate cancelled', { sessionId, traceId });
       return;
@@ -482,18 +529,27 @@ async function handleGateResume(body, callback, traceId, req) {
     });
     const { prefs, systemPrompt } = await loadPrefsAndPrompt();
     const { layer1Context, layer2Context } = await assembleContext();
+    // A Continue under one of her replies is the user's answer to it. Delivered as nothing,
+    // she answered the same question again (session 1307, entries 44 and 45).
+    const history = [...entries];
+    let nextSeq = Math.max(...entries.map(e => e.sequence_number), 0) + 1;
+    if (endsOnReply(entries)) {
+      await insertRow('PGC_SessionEntry', { session_id: session.id, sequence_number: nextSeq, role: 'user', content: CONTINUE_AFTER_REPLY });
+      history.push({ role: 'user', content: CONTINUE_AFTER_REPLY, sequence_number: nextSeq });
+      nextSeq += 1;
+    }
     await runReasoningLoop({
       session,
       prefs,
       systemPrompt,
       layer1Context,
       layer2Context,
-      workingHistory:     [...entries],
+      workingHistory:     history,
       callback,
       traceId,
       currentTurnCount:   session.minds_eye_turn_count ?? 0,
       currentActionCount: 0,
-      currentSeq:         Math.max(...entries.map(e => e.sequence_number), 0) + 1,
+      currentSeq:         nextSeq,
       threadTs:           callback?.threadId ?? session.slack_thread_ts,
     });
     if (req?.source === 'http') return ok({ success: true, sessionId: session.id }, req.correlationId);
@@ -512,6 +568,9 @@ async function handleGateResume(body, callback, traceId, req) {
     if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: 'No pending action to resume.' });
     return;
   }
+
+  const staleAction = staleGateRefusal({ entries, kind: 'action', atSeq, pendingEntry });
+  if (staleAction) return refuseStaleGate(staleAction, session, callback, traceId);
 
   let pendingData;
   try { pendingData = JSON.parse(pendingEntry.content); }
@@ -1110,7 +1169,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
 
       } else if (INLINE_WRITE_TOOLS.has(action)) {
         if (actionCount >= prefs.max_actions_per_session) {
-          await postTurnLimitGate(session.id, callback, traceId, true);
+          await postTurnLimitGate(session.id, callback, traceId, true, false, seq - 1);
           earlyExit = true;
           control = 'break';
           break;
@@ -1169,7 +1228,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         }
 
         if (actionCount >= prefs.max_actions_per_session) {
-          await postTurnLimitGate(session.id, callback, traceId, true);
+          await postTurnLimitGate(session.id, callback, traceId, true, false, seq - 1);
           earlyExit = true;
           control = 'break';
           break;
@@ -1231,7 +1290,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
     if (turnCount >= prefs.max_lifetime_turns) {
       await notifyLifetimeCeiling(session, callback, traceId, turnCount);
     } else {
-      await postTurnLimitGate(session.id, callback, traceId, false, budgetExhausted);
+      await postTurnLimitGate(session.id, callback, traceId, false, budgetExhausted, seq - 1);
     }
   }
 }
@@ -1340,6 +1399,7 @@ async function postActionGate({ session, action, params, items, turn, callback, 
       type:         'HUMAN_GATE',
       gate_type:    'minds_eye_gate',
       sessionId:    session.id,
+      atSeq:        currentSeq,
       dialog:       { fields: [{ type: 'typography', value: gateText }] },
       confirmLabel,
       confirmStyle,
@@ -3909,12 +3969,15 @@ async function executeReadTool(action, params, traceId, session) {
 // Post a turn-limit notification
 // ---------------------------------------------------------------------------
 
-async function postTurnLimitGate(sessionId, callback, traceId, resetActionCount = false, budgetExhausted = false) {
+async function postTurnLimitGate(sessionId, callback, traceId, resetActionCount = false, budgetExhausted = false, atSeq = null) {
   if (!callback) return;
   await enqueueCallback(callback, {
     type:             'HUMAN_GATE',
     gate_type:        'minds_eye_continue_gate',
     sessionId,
+    // The session entry the gate was posted after. A click is refused once the session has
+    // moved past it (staleGateRefusal).
+    atSeq,
     traceId,
     resetActionCount,
     // Which limit was hit. The gate is identical either way — only what the user is told

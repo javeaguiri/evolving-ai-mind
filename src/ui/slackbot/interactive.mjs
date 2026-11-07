@@ -754,6 +754,7 @@ async function handleMindsEyeActionGate(buttonValue, payload, correlationId) {
         sessionId,
         approved:  !!approved,
         ...(approved && test ? { test: true } : {}),
+        ...(buttonValue.atSeq != null ? { atSeq: buttonValue.atSeq } : {}),
         slackUser: payload.user?.id,
         callback:  { provider: 'slack', channel, threadId: threadTs },
         traceId,
@@ -810,6 +811,7 @@ async function handleMindsEyeContinueGate(buttonValue, payload, correlationId) {
         sessionId,
         approved:         !!approved,
         resetActionCount: !!buttonValue.resetActionCount,
+        ...(buttonValue.atSeq != null ? { atSeq: buttonValue.atSeq } : {}),
         slackUser:        payload.user?.id,
         callback:         { provider: 'slack', channel, threadId: threadTs },
         traceId,
@@ -827,6 +829,7 @@ async function handleMindsEyeContinueGate(buttonValue, payload, correlationId) {
 
 // handleMindsEyeContinueFollowupButton — Follow-up clicked on a Novia turn-limit gate.
 // Opens a modal without updating the gate message — if the user cancels, the 3 buttons remain.
+// The gate's content travels in the modal, so sending the follow-up can close the gate.
 // ---------------------------------------------------------------------------
 
 async function handleMindsEyeContinueFollowupButton(buttonValue, payload, correlationId) {
@@ -849,7 +852,7 @@ async function handleMindsEyeContinueFollowupButton(buttonValue, payload, correl
           type:             'modal',
           callback_id:      'minds_eye_continue_followup_modal',
           notify_on_close:  false,
-          private_metadata: JSON.stringify({ sessionId, channel, threadTs, traceId }),
+          private_metadata: buildPrivateMetadata({ sessionId, channel, threadTs, traceId }, preservedContentBlocks(payload.message?.blocks)),
           title:  { type: 'plain_text', text: 'Ask Novia' },
           submit: { type: 'plain_text', text: 'Send' },
           close:  { type: 'plain_text', text: 'Cancel' },
@@ -883,6 +886,13 @@ async function handleMindsEyeContinueFollowupButton(buttonValue, payload, correl
 // Novia answers, then re-posts the Continue/Follow-up/Cancel gate.
 // ---------------------------------------------------------------------------
 
+const FOLLOWUP_SENT = '💬 Follow-up sent.';
+
+/** A continue gate after its Follow-up was sent: its content, buttons gone. Exported for test. */
+export function followupClosedBlocks(contentBlocks) {
+  return [...(Array.isArray(contentBlocks) ? contentBlocks : []), { type: 'context', elements: [{ type: 'mrkdwn', text: FOLLOWUP_SENT }] }];
+}
+
 async function handleMindsEyeContinueFollowupSubmission(payload, traceId) {
   let meta;
   try {
@@ -892,7 +902,7 @@ async function handleMindsEyeContinueFollowupSubmission(payload, traceId) {
     return err(400, 'Invalid private_metadata', traceId);
   }
 
-  const { sessionId, channel, threadTs, traceId: metaTraceId } = meta;
+  const { sessionId, channel, threadTs, traceId: metaTraceId, contentBlocks } = meta;
   if (!sessionId || !channel) {
     console.warn('interactive: minds_eye_continue_followup_modal missing sessionId or channel', { meta, traceId });
     return err(400, 'minds_eye_continue_followup_modal private_metadata must contain sessionId and channel', traceId);
@@ -910,6 +920,16 @@ async function handleMindsEyeContinueFollowupSubmission(payload, traceId) {
   if (!inputValue) {
     console.warn('interactive: minds_eye_continue_followup_modal empty submission', { sessionId, traceId });
     return { statusCode: 200, body: '' };
+  }
+
+  // Close the gate the follow-up came from, as every other click on it does. Left live, its
+  // Continue resumed a session the follow-up had already moved on (session 1307).
+  if (threadTs) {
+    try {
+      await slack.chat.update({ channel, ts: threadTs, text: FOLLOWUP_SENT, blocks: followupClosedBlocks(contentBlocks) });
+    } catch (error) {
+      console.warn('interactive: minds_eye_continue_followup gate update failed (non-fatal)', { error: error.message, traceId });
+    }
   }
 
   try {

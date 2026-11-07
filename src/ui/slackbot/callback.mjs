@@ -716,12 +716,15 @@ export function oversizedGateMessage(blocks) {
  * A Novia action gate's buttons: approve, approve-and-test when /proc offers it (testLabel), and
  * cancel. Exported for tests.
  */
-export function mindsEyeGateButtons({ sessionId, confirmLabel = 'Approve', confirmStyle, testLabel }) {
+export function mindsEyeGateButtons({ sessionId, confirmLabel = 'Approve', confirmStyle, testLabel, atSeq }) {
+  // atSeq — the session entry the gate was posted at, handed back on the click so /proc can
+  // refuse one the session has moved past.
+  const at = atSeq != null ? { atSeq } : {};
   const approve = (label, test, actionId) => ({
     type:      'button',
     text:      { type: 'plain_text', text: label },
     action_id: actionId,
-    value:     JSON.stringify({ action: 'minds_eye_action_gate', sessionId, approved: true, ...(test ? { test: true } : {}) }),
+    value:     JSON.stringify({ action: 'minds_eye_action_gate', sessionId, approved: true, ...(test ? { test: true } : {}), ...at }),
     ...(confirmStyle ? { style: confirmStyle } : {}),
   });
   return [
@@ -731,7 +734,36 @@ export function mindsEyeGateButtons({ sessionId, confirmLabel = 'Approve', confi
       type:      'button',
       text:      { type: 'plain_text', text: 'Cancel' },
       action_id: 'minds_eye_delete_cancel',
-      value:     JSON.stringify({ action: 'minds_eye_action_gate', sessionId, approved: false }),
+      value:     JSON.stringify({ action: 'minds_eye_action_gate', sessionId, approved: false, ...at }),
+    },
+  ];
+}
+
+/**
+ * A Novia continue gate's buttons: Continue, Follow-up, Cancel, each carrying atSeq as the
+ * action gate's do. Exported for tests.
+ */
+export function mindsEyeContinueButtons({ sessionId, resetActionCount = false, atSeq }) {
+  const at = atSeq != null ? { atSeq } : {};
+  return [
+    {
+      type:      'button',
+      style:     'primary',
+      text:      { type: 'plain_text', text: 'Continue' },
+      action_id: 'minds_eye_continue_approve',
+      value:     JSON.stringify({ action: 'minds_eye_continue_gate', sessionId, approved: true, resetActionCount, ...at }),
+    },
+    {
+      type:      'button',
+      text:      { type: 'plain_text', text: 'Follow-up' },
+      action_id: 'minds_eye_continue_followup',
+      value:     JSON.stringify({ action: 'minds_eye_continue_followup', sessionId, ...at }),
+    },
+    {
+      type:      'button',
+      text:      { type: 'plain_text', text: 'Cancel' },
+      action_id: 'minds_eye_continue_cancel',
+      value:     JSON.stringify({ action: 'minds_eye_continue_gate', sessionId, approved: false, ...at }),
     },
   ];
 }
@@ -859,7 +891,7 @@ async function postHumanGate(message) {
   // minds_eye_continue_gate \u2014 Novia turn-limit gate. Three options: Continue resumes the loop,
   // Follow-up opens a modal for the user to ask a question, Cancel ends the session.
   if (gateType === 'minds_eye_continue_gate') {
-    const { sessionId, resetActionCount = false, budgetExhausted = false } = message;
+    const { sessionId, resetActionCount = false, budgetExhausted = false, atSeq } = message;
     const gateText = resetActionCount
       ? "I've reached my action limit. Continue to keep going (resets the limit), ask a Follow-up question, or Cancel to end the session."
       : budgetExhausted
@@ -871,27 +903,7 @@ async function postHumanGate(message) {
       sessionContextBlock,
       {
         type: 'actions',
-        elements: [
-          {
-            type:      'button',
-            style:     'primary',
-            text:      { type: 'plain_text', text: 'Continue' },
-            action_id: 'minds_eye_continue_approve',
-            value:     JSON.stringify({ action: 'minds_eye_continue_gate', sessionId, approved: true, resetActionCount }),
-          },
-          {
-            type:      'button',
-            text:      { type: 'plain_text', text: 'Follow-up' },
-            action_id: 'minds_eye_continue_followup',
-            value:     JSON.stringify({ action: 'minds_eye_continue_followup', sessionId }),
-          },
-          {
-            type:      'button',
-            text:      { type: 'plain_text', text: 'Cancel' },
-            action_id: 'minds_eye_continue_cancel',
-            value:     JSON.stringify({ action: 'minds_eye_continue_gate', sessionId, approved: false }),
-          },
-        ],
+        elements: mindsEyeContinueButtons({ sessionId, resetActionCount, atSeq }),
       },
     ];
     await routeCallback(callback, gateText, gateBlocks);
@@ -901,7 +913,7 @@ async function postHumanGate(message) {
 
   // minds_eye_gate \u2014 Novia action gate. Renders with sessionId buttons instead of workflowRunId.
   if (gateType === 'minds_eye_gate') {
-    const { sessionId, confirmLabel = 'Approve', confirmStyle, testLabel } = message;
+    const { sessionId, confirmLabel = 'Approve', confirmStyle, testLabel, atSeq } = message;
     const gateText = dialog?.fields?.find(f => f.type === 'typography')?.value ?? 'Confirm action';
     const sessionContextBlock = { type: 'context', elements: [{ type: 'mrkdwn', text: `sessionId: ${sessionId} | traceId: ${traceId}` }] };
     const gateBlocks = [
@@ -909,7 +921,7 @@ async function postHumanGate(message) {
       sessionContextBlock,
       {
         type: 'actions',
-        elements: mindsEyeGateButtons({ sessionId, confirmLabel, confirmStyle, testLabel }),
+        elements: mindsEyeGateButtons({ sessionId, confirmLabel, confirmStyle, testLabel, atSeq }),
       },
     ];
     await routeCallback(callback, gateText.slice(0, 150), gateBlocks);

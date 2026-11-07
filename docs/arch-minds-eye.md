@@ -218,6 +218,16 @@ proc turns them into the next user message, each paired with its question's text
 (`composeAnswersPrompt`). In Slack the boxes sit in the message itself, so nothing covers it,
 and *Send answers* replaces them with a line saying they were sent.
 
+**A gate click is acted on only while the session stands where the gate was posted**
+(Sprint 15x). Every continue gate and action gate carries `atSeq`, the session entry it was
+posted at, on each of its buttons. `staleGateRefusal` refuses a click once anything has been
+added to the session since: "That button is out of date… nothing was done." An action gate is
+also held to its `__pending__` entry being the latest entry and a gated write, so a second
+Approve can't re-run an approved action, and an older gate can't approve a newer one. A
+Continue on a gate under one of her replies is delivered as the user's answer to it
+(`CONTINUE_AFTER_REPLY`), so she carries on rather than answering again. Sending a gate's
+Follow-up closes that gate in Slack (`followupClosedBlocks`).
+
 **`register_workflow`** (Sprint 9, AC4) — `{ name, domain?, description, steps, intentPhrases?,
 intentKeywords? }`. Creates a workflow: one `PGC_Workflow` row at version 1, and one
 `PGC_IntentMap` row per invocation phrase plus one for the workflow's own name (`source`
