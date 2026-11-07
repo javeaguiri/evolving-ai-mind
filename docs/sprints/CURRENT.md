@@ -4,7 +4,7 @@
 (Wren's call at Javear's request, 2026-11-05): Sprint 15 is merged and its record closed, and main
 must match prod. Its retro is session 1293's analysis below. Sprint 16 (web app Phase 0) follows.
 
-**Branch:** `sprint/15x-novia-cost` · **Deployed 2026-11-07 at `9f8e2ac`** (scope 10–14), with `minds_eye_tool_schemas` v16, `minds_eye_system_prompt` v39 and `sop_schema_change` v2 upserted. First deployed 2026-11-05 at `c81dd0b`. **Next:** Session A, run by Javear from Slack, as AC3's vehicle: split inventory into staples, emergency stock and recipe items, then build a grocery list that excludes stock (the recipe consumption follows in a later session)
+**Branch:** `sprint/15x-novia-cost` · **Deployed 2026-11-07 at `26a4850`** (scope 10–16), with `minds_eye_tool_schemas` v17, `minds_eye_system_prompt` v41, `sop_test_cycle` v4 and `sop_schema_change` v3 upserted. First deployed 2026-11-05 at `c81dd0b`. **Next:** Session A, run by Javear from Slack, as AC3's vehicle: split inventory into staples, emergency stock and recipe items, then build a grocery list that excludes stock (the recipe consumption follows in a later session)
 
 ---
 
