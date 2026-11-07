@@ -21,7 +21,7 @@
 
 import { randomUUID }        from 'node:crypto';
 import { WebClient }         from '@slack/web-api';
-import { FORM_BLOCK_PREFIX, EMPTY_OPTION_VALUE, listIdBlockId, numberActionId } from './form-fields.mjs';
+import { FORM_BLOCK_PREFIX, EMPTY_OPTION_VALUE, listIdBlockId, numberActionId, NOVIA_ANSWER_PREFIX, NOVIA_COMMENT_PREFIX, NOVIA_NOTE_BLOCK } from './form-fields.mjs';
 
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
@@ -443,6 +443,77 @@ async function postPingE2eResult(message) {
 }
 
 // ---------------------------------------------------------------------------
+// noviaQuestionBlocks — Novia's questions, each with its own answer box, in a message.
+//
+// /proc sends { id, text, options? } per question. A question is its text, then a text box,
+// or, when it offers choices, radio buttons (a select past Slack's 10) and a comment box.
+// A closing box takes anything else. `room` is the blocks this message can spare: questions
+// that do not fit are named in a line pointing at the closing box, never dropped silently.
+// Block ids follow form-fields.mjs, which reads them back. Exported for test.
+// ---------------------------------------------------------------------------
+
+// Questions take at most this many of a message's 50 blocks, so the message they follow
+// keeps room for its own content in the same post.
+const QUESTION_BLOCK_ROOM = 30;
+const OPTION_VALUE_LIMIT  = 150;  // an option value is at most 150 characters
+const SECTION_TEXT_LIMIT  = 3000; // a section's text is at most 3000 characters
+
+export function noviaQuestionBlocks(questions, room) {
+  const blocks   = [];
+  const reserved = 2;             // the closing box, and the line naming questions that did not fit
+  let shown = 0;
+  for (const [i, q] of questions.entries()) {
+    const options = (q.options ?? []).slice(0, WIDGET_OPTION_LIMIT.select).map(o => ({
+      text:  { type: 'plain_text', text: truncateOption(o) },
+      value: String(o).slice(0, OPTION_VALUE_LIMIT),
+    }));
+    const size = options.length ? 3 : 2;
+    if (blocks.length + size + reserved > room) break;
+    const text = `*${i + 1}.* ${toSlackMrkdwn(q.text)}`;
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text.length > SECTION_TEXT_LIMIT ? `${text.slice(0, SECTION_TEXT_LIMIT - 1)}…` : text } });
+    if (options.length) {
+      blocks.push({
+        type:     'input',
+        block_id: `${NOVIA_ANSWER_PREFIX}${q.id}`,
+        optional: true,
+        label:    { type: 'plain_text', text: 'Your answer' },
+        element:  options.length <= WIDGET_OPTION_LIMIT.radio
+          ? { type: 'radio_buttons', action_id: 'novia_value', options }
+          : { type: 'static_select', action_id: 'novia_value', options, placeholder: { type: 'plain_text', text: 'Choose' } },
+      });
+      blocks.push({
+        type:     'input',
+        block_id: `${NOVIA_COMMENT_PREFIX}${q.id}`,
+        optional: true,
+        label:    { type: 'plain_text', text: 'Comment' },
+        element:  { type: 'plain_text_input', action_id: 'novia_value' },
+      });
+    } else {
+      blocks.push({
+        type:     'input',
+        block_id: `${NOVIA_ANSWER_PREFIX}${q.id}`,
+        optional: true,
+        label:    { type: 'plain_text', text: 'Your answer' },
+        element:  { type: 'plain_text_input', action_id: 'novia_value', multiline: true },
+      });
+    }
+    shown += 1;
+  }
+  if (shown < questions.length) {
+    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn',
+      text: `Questions ${shown + 1}–${questions.length} did not fit in this message. They are in Novia's message above; answer them under *Anything else*.` }] });
+  }
+  blocks.push({
+    type:     'input',
+    block_id: NOVIA_NOTE_BLOCK,
+    optional: true,
+    label:    { type: 'plain_text', text: 'Anything else' },
+    element:  { type: 'plain_text_input', action_id: 'novia_value', multiline: true },
+  });
+  return blocks;
+}
+
+// ---------------------------------------------------------------------------
 // HUMAN_NOTIFICATION — universal informational text message.
 // All workflow notifications, CRUD results, errors, and cancellations route here.
 // message.message is always the display-ready text — PROC is responsible for
@@ -450,7 +521,7 @@ async function postPingE2eResult(message) {
 // ---------------------------------------------------------------------------
 
 async function postHumanNotification(message) {
-  const { callback, traceId, workflowRunId, queryId, format, sessionId, reveals, breakActions } = message;
+  const { callback, traceId, workflowRunId, queryId, format, sessionId, reveals, breakActions, questions } = message;
   const text = message.message ?? 'No message provided.';
   const contextText = workflowRunId
     ? `runId: ${workflowRunId} | traceId: ${traceId}`
@@ -473,14 +544,30 @@ async function postHumanNotification(message) {
     { type: 'context', elements: [{ type: 'mrkdwn', text: contextText }] },
   ];
   if (format === 'markdown' && sessionId) {
+    // Her questions sit under the message with an answer box each, so they are answered in
+    // place: the follow-up modal covers the message it replies to, and a list in it cannot
+    // be copied apart from the rest. They ride on the last chunk, with the button that sends them.
+    const asked = Array.isArray(questions) && questions.length > 0
+      ? noviaQuestionBlocks(questions, QUESTION_BLOCK_ROOM)
+      : [];
+    suffixBlocks.unshift(...asked);
     suffixBlocks.push({
       type:     'actions',
-      elements: [{
-        type:      'button',
-        text:      { type: 'plain_text', text: 'Continue with Novia' },
-        action_id: 'minds_eye_followup',
-        value:     JSON.stringify({ action: 'minds_eye_followup', sessionId }),
-      }],
+      elements: [
+        ...(asked.length ? [{
+          type:      'button',
+          text:      { type: 'plain_text', text: 'Send answers' },
+          style:     'primary',
+          action_id: 'minds_eye_answers',
+          value:     JSON.stringify({ action: 'minds_eye_answers', sessionId }),
+        }] : []),
+        {
+          type:      'button',
+          text:      { type: 'plain_text', text: 'Continue with Novia' },
+          action_id: 'minds_eye_followup',
+          value:     JSON.stringify({ action: 'minds_eye_followup', sessionId }),
+        },
+      ],
     });
   } else if (queryId) {
     suffixBlocks.push({
@@ -629,12 +716,15 @@ export function oversizedGateMessage(blocks) {
  * A Novia action gate's buttons: approve, approve-and-test when /proc offers it (testLabel), and
  * cancel. Exported for tests.
  */
-export function mindsEyeGateButtons({ sessionId, confirmLabel = 'Approve', confirmStyle, testLabel }) {
+export function mindsEyeGateButtons({ sessionId, confirmLabel = 'Approve', confirmStyle, testLabel, atSeq }) {
+  // atSeq — the session entry the gate was posted at, handed back on the click so /proc can
+  // refuse one the session has moved past.
+  const at = atSeq != null ? { atSeq } : {};
   const approve = (label, test, actionId) => ({
     type:      'button',
     text:      { type: 'plain_text', text: label },
     action_id: actionId,
-    value:     JSON.stringify({ action: 'minds_eye_action_gate', sessionId, approved: true, ...(test ? { test: true } : {}) }),
+    value:     JSON.stringify({ action: 'minds_eye_action_gate', sessionId, approved: true, ...(test ? { test: true } : {}), ...at }),
     ...(confirmStyle ? { style: confirmStyle } : {}),
   });
   return [
@@ -644,7 +734,36 @@ export function mindsEyeGateButtons({ sessionId, confirmLabel = 'Approve', confi
       type:      'button',
       text:      { type: 'plain_text', text: 'Cancel' },
       action_id: 'minds_eye_delete_cancel',
-      value:     JSON.stringify({ action: 'minds_eye_action_gate', sessionId, approved: false }),
+      value:     JSON.stringify({ action: 'minds_eye_action_gate', sessionId, approved: false, ...at }),
+    },
+  ];
+}
+
+/**
+ * A Novia continue gate's buttons: Continue, Follow-up, Cancel, each carrying atSeq as the
+ * action gate's do. Exported for tests.
+ */
+export function mindsEyeContinueButtons({ sessionId, resetActionCount = false, atSeq }) {
+  const at = atSeq != null ? { atSeq } : {};
+  return [
+    {
+      type:      'button',
+      style:     'primary',
+      text:      { type: 'plain_text', text: 'Continue' },
+      action_id: 'minds_eye_continue_approve',
+      value:     JSON.stringify({ action: 'minds_eye_continue_gate', sessionId, approved: true, resetActionCount, ...at }),
+    },
+    {
+      type:      'button',
+      text:      { type: 'plain_text', text: 'Follow-up' },
+      action_id: 'minds_eye_continue_followup',
+      value:     JSON.stringify({ action: 'minds_eye_continue_followup', sessionId, ...at }),
+    },
+    {
+      type:      'button',
+      text:      { type: 'plain_text', text: 'Cancel' },
+      action_id: 'minds_eye_continue_cancel',
+      value:     JSON.stringify({ action: 'minds_eye_continue_gate', sessionId, approved: false, ...at }),
     },
   ];
 }
@@ -772,7 +891,7 @@ async function postHumanGate(message) {
   // minds_eye_continue_gate \u2014 Novia turn-limit gate. Three options: Continue resumes the loop,
   // Follow-up opens a modal for the user to ask a question, Cancel ends the session.
   if (gateType === 'minds_eye_continue_gate') {
-    const { sessionId, resetActionCount = false, budgetExhausted = false } = message;
+    const { sessionId, resetActionCount = false, budgetExhausted = false, atSeq } = message;
     const gateText = resetActionCount
       ? "I've reached my action limit. Continue to keep going (resets the limit), ask a Follow-up question, or Cancel to end the session."
       : budgetExhausted
@@ -784,27 +903,7 @@ async function postHumanGate(message) {
       sessionContextBlock,
       {
         type: 'actions',
-        elements: [
-          {
-            type:      'button',
-            style:     'primary',
-            text:      { type: 'plain_text', text: 'Continue' },
-            action_id: 'minds_eye_continue_approve',
-            value:     JSON.stringify({ action: 'minds_eye_continue_gate', sessionId, approved: true, resetActionCount }),
-          },
-          {
-            type:      'button',
-            text:      { type: 'plain_text', text: 'Follow-up' },
-            action_id: 'minds_eye_continue_followup',
-            value:     JSON.stringify({ action: 'minds_eye_continue_followup', sessionId }),
-          },
-          {
-            type:      'button',
-            text:      { type: 'plain_text', text: 'Cancel' },
-            action_id: 'minds_eye_continue_cancel',
-            value:     JSON.stringify({ action: 'minds_eye_continue_gate', sessionId, approved: false }),
-          },
-        ],
+        elements: mindsEyeContinueButtons({ sessionId, resetActionCount, atSeq }),
       },
     ];
     await routeCallback(callback, gateText, gateBlocks);
@@ -814,7 +913,7 @@ async function postHumanGate(message) {
 
   // minds_eye_gate \u2014 Novia action gate. Renders with sessionId buttons instead of workflowRunId.
   if (gateType === 'minds_eye_gate') {
-    const { sessionId, confirmLabel = 'Approve', confirmStyle, testLabel } = message;
+    const { sessionId, confirmLabel = 'Approve', confirmStyle, testLabel, atSeq } = message;
     const gateText = dialog?.fields?.find(f => f.type === 'typography')?.value ?? 'Confirm action';
     const sessionContextBlock = { type: 'context', elements: [{ type: 'mrkdwn', text: `sessionId: ${sessionId} | traceId: ${traceId}` }] };
     const gateBlocks = [
@@ -822,7 +921,7 @@ async function postHumanGate(message) {
       sessionContextBlock,
       {
         type: 'actions',
-        elements: mindsEyeGateButtons({ sessionId, confirmLabel, confirmStyle, testLabel }),
+        elements: mindsEyeGateButtons({ sessionId, confirmLabel, confirmStyle, testLabel, atSeq }),
       },
     ];
     await routeCallback(callback, gateText.slice(0, 150), gateBlocks);

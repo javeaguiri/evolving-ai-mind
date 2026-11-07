@@ -177,3 +177,26 @@ test('callLlmWithTools: max_output_tokens falls back when unspecified', async ()
   assert.equal(typeof sent.max_output_tokens, 'number');
   assert.ok(sent.max_output_tokens > 0);
 });
+
+// ---------------------------------------------------------------------------
+// The output ceiling — a cut-off response is truncation, not malformed JSON
+// ---------------------------------------------------------------------------
+
+test('callLlmWithTools: a response that reached the output ceiling is raised as truncated', async () => {
+  // Session 1307: 10,240 output tokens of 10,240, and a function_call whose arguments held
+  // 234 characters of an unfinished patch.
+  stubGateway({
+    output: [{ type: 'function_call', call_id: 'toolu_02', name: 'simulate_workflow', arguments: '{"workflowName": "w", "reasoning": "Valid' }],
+    usage:  { input_tokens: 54007, output_tokens: 512 },
+  });
+  await assert.rejects(
+    () => callLlmWithTools('m', 'sys', 'q', [], 't', 512),
+    (err) => err.isTruncated === true && /output ceiling of 512 tokens/.test(err.message),
+  );
+});
+
+test('callLlmWithTools: a response under the ceiling is returned', async () => {
+  stubGateway({ ...toolCallEnvelope, usage: { input_tokens: 20, output_tokens: 511 } });
+  const { output } = await callLlmWithTools('m', 'sys', 'q', [], 't', 512);
+  assert.deepEqual(output, toolCallEnvelope.output);
+});

@@ -3204,11 +3204,34 @@ paths:
           application/json:
             schema:
               type: object
-              required: [userInput]
+              description: >
+                Either prompt (typed text) or answers (replies to the questions her last
+                respond asked) is required. Answers become the session's next user message,
+                each paired with its question's text by proc.
               properties:
-                userInput:
+                prompt:
                   type: string
                   description: User prompt for Novia
+                answers:
+                  type: array
+                  description: Answers to the questions of the session's last respond
+                  items:
+                    type: object
+                    required: [id]
+                    properties:
+                      id:
+                        type: string
+                        description: The question's id, as the respond sent it
+                      answer:
+                        type: string
+                        nullable: true
+                      comment:
+                        type: string
+                        nullable: true
+                note:
+                  type: string
+                  nullable: true
+                  description: Free text sent with the answers
                 sessionId:
                   type: integer
                   description: Existing PGC_Session.id — omit to start a new session
@@ -3218,12 +3241,20 @@ paths:
               new_session:
                 summary: Start a new Novia session
                 value:
-                  userInput: "show me my flashcard decks"
+                  prompt: "show me my flashcard decks"
               continue_session:
                 summary: Continue an existing session
                 value:
-                  userInput: "now fix the routing issue on step 17"
+                  prompt: "now fix the routing issue on step 17"
                   sessionId: 42
+              answer_questions:
+                summary: Answer the questions of her last reply
+                value:
+                  sessionId: 42
+                  answers:
+                    - { id: "q1", answer: "Yes", comment: null }
+                    - { id: "q2", answer: "Only for the second group" }
+                  note: 'Start with the schema.'
       responses:
         '200':
           description: Agentic loop completed — respond action posted to Slack
@@ -3702,6 +3733,13 @@ paths:
         Column name must be lowercase alphanumeric + underscore.
         Column type must be in the SERV-Schema ALLOWED_TYPES list.
         Targets the correct database (pgc or pgd) based on PGC_Schema.target.
+
+        column.default, when given, is written as ADD COLUMN ... DEFAULT and recorded in
+        PGC_Schema.columns. Postgres fills every existing row with it, so a column added
+        with a default and nullable false needs no backfill. The default must be one of the
+        forms validateColumnDefault accepts: a quoted text literal ('active', with '' for a
+        quote inside), optionally cast ('{}'::jsonb); a number; true, false or null; now(),
+        current_date, current_timestamp or gen_random_uuid(). Anything else is a 400.
       tags: [SERV-Schema]
       parameters:
         - $ref: '#/components/parameters/CorrelationId'
@@ -3789,10 +3827,17 @@ paths:
 
   /api/v1/serv/schema/modifyColumn:
     post:
-      summary: Change a column's type — DDL + PGC_Schema sync
+      summary: Change a column's type, nullability or default — DDL + PGC_Schema sync
       description: >
-        Executes ALTER TABLE ... ALTER COLUMN ... TYPE on the physical table
-        and updates PGC_Schema.columns to reflect the new type.
+        Executes ALTER TABLE ... ALTER COLUMN ... TYPE / SET DEFAULT / DROP DEFAULT /
+        SET NOT NULL / DROP NOT NULL on the physical table, in that order, and updates
+        PGC_Schema.columns to match. At least one of newType, nullable, default or
+        dropDefault is required.
+
+        default is a SQL expression in the forms addColumn accepts (see column.default
+        there); default null, or dropDefault true, drops it. A new default does not fill
+        rows that are already NULL, so making a column required still needs those rows
+        backfilled first.
 
         An optional USING expression controls the cast — must be in the form
         "columnName::type" (e.g. "content::jsonb"). Omit for implicit casts
@@ -3810,7 +3855,7 @@ paths:
           application/json:
             schema:
               type: object
-              required: [tableName, columnName, newType]
+              required: [tableName, columnName]
               properties:
                 tableName:
                   type: string
@@ -3821,6 +3866,16 @@ paths:
                 newType:
                   type: string
                   example: jsonb
+                nullable:
+                  type: boolean
+                default:
+                  type: string
+                  nullable: true
+                  description: The column's new DEFAULT as a SQL expression; null drops it
+                  example: "'active'"
+                dropDefault:
+                  type: boolean
+                  description: Drop the column's DEFAULT
                 using:
                   type: string
                   description: >

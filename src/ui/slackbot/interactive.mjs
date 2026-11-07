@@ -29,7 +29,7 @@ import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { WebClient }                     from '@slack/web-api';
 import { ok, err }                       from '../../shared/lambda-utils.mjs';
 import { randomUUID }                    from 'crypto';
-import { FORM_BLOCK_PREFIX, LIST_ID_BLOCK_PREFIX, collectFormValues, collectListIdValue, invalidNumberFields } from './form-fields.mjs';
+import { FORM_BLOCK_PREFIX, LIST_ID_BLOCK_PREFIX, collectFormValues, collectListIdValue, invalidNumberFields, collectNoviaAnswers } from './form-fields.mjs';
 
 const sqs   = new SQSClient({});
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
@@ -125,6 +125,12 @@ export async function handle(req) {
   // Routes to MINDS_EYE with existingSessionId.
   if (buttonValue.action === 'minds_eye_followup') {
     return handleMindsEyeFollowupButton(buttonValue, payload, req.correlationId);
+  }
+
+  // minds_eye_answers — "Send answers" under Novia's questions.
+  // Routes to MINDS_EYE with the answers; /proc pairs each with its question.
+  if (buttonValue.action === 'minds_eye_answers') {
+    return handleMindsEyeAnswers(buttonValue, payload, req.correlationId);
   }
 
   // minds_eye_action_gate — Approve/Cancel on a Novia action gate.
@@ -573,6 +579,80 @@ async function handleMindsEyeFollowupButton(buttonValue, payload, correlationId)
   return { statusCode: 200, body: '' };
 }
 
+// handleMindsEyeAnswers — "Send answers" clicked under Novia's questions.
+// Reads every answer box from the message state, replaces the boxes with a line saying they
+// were sent (so a second click cannot send them twice), echoes the answers into the thread,
+// and enqueues MINDS_EYE with them. A click with nothing filled in does nothing.
+// ---------------------------------------------------------------------------
+
+export function answersEcho(answers, note) {
+  const lines = answers.map(a => `${a.position}. ${[a.answer, a.comment].filter(Boolean).join(' — ')}`);
+  if (note) lines.push(note);
+  return `🧠 ${lines.join('\n')}`;
+}
+
+async function handleMindsEyeAnswers(buttonValue, payload, correlationId) {
+  const { sessionId } = buttonValue;
+  const channel  = payload.channel?.id;
+  const threadTs = payload.container?.message_ts ?? payload.message?.ts;
+  const traceId  = correlationId || randomUUID();
+
+  if (!sessionId || !channel) {
+    console.warn('interactive: minds_eye_answers missing sessionId or channel', { traceId });
+    return err(400, 'minds_eye_answers button value missing sessionId', correlationId);
+  }
+
+  const { answers, note } = collectNoviaAnswers(payload.state?.values ?? {}, payload.message?.blocks ?? []);
+  if (answers.length === 0 && !note) {
+    console.info('interactive: minds_eye_answers clicked with nothing filled in', { sessionId, traceId });
+    return { statusCode: 200, body: '' };
+  }
+
+  try {
+    await slack.chat.update({
+      channel,
+      ts:     threadTs,
+      text:   payload.message?.text ?? 'Answers sent',
+      blocks: [
+        ...preservedContentBlocks(payload.message?.blocks),
+        { type: 'context', elements: [{ type: 'mrkdwn', text: '✅ Answers sent to Novia.' }] },
+      ],
+    });
+  } catch (error) {
+    console.warn('interactive: minds_eye_answers chat.update failed (non-fatal)', { error: error.message, traceId });
+  }
+
+  let ackTs;
+  try {
+    const ack = await slack.chat.postMessage({ channel, thread_ts: threadTs || undefined, text: answersEcho(answers, note) });
+    ackTs = ack.ts;
+  } catch (error) {
+    console.warn('interactive: minds_eye_answers echo failed (non-fatal)', { error: error.message });
+  }
+
+  try {
+    await sqs.send(new SendMessageCommand({
+      QueueUrl:    process.env.SQS_WORKFLOW_URL,
+      MessageBody: JSON.stringify({
+        type:       'MINDS_EYE',
+        traceId,
+        sessionId,
+        answers:    answers.map(({ id, answer, comment }) => ({ id, answer, comment })),
+        note,
+        slackUser:  payload.user?.id,
+        callback:   { provider: 'slack', channel, threadId: ackTs ?? threadTs },
+        enqueuedAt: new Date().toISOString(),
+      }),
+    }));
+  } catch (error) {
+    console.error('interactive: minds_eye_answers SQS enqueue failed', { error: error.message, traceId });
+    return err(500, `SQS enqueue failed: ${error.message}`, correlationId);
+  }
+
+  console.info('interactive: minds_eye_answers — enqueued MINDS_EYE', { sessionId, answers: answers.length, traceId });
+  return { statusCode: 200, body: '' };
+}
+
 // handleMindsEyeActionGate — Approve/Cancel clicked on a Novia deletion gate.
 // Replaces the gate message with a static confirmation, then enqueues MINDS_EYE_RESUME.
 // ---------------------------------------------------------------------------
@@ -674,6 +754,7 @@ async function handleMindsEyeActionGate(buttonValue, payload, correlationId) {
         sessionId,
         approved:  !!approved,
         ...(approved && test ? { test: true } : {}),
+        ...(buttonValue.atSeq != null ? { atSeq: buttonValue.atSeq } : {}),
         slackUser: payload.user?.id,
         callback:  { provider: 'slack', channel, threadId: threadTs },
         traceId,
@@ -730,6 +811,7 @@ async function handleMindsEyeContinueGate(buttonValue, payload, correlationId) {
         sessionId,
         approved:         !!approved,
         resetActionCount: !!buttonValue.resetActionCount,
+        ...(buttonValue.atSeq != null ? { atSeq: buttonValue.atSeq } : {}),
         slackUser:        payload.user?.id,
         callback:         { provider: 'slack', channel, threadId: threadTs },
         traceId,
@@ -747,6 +829,7 @@ async function handleMindsEyeContinueGate(buttonValue, payload, correlationId) {
 
 // handleMindsEyeContinueFollowupButton — Follow-up clicked on a Novia turn-limit gate.
 // Opens a modal without updating the gate message — if the user cancels, the 3 buttons remain.
+// The gate's content travels in the modal, so sending the follow-up can close the gate.
 // ---------------------------------------------------------------------------
 
 async function handleMindsEyeContinueFollowupButton(buttonValue, payload, correlationId) {
@@ -769,7 +852,7 @@ async function handleMindsEyeContinueFollowupButton(buttonValue, payload, correl
           type:             'modal',
           callback_id:      'minds_eye_continue_followup_modal',
           notify_on_close:  false,
-          private_metadata: JSON.stringify({ sessionId, channel, threadTs, traceId }),
+          private_metadata: buildPrivateMetadata({ sessionId, channel, threadTs, traceId }, preservedContentBlocks(payload.message?.blocks)),
           title:  { type: 'plain_text', text: 'Ask Novia' },
           submit: { type: 'plain_text', text: 'Send' },
           close:  { type: 'plain_text', text: 'Cancel' },
@@ -803,6 +886,13 @@ async function handleMindsEyeContinueFollowupButton(buttonValue, payload, correl
 // Novia answers, then re-posts the Continue/Follow-up/Cancel gate.
 // ---------------------------------------------------------------------------
 
+const FOLLOWUP_SENT = '💬 Follow-up sent.';
+
+/** A continue gate after its Follow-up was sent: its content, buttons gone. Exported for test. */
+export function followupClosedBlocks(contentBlocks) {
+  return [...(Array.isArray(contentBlocks) ? contentBlocks : []), { type: 'context', elements: [{ type: 'mrkdwn', text: FOLLOWUP_SENT }] }];
+}
+
 async function handleMindsEyeContinueFollowupSubmission(payload, traceId) {
   let meta;
   try {
@@ -812,7 +902,7 @@ async function handleMindsEyeContinueFollowupSubmission(payload, traceId) {
     return err(400, 'Invalid private_metadata', traceId);
   }
 
-  const { sessionId, channel, threadTs, traceId: metaTraceId } = meta;
+  const { sessionId, channel, threadTs, traceId: metaTraceId, contentBlocks } = meta;
   if (!sessionId || !channel) {
     console.warn('interactive: minds_eye_continue_followup_modal missing sessionId or channel', { meta, traceId });
     return err(400, 'minds_eye_continue_followup_modal private_metadata must contain sessionId and channel', traceId);
@@ -830,6 +920,16 @@ async function handleMindsEyeContinueFollowupSubmission(payload, traceId) {
   if (!inputValue) {
     console.warn('interactive: minds_eye_continue_followup_modal empty submission', { sessionId, traceId });
     return { statusCode: 200, body: '' };
+  }
+
+  // Close the gate the follow-up came from, as every other click on it does. Left live, its
+  // Continue resumed a session the follow-up had already moved on (session 1307).
+  if (threadTs) {
+    try {
+      await slack.chat.update({ channel, ts: threadTs, text: FOLLOWUP_SENT, blocks: followupClosedBlocks(contentBlocks) });
+    } catch (error) {
+      console.warn('interactive: minds_eye_continue_followup gate update failed (non-fatal)', { error: error.message, traceId });
+    }
   }
 
   try {

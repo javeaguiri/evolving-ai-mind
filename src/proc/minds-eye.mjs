@@ -260,10 +260,11 @@ export async function handle(req) {
     return handleGateResume(body, callback, traceId, req);
   }
 
-  const { prompt, sessionId: existingSessionId, slackUser } = body;
+  const { prompt: typed, answers, note, sessionId: existingSessionId, slackUser } = body;
 
-  if (!prompt?.trim()) {
-    if (req.source === 'http') return err(400, 'prompt is required', req.correlationId);
+  // A reply is either typed text or answers to the questions her last respond asked.
+  if (!typed?.trim() && !Array.isArray(answers)) {
+    if (req.source === 'http') return err(400, 'prompt or answers is required', req.correlationId);
     return;
   }
 
@@ -300,6 +301,8 @@ export async function handle(req) {
   }
 
   const { layer1Context, layer2Context } = await assembleContext();
+
+  const prompt = typed?.trim() ? typed : composeAnswersPrompt(lastQuestions(existingEntries), answers, note);
 
   // Save user message
   const nextSeq = existingEntries.length > 0
@@ -339,11 +342,120 @@ export async function handle(req) {
 }
 
 // ---------------------------------------------------------------------------
+// A gate click is acted on only while the session still stands where the gate was posted
+// ---------------------------------------------------------------------------
+
+// What a Continue under one of her replies tells her: the user's answer to it.
+export const CONTINUE_AFTER_REPLY = 'Continue — carry on with what you said you would do next.';
+
+/** Whether the session's latest entry is one of her replies. Pure — exported for test. */
+export function endsOnReply(entries = []) {
+  const last = entries.reduce((a, e) => (!a || e.sequence_number > a.sequence_number ? e : a), null);
+  return last?.role === 'assistant';
+}
+
+/**
+ * Why a gate click must not be acted on, or null when it may. A gate is current only while
+ * nothing has been added to the session since it was posted. A click on an older one would
+ * act on a session that has moved on: in 1307 a Continue after a follow-up made her answer
+ * the same question twice. And an Approve resolves "the latest pending action", so a click on
+ * an older gate could run an action already approved, or a newer one it never showed.
+ * Gates posted before atSeq existed carry none; an action gate is still held to its pending
+ * entry being the latest and a gated write. Pure — exported for test.
+ *
+ * @param {object} args
+ * @param {Array}  args.entries        The session's entries
+ * @param {string} args.kind           'continue' or 'action'
+ * @param {number} [args.atSeq]        The entry the gate was posted at, from its button
+ * @param {object} [args.pendingEntry] For an action gate, the latest __pending__ entry
+ * @returns {string|null}
+ */
+export function staleGateRefusal({ entries = [], kind, atSeq = null, pendingEntry = null }) {
+  const latest = Math.max(...entries.map(e => e.sequence_number), 0);
+  const moved  = 'That button is out of date: the session has moved on since it was posted, so nothing was done. Use the latest message in the thread.';
+  if (kind === 'continue') return atSeq != null && latest !== atSeq ? moved : null;
+  if (!pendingEntry || pendingEntry.sequence_number !== latest) return moved;
+  if (atSeq != null && pendingEntry.sequence_number !== atSeq) return moved;
+  let action = null;
+  try { action = JSON.parse(pendingEntry.content)?.action ?? null; } catch { /* unreadable */ }
+  return GATED_WRITE_TOOLS.has(action) ? null : moved;
+}
+
+async function refuseStaleGate(message, session, callback, traceId) {
+  console.warn('proc/minds-eye: stale gate click refused', { sessionId: session.id, traceId });
+  if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', format: 'markdown', traceId, message, sessionId: session.id });
+}
+
+// ---------------------------------------------------------------------------
+// Questions on a respond, and the answers that come back
+// ---------------------------------------------------------------------------
+
+/**
+ * The questions a respond asks, as the experience layer renders them: each with an id the
+ * answer comes back under, its text, and the choices it offers if any. An entry with no text
+ * is dropped; an id defaults to its position. Pure — exported for test.
+ *
+ * @param {*} raw  The respond call's `questions`
+ * @returns {Array<{ id: string, text: string, options?: string[] }>}
+ */
+export function normaliseQuestions(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter(q => typeof q?.text === 'string' && q.text.trim())
+    .map((q, i) => {
+      const options = Array.isArray(q.options) ? q.options.map(String).filter(o => o.trim()) : [];
+      return { id: String(q.id ?? `q${i + 1}`), text: q.text.trim(), ...(options.length ? { options } : {}) };
+    });
+}
+
+/**
+ * The questions of the last respond in a session, which a set of answers replies to.
+ *
+ * @param {Array} entries  PGC_SessionEntry rows in sequence order
+ * @returns {Array}
+ */
+export function lastQuestions(entries = []) {
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    if (entries[i]?.role !== 'assistant') continue;
+    try { return JSON.parse(entries[i].content)?.questions ?? []; } catch { return []; }
+  }
+  return [];
+}
+
+/**
+ * The user message a set of answers becomes: each question she asked, numbered as it was
+ * shown, with its answer under it, so neither side has to match answers to questions by
+ * position. Pure — exported for test.
+ *
+ * @param {Array}  questions  From lastQuestions
+ * @param {Array}  answers    [{ id, answer?, comment? }]
+ * @param {string} [note]     The reply's free text
+ * @returns {string}
+ */
+export function composeAnswersPrompt(questions = [], answers = [], note = null) {
+  const byId  = new Map((answers ?? []).map(a => [String(a.id), a]));
+  const known = new Set(questions.map(q => q.id));
+  const lines = ['My answers to your questions:'];
+  questions.forEach((q, i) => {
+    const a = byId.get(q.id);
+    lines.push('', `${i + 1}. ${q.text}`, `Answer: ${a?.answer ?? '(no answer)'}`);
+    if (a?.comment) lines.push(`Comment: ${a.comment}`);
+  });
+  for (const a of answers ?? []) {
+    if (known.has(String(a.id))) continue;
+    lines.push('', `Question ${a.id}`, `Answer: ${a.answer ?? '(no answer)'}`);
+    if (a.comment) lines.push(`Comment: ${a.comment}`);
+  }
+  if (note?.trim()) lines.push('', `Also: ${note.trim()}`);
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
 // MINDS_EYE_RESUME — execute an approved gated write tool and continue the loop
 // ---------------------------------------------------------------------------
 
 async function handleGateResume(body, callback, traceId, req) {
-  const { sessionId, approved, resumeType, test } = body;
+  const { sessionId, approved, resumeType, test, atSeq } = body;
 
   const sessResp = await getRows('PGC_Session', [{ column: 'id', op: 'eq', value: sessionId }]);
   const session  = sessResp.rows?.[0] ?? null;
@@ -406,6 +518,8 @@ async function handleGateResume(body, callback, traceId, req) {
   // touchpoint); minds_eye_turn_count is a cumulative lifetime tally that never
   // resets — it's checked against max_lifetime_turns inside runReasoningLoop.
   if (resumeType === 'continue') {
+    const stale = staleGateRefusal({ entries, kind: 'continue', atSeq });
+    if (stale) return refuseStaleGate(stale, session, callback, traceId);
     if (!approved) {
       console.info('proc/minds-eye: continue gate cancelled', { sessionId, traceId });
       return;
@@ -415,18 +529,27 @@ async function handleGateResume(body, callback, traceId, req) {
     });
     const { prefs, systemPrompt } = await loadPrefsAndPrompt();
     const { layer1Context, layer2Context } = await assembleContext();
+    // A Continue under one of her replies is the user's answer to it. Delivered as nothing,
+    // she answered the same question again (session 1307, entries 44 and 45).
+    const history = [...entries];
+    let nextSeq = Math.max(...entries.map(e => e.sequence_number), 0) + 1;
+    if (endsOnReply(entries)) {
+      await insertRow('PGC_SessionEntry', { session_id: session.id, sequence_number: nextSeq, role: 'user', content: CONTINUE_AFTER_REPLY });
+      history.push({ role: 'user', content: CONTINUE_AFTER_REPLY, sequence_number: nextSeq });
+      nextSeq += 1;
+    }
     await runReasoningLoop({
       session,
       prefs,
       systemPrompt,
       layer1Context,
       layer2Context,
-      workingHistory:     [...entries],
+      workingHistory:     history,
       callback,
       traceId,
       currentTurnCount:   session.minds_eye_turn_count ?? 0,
       currentActionCount: 0,
-      currentSeq:         Math.max(...entries.map(e => e.sequence_number), 0) + 1,
+      currentSeq:         nextSeq,
       threadTs:           callback?.threadId ?? session.slack_thread_ts,
     });
     if (req?.source === 'http') return ok({ success: true, sessionId: session.id }, req.correlationId);
@@ -445,6 +568,9 @@ async function handleGateResume(body, callback, traceId, req) {
     if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: 'No pending action to resume.' });
     return;
   }
+
+  const staleAction = staleGateRefusal({ entries, kind: 'action', atSeq, pendingEntry });
+  if (staleAction) return refuseStaleGate(staleAction, session, callback, traceId);
 
   let pendingData;
   try { pendingData = JSON.parse(pendingEntry.content); }
@@ -480,7 +606,7 @@ async function handleGateResume(body, callback, traceId, req) {
   }
 
   // Execute the approved gated action
-  const result    = withTestRequest(await executeWriteTool(action, params, traceId), test);
+  const result    = withTestRequest(await executeWriteTool(action, params, traceId), test, params.testPlan);
   const resultStr = JSON.stringify({ tool: action, params, result });
   await insertRow('PGC_SessionEntry', {
     session_id:      session.id,
@@ -907,7 +1033,8 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         // `items` carries the gateway's own function_call for this respond, exactly as every
         // tool entry does. A typed follow-up becomes that call's output on rebuild, so the
         // resumed round appends rather than ending on a user item — see toInputItems.
-        const assistantContent = JSON.stringify({ action: 'respond', message, reasoning, advisory, items: entryItems });
+        const questions = normaliseQuestions(params.questions);
+        const assistantContent = JSON.stringify({ action: 'respond', message, reasoning, advisory, ...(questions.length ? { questions } : {}), items: entryItems, turn: turnCount });
         await insertRow('PGC_SessionEntry', {
           session_id:      session.id,
           sequence_number: seq,
@@ -935,6 +1062,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
             message:   replyText,
             queryId:   session.query_id,
             sessionId: session.id,
+            ...(questions.length ? { questions } : {}),
           });
         }
 
@@ -1041,7 +1169,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
 
       } else if (INLINE_WRITE_TOOLS.has(action)) {
         if (actionCount >= prefs.max_actions_per_session) {
-          await postTurnLimitGate(session.id, callback, traceId, true);
+          await postTurnLimitGate(session.id, callback, traceId, true, false, seq - 1);
           earlyExit = true;
           control = 'break';
           break;
@@ -1100,7 +1228,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         }
 
         if (actionCount >= prefs.max_actions_per_session) {
-          await postTurnLimitGate(session.id, callback, traceId, true);
+          await postTurnLimitGate(session.id, callback, traceId, true, false, seq - 1);
           earlyExit = true;
           control = 'break';
           break;
@@ -1162,7 +1290,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
     if (turnCount >= prefs.max_lifetime_turns) {
       await notifyLifetimeCeiling(session, callback, traceId, turnCount);
     } else {
-      await postTurnLimitGate(session.id, callback, traceId, false, budgetExhausted);
+      await postTurnLimitGate(session.id, callback, traceId, false, budgetExhausted, seq - 1);
     }
   }
 }
@@ -1244,15 +1372,15 @@ export function gateButtonConfig(action, params = {}) {
   if (action === 'register_workflow')    return { confirmLabel: 'Register', confirmStyle: null, testLabel: 'Register and test' };
   if (action === 'propose_workflow_fix') return { confirmLabel: 'Apply',  confirmStyle: null, testLabel: 'Apply and test' };
   if (action === 'propose_schema_fix') {
-    const isDrop = params.operation === 'dropColumn';
+    const isDrop = schemaOperations(params).some(op => op.operation === 'dropColumn');
     return { confirmLabel: isDrop ? 'Drop' : 'Apply', confirmStyle: isDrop ? 'danger' : null };
   }
   return                                        { confirmLabel: 'Approve', confirmStyle: null };
 }
 
 async function postActionGate({ session, action, params, items, turn, callback, traceId, currentTurnCount, currentSeq }) {
-  const gateText = await buildGateText(action, params, traceId);
   const { confirmLabel, confirmStyle, testLabel } = gateButtonConfig(action, params);
+  const gateText = withTestPlan(await buildGateText(action, params, traceId), params, testLabel);
 
   await insertRow('PGC_SessionEntry', {
     session_id:      session.id,
@@ -1271,6 +1399,7 @@ async function postActionGate({ session, action, params, items, turn, callback, 
       type:         'HUMAN_GATE',
       gate_type:    'minds_eye_gate',
       sessionId:    session.id,
+      atSeq:        currentSeq,
       dialog:       { fields: [{ type: 'typography', value: gateText }] },
       confirmLabel,
       confirmStyle,
@@ -1423,6 +1552,9 @@ async function simulateForRegistration(steps, traceId) {
  * genuinely is the human's to determine.
  */
 async function preGateRefusal(action, params, traceId) {
+  const planRefusal = testPlanRefusal(params);
+  if (planRefusal) return planRefusal;
+
   if (action === 'register_workflow') {
     const steps = params?.steps;
     if (!Array.isArray(steps) || steps.length === 0) return null;
@@ -1456,7 +1588,120 @@ async function preGateRefusal(action, params, traceId) {
     };
   }
 
+  if (action === 'propose_schema_fix') return schemaOperationsRefusal(params);
+
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// propose_schema_fix — one operation, or an ordered list of them under one approval
+// ---------------------------------------------------------------------------
+
+const SCHEMA_OPERATIONS = new Set(['addColumn', 'modifyColumn', 'dropColumn', 'modifyConstraint', 'dropConstraint']);
+
+/**
+ * The operations a propose_schema_fix call asks for, in order. A schema change is usually a
+ * sequence (a column, then its CHECK), and one approval per operation stopped the session at
+ * each: session 1307 took four for two columns. `operations` is that sequence, as a migration
+ * lists it; an operation without its own tableName takes the call's. Without `operations`,
+ * the call itself is the one operation. Pure — exported for test.
+ *
+ * @param {object} params  The call's params
+ * @returns {Array<object>} [{ operation, tableName, ...fields }]
+ */
+export function schemaOperations(params = {}) {
+  const { operations, ...single } = params ?? {};
+  if (!Array.isArray(operations)) return [single];
+  return operations.map(op => ({ ...op, tableName: op?.tableName ?? params.tableName }));
+}
+
+/**
+ * Why a propose_schema_fix call cannot be sent for approval, or null when it can. Refused
+ * before the gate, so the user is never asked to approve a change that cannot run. Pure.
+ *
+ * @param {object} params
+ * @returns {object|null}
+ */
+export function schemaOperationsRefusal(params = {}) {
+  const ops = schemaOperations(params);
+  if (ops.length === 0) return { error: 'operations is empty — send at least one operation.' };
+  const problems = ops.flatMap((op, i) => {
+    if (!op?.operation || !op?.tableName) return [`operation ${i + 1}: operation and tableName are required`];
+    if (!SCHEMA_OPERATIONS.has(op.operation)) return [`operation ${i + 1}: unknown schema operation ${op.operation}`];
+    return [];
+  });
+  return problems.length
+    ? { error: 'Not sent for approval — nothing was changed. Correct these and send the call again.', problems }
+    : null;
+}
+
+/**
+ * Apply schema operations in order, stopping at the first that fails. Earlier operations stay
+ * applied (each is its own DDL), so the result names what was applied, what failed and what
+ * never ran — the next call starts from there, not from the beginning.
+ *
+ * @param {Array<object>} ops    From schemaOperations
+ * @param {Function}      send   (operation, body) → SERV result; throws on an HTTP failure
+ * @returns {Promise<object>}
+ */
+export async function applySchemaOperations(ops, send) {
+  const applied = [];
+  const label   = (op, i) => ({ operation: i + 1, type: op.operation, tableName: op.tableName });
+  for (const [i, op] of ops.entries()) {
+    const { operation, tableName, ...rest } = op;
+    let error = null;
+    try {
+      const result = await send(operation, { tableName, ...rest });
+      if (result?.success === false) error = result.error ?? 'failed';
+    } catch (e) {
+      error = e.message;
+    }
+    if (error) {
+      return {
+        success: false,
+        applied,
+        failed:  { ...label(op, i), error },
+        not_run: ops.slice(i + 1).map((o, j) => label(o, i + 1 + j)),
+      };
+    }
+    applied.push(label(op, i));
+  }
+  return { success: true, applied };
+}
+
+/**
+ * The gate lines for one schema operation. Pure — exported for test.
+ *
+ * @param {object} op
+ * @returns {Array<string>}
+ */
+export function schemaOperationLines(op) {
+  switch (op.operation) {
+    case 'addColumn': {
+      const { column = {} } = op;
+      const hasDefault = column.default !== undefined && column.default !== null;
+      return [`Add column: \`${column.name}\` (${column.type}${hasDefault ? `, default \`${column.default}\`` : ''}${column.nullable === false ? ', NOT NULL' : ''})` +
+        (hasDefault ? ' — existing rows get the default' : '')];
+    }
+    case 'modifyColumn': {
+      const { columnName, newType, nullable, using: usingExpr, default: newDefault, dropDefault } = op;
+      const dropping = dropDefault === true || newDefault === null;
+      return [
+        ...(newType ? [`Change \`${columnName}\` type → \`${newType}\`${usingExpr ? ` USING ${usingExpr}` : ''}`] : []),
+        ...(dropping ? [`Drop \`${columnName}\`'s default`]
+          : newDefault !== undefined ? [`Set \`${columnName}\` default → \`${newDefault}\` (new rows only; existing rows keep their value)`] : []),
+        ...(nullable !== undefined ? [`Set \`${columnName}\` nullable: ${nullable}`] : []),
+      ];
+    }
+    case 'dropColumn':
+      return [`Drop column \`${op.columnName}\` — irreversible, cascades to dependent constraints.`];
+    case 'modifyConstraint':
+      return [`Replace constraint \`${op.constraintName}\` with: \`CHECK (${op.expression})\``];
+    case 'dropConstraint':
+      return [`Drop constraint \`${op.constraintName}\` — irreversible, removes from DB and PGC_Schema.`];
+    default:
+      return [`\`\`\`json\n${JSON.stringify(op, null, 2)}\n\`\`\``];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1646,11 +1891,14 @@ function stepRoutesTo(step, targetKey) {
  * receives. Shared by the pre-gate refusal, the gate text and the write so none of the three
  * can form a different opinion about what is being written.
  */
-async function resolveProposedSteps(params, { requireBaseVersion = true } = {}) {
-  const { workflowName, steps, patch, removeSteps = [], baseVersion } = params ?? {};
+export async function resolveProposedSteps(params, { requireBaseVersion = true } = {}) {
+  const { workflowName, steps, patch, removeSteps = [], baseVersion, fromSandbox } = params ?? {};
   if (!workflowName) return { error: 'workflowName is required' };
-  if (!Array.isArray(steps) && !Array.isArray(patch)) {
-    return { error: 'Send either patch (the steps you changed) or steps (the whole array)' };
+  if (fromSandbox && (Array.isArray(steps) || Array.isArray(patch))) {
+    return { error: 'fromSandbox commits the tested copy as it stands — send it without patch or steps.' };
+  }
+  if (!fromSandbox && !Array.isArray(steps) && !Array.isArray(patch)) {
+    return { error: 'Send either patch (the steps you changed), steps (the whole array), or fromSandbox: true to commit the copy you tested' };
   }
 
   const wfResp = await getRows(
@@ -1663,6 +1911,38 @@ async function resolveProposedSteps(params, { requireBaseVersion = true } = {}) 
   if (!wf) return { error: `Workflow "${workflowName}" not found` };
 
   const currentSteps = wf.steps ?? [];
+
+  // The tested copy, committed as tested. Session 1293 sent the same patch three times —
+  // simulate, sandbox, commit — each with a full step-10 prompt; the third is the one a tested
+  // copy makes unnecessary, and the only one that could differ from what passed. The live
+  // version must still be the one the copy was taken from.
+  if (fromSandbox) {
+    if (baseVersion === undefined || baseVersion === null) {
+      return { error: 'baseVersion is required with fromSandbox — pass the live version the test copy was made from.' };
+    }
+    if (Number(baseVersion) !== Number(wf.version)) {
+      return {
+        error:          `Workflow "${workflowName}" has changed since the test copy was made — not committed.`,
+        baseVersion:    Number(baseVersion),
+        currentVersion: wf.version,
+        remedy:         'Read the live workflow, rebuild the change against it, and test again.',
+      };
+    }
+    const sandbox = await activeSandbox();
+    if (!sandbox) return { error: 'No test sandbox exists, so there is no tested copy to commit. Commit before end_test.' };
+    const copyResp = await withSandbox(sandbox, () => getRows(
+      'PGC_Workflow',
+      [{ column: 'name', op: 'eq', value: workflowName }],
+      { column: 'version', direction: 'desc' },
+      1,
+    ));
+    const copy = copyResp.rows?.[0];
+    if (!copy) return { error: `The sandbox holds no copy of "${workflowName}".` };
+    if (JSON.stringify(copy.steps ?? []) === JSON.stringify(currentSteps)) {
+      return { error: `The sandbox copy of "${workflowName}" is the same as the live version — there is nothing to commit.` };
+    }
+    return { wf, currentSteps, merged: copy.steps ?? [], mode: 'from_sandbox', sandbox };
+  }
 
   // Whole-array form: still accepted, and now validated the same way. No version check —
   // it never had one, and the instruction layer steers repairs to the patch form instead.
@@ -1792,41 +2072,18 @@ async function buildGateText(action, params, traceId) {
       }
 
       case 'propose_schema_fix': {
-        const { operation, tableName } = params;
-        if (!operation || !tableName) {
-          return `**Proposed schema fix** — missing operation or tableName`;
+        if (!Array.isArray(params.operations)) {
+          const { operation, tableName } = params;
+          if (!operation || !tableName) {
+            return `**Proposed schema fix** — missing operation or tableName`;
+          }
+          return [`**Proposed schema fix: \`${tableName}\`** — \`${operation}\``, ...schemaOperationLines(params)].join('\n');
         }
-        const lines = [`**Proposed schema fix: \`${tableName}\`** — \`${operation}\``];
-        switch (operation) {
-          case 'addColumn': {
-            const { column = {} } = params;
-            lines.push(`Add column: \`${column.name}\` (${column.type}${column.nullable === false ? ', NOT NULL' : ''})`);
-            break;
-          }
-          case 'modifyColumn': {
-            const { columnName, newType, nullable, using: usingExpr } = params;
-            if (newType)               lines.push(`Change \`${columnName}\` type → \`${newType}\`${usingExpr ? ` USING ${usingExpr}` : ''}`);
-            if (nullable !== undefined) lines.push(`Set \`${columnName}\` nullable: ${nullable}`);
-            break;
-          }
-          case 'dropColumn': {
-            const { columnName } = params;
-            lines.push(`Drop column \`${columnName}\` — irreversible, cascades to dependent constraints.`);
-            break;
-          }
-          case 'modifyConstraint': {
-            const { constraintName, expression } = params;
-            lines.push(`Replace constraint \`${constraintName}\` with: \`CHECK (${expression})\``);
-            break;
-          }
-          case 'dropConstraint': {
-            const { constraintName } = params;
-            lines.push(`Drop constraint \`${constraintName}\` — irreversible, removes from DB and PGC_Schema.`);
-            break;
-          }
-          default:
-            lines.push(`\`\`\`json\n${JSON.stringify(params, null, 2)}\n\`\`\``);
-        }
+        const ops   = schemaOperations(params);
+        const lines = [`**Proposed schema change — ${ops.length} operations**, applied in order. If one fails, the ones before it stay applied and the rest do not run.`];
+        ops.forEach((op, i) => {
+          lines.push('', `**${i + 1}. \`${op.tableName}\`** — \`${op.operation}\``, ...schemaOperationLines(op));
+        });
         return lines.join('\n');
       }
 
@@ -2207,19 +2464,24 @@ async function executeWriteTool(action, params, traceId) {
           stepCountAfter:   steps.length,
           stepCountMismatch: currentSteps.length !== steps.length,
           diff,
-          // Under a patch the merged array can be large and she already knows what she sent.
+          // Under a patch, or a commit of the tested copy, the merged array can be large and she
+          // already knows what it holds.
           // Echoing it back spends the round's budget on something she is not missing.
-          ...(mode === 'patch' ? {} : { steps_written: steps }),
+          ...(mode === 'steps' ? { steps_written: steps } : {}),
+          ...(resolved.sandbox ? { committed_from: resolved.sandbox } : {}),
         };
       }
 
       case 'propose_schema_fix': {
-        const { operation, tableName, ...rest } = params;
-        if (!operation || !tableName) return { error: 'operation and tableName are required' };
-        const allowed = new Set(['addColumn', 'modifyColumn', 'dropColumn', 'modifyConstraint', 'dropConstraint']);
-        if (!allowed.has(operation)) return { error: `Unknown schema operation: ${operation}` };
+        const refusal = schemaOperationsRefusal(params);
+        if (refusal) return refusal;
         const { servPost } = await import('../shared/serv-client.mjs');
-        return await servPost(`/api/v1/serv/schema/${operation}`, { tableName, ...rest });
+        const send = (operation, body) => servPost(`/api/v1/serv/schema/${operation}`, body);
+        if (!Array.isArray(params.operations)) {
+          const { operation, ...body } = params;
+          return await send(operation, body);
+        }
+        return await applySchemaOperations(schemaOperations(params), send);
       }
 
       case 'drop_table': {
@@ -2397,9 +2659,51 @@ async function executeTriggerTool(action, params, callback, traceId, threadTs, t
  * An approved change the user also asked to have tested (Apply and test). Marked on the result
  * only when the change was applied — there is nothing to test after a refusal.
  */
-export function withTestRequest(result, test) {
-  if (!test || !result || result.error || result.success === false) return result;
-  return { ...result, test_requested: true, next: 'The user asked you to test this change. Read sop_test_cycle, then respond with a test plan for their approval.' };
+export function withTestRequest(result, test, testPlan) {
+  if (!result || result.error || result.success === false) return result;
+  if (!test) {
+    return testPlan
+      ? { ...result, test_requested: false, next: 'The user applied this change without the test plan on its gate. Do not run the plan.' }
+      : result;
+  }
+  return testPlan
+    ? { ...result, test_requested: true, test_plan_approved: true, next: 'The user approved this change and the test plan on its gate together, with Apply and test. Start the test now (sop_test_cycle, step 3) without asking for approval again.' }
+    : { ...result, test_requested: true, next: 'The user asked you to test this change. Read sop_test_cycle, then respond with a test plan for their approval.' };
+}
+
+// A test plan on a gate is approved with the change, so the user must be able to read all of
+// it there: one longer than this is refused before the gate rather than cut.
+const GATE_TEST_PLAN_CHARS = 3000;
+
+/**
+ * Why a call's testPlan cannot go on its gate, or null. Pure — exported for test.
+ *
+ * @param {object} params
+ * @returns {object|null}
+ */
+export function testPlanRefusal(params = {}) {
+  const plan = params?.testPlan;
+  if (plan === undefined || plan === null) return null;
+  if (typeof plan !== 'string' || !plan.trim()) return { error: 'testPlan must be the plan as text — nothing was sent for approval.' };
+  if (plan.length > GATE_TEST_PLAN_CHARS) {
+    return { error: `testPlan is ${plan.length} characters; a plan on the approval gate is at most ${GATE_TEST_PLAN_CHARS}, so the user can read all of what they approve. Shorten it and send the call again — nothing was sent for approval.` };
+  }
+  return null;
+}
+
+/**
+ * The gate text with the call's test plan under it, when the gate offers a test. Pure —
+ * exported for test.
+ *
+ * @param {string} gateText
+ * @param {object} params
+ * @param {string} [testLabel]  The gate's test button, absent when it offers none
+ * @returns {string}
+ */
+export function withTestPlan(gateText, params = {}, testLabel) {
+  const plan = typeof params?.testPlan === 'string' ? params.testPlan.trim() : '';
+  if (!plan || !testLabel) return gateText;
+  return `${gateText}\n\n**Test plan** — *${testLabel}* approves this plan too, and the test starts straight away.\n\n${plan}`;
 }
 
 /** Whether a run is a test run this session started — the only runs whose gates she answers. */
@@ -2436,6 +2740,9 @@ async function executeTestTool(action, params, traceId) {
 
 /** A read or write tool, run against the sandbox: every SERV call it makes carries x-sandbox. */
 async function executeInSandbox(action, params, traceId, session) {
+  if (action === 'propose_workflow_fix' && params.fromSandbox) {
+    return { error: 'fromSandbox commits the tested copy to the live workflow — call it without sandbox: true.' };
+  }
   const sandbox = await activeSandbox();
   if (!sandbox) return { error: 'No test sandbox exists. Call start_test first.' };
   const { sandbox: _flag, ...rest } = params;
@@ -2452,16 +2759,59 @@ async function executeInSandbox(action, params, traceId, session) {
  * @returns {Promise<{ waiting: true } | { error: string }>}
  */
 async function startAnswerGate(params, session, traceId, pend) {
-  const { runId, gateId, action, formValues, inputValue, listGroup, selectedValue } = params;
+  const { runId, gateId, asSourceRun } = params;
   if (!runId) return { error: 'runId is required' };
-  const run = (await getRows('PGC_WorkflowRun', [{ column: 'id', op: 'eq', value: runId }], undefined, 1, undefined, ['id', 'sandbox', 'callback'])).rows?.[0];
+  const run = (await getRows('PGC_WorkflowRun', [{ column: 'id', op: 'eq', value: runId }], undefined, 1, undefined,
+    ['id', 'sandbox', 'callback', 'stack', 'replay_source_run_id'])).rows?.[0];
   if (!isOwnTestRun(run, session.id)) {
     return { error: "answer_gate answers only the gates of your own test runs. This run's gates belong to the user." };
   }
+  let answer = { action: params.action, formValues: params.formValues, inputValue: params.inputValue,
+    listGroup: params.listGroup, selectedValue: params.selectedValue };
+  if (asSourceRun) {
+    const recorded = await sourceRunAnswer(run);
+    if (recorded.error) return recorded;
+    answer = recorded.answer;
+  }
   const last = await getRows('PGC_WorkflowRunStep', [{ column: 'run_id', op: 'eq', value: runId }], 'id DESC', 1, undefined, ['id']);
   await pend(runId, last.rows?.[0]?.id ?? 0);
-  const { status, body } = await answerGate(runId, { gateId, action, formValues, inputValue, listGroup, selectedValue }, traceId);
+  const { status, body } = await answerGate(runId, { gateId, ...answer }, traceId);
   return status === 202 ? { waiting: true } : body;
+}
+
+/**
+ * The answer a replay's source run gave the gate the replay is waiting at: the same gate step,
+ * the same visit (the n-th time the step is answered in the replay is the n-th in the source).
+ * Session 1293 dug a 4,000-character receipt out of the source run with run_sql and pasted it
+ * back, once per replay.
+ *
+ * @param {Array}  replayRows  The replay's human_gate PGC_WorkflowRunStep rows, in order
+ * @param {Array}  sourceRows  The source run's human_gate PGC_WorkflowRunStep rows, in order
+ * @param {string} step        The gate step the replay is waiting at
+ * @returns {{ userResponse: string, responseData: object|null } | null}
+ */
+export function pickSourceAnswer({ replayRows = [], sourceRows = [], step }) {
+  const answersTo = (rows) => rows.filter(r => r.output_snapshot?.answer && stepOf(r) === String(step));
+  const visit = answersTo(replayRows).length;
+  return answersTo(sourceRows)[visit]?.output_snapshot.answer ?? null;
+}
+
+async function sourceRunAnswer(run) {
+  if (run.replay_source_run_id == null) return { error: 'asSourceRun answers a replay with its source run\'s answers; this run is not a replay.' };
+  const top = Array.isArray(run.stack) ? run.stack[run.stack.length - 1] : null;
+  if (top?.type !== 'human_gate') return { error: `Run ${run.id} is not waiting at a gate.` };
+  const gateRows = (id) => getRows('PGC_WorkflowRunStep',
+    [{ column: 'run_id', op: 'eq', value: id }, { column: 'step_type', op: 'eq', value: 'human_gate' }],
+    'id ASC', undefined, undefined, ['id', 'step_number', 'input_snapshot', 'output_snapshot']);
+  const [replayResp, sourceResp] = await Promise.all([gateRows(run.id), gateRows(run.replay_source_run_id)]);
+  const recorded = pickSourceAnswer({ replayRows: replayResp.rows ?? [], sourceRows: sourceResp.rows ?? [], step: top.step_number });
+  if (!recorded) {
+    return { error: `Source run ${run.replay_source_run_id} has no recorded answer for this visit to gate ${top.step_number}. ` +
+      'Answers are recorded for gates answered since 2026-11-05; answer this one with action and its values.' };
+  }
+  const data = recorded.responseData ?? {};
+  return { answer: { action: recorded.userResponse, formValues: data.formValues, inputValue: data.inputValue,
+    listGroup: data.listGroup, selectedValue: data.selectedValue } };
 }
 
 /**
@@ -2533,7 +2883,7 @@ export function deriveScope(workingHistory) {
     // the second — which is how a review_inventory design came to be filed under `recipes`.
     if (tool === 'search_domain_help'   && result.results?.[0]?.domain && !scope.domain) scope.domain = result.results[0].domain;
     if (tool === 'list_tables'          && params.domain && !scope.domain) scope.domain  = params.domain;
-    if (tool === 'propose_schema_fix'   && params.tableName)              scope.table    = params.tableName;
+    if (tool === 'propose_schema_fix'   && schemaOperations(params)[0]?.tableName) scope.table = schemaOperations(params)[0].tableName;
     if (tool === 'drop_table'           && params.tableName)              scope.table    = params.tableName;
     if (tool === 'create_view'          && params.tableName)              scope.table    = params.tableName;
     if (tool === 'drop_view'            && params.tableName)              scope.table    = params.tableName;
@@ -2606,7 +2956,9 @@ async function writeFactualMemory(action, params, result, sessionId, traceId) {
                 `${result.intent_map_error ? `; intent map write failed: ${result.intent_map_error}` : ''}.`;
 
     } else if (action === 'propose_schema_fix') {
-      const { operation, tableName } = params;
+      const ops       = schemaOperations(params);
+      const tableName = ops[0]?.tableName;
+      const operation = ops.map(op => op.tableName === tableName ? op.operation : `${op.operation} on ${op.tableName}`).join(', ');
       let domain = null;
       try {
         const schemaResp = await getRows('PGC_Schema', [{ column: 'table_name', op: 'eq', value: tableName }], null, 1);
@@ -2795,6 +3147,68 @@ export function unparseableCallEntry(tool, items, turn) {
   return JSON.stringify({ tool, params: {}, result: UNPARSEABLE_ARGUMENTS_RESULT, items, turn });
 }
 
+// An earlier request's tool result or call arguments above this size is rendered as a stub.
+// Small ones ("newVersion": 14, an error) stay: they cost little and are often what a later
+// request refers back to.
+const EARLIER_REQUEST_STUB_CHARS = 1000;
+
+/**
+ * The transcript copy of a tool result. In the current request it is the result, bounded by
+ * capOutput. From an earlier request — before the user's latest typed message — a large one is
+ * a stub naming the entry that holds it.
+ *
+ * Session 1293 is why: seven requests in one session, and every call of the last one re-read
+ * all six before it — 235K tokens of diagnosis and replay output a small checklist change did
+ * not need. Her own replies summarise each request and stay whole; the stub is the recall
+ * handle for the rest, worded as an instruction because the failure it guards against is
+ * rebuilding a withheld value from memory (the step 13 rewrite).
+ *
+ * Pure in (result, seq, tool, earlier): every round of one request renders it identically, so
+ * the cache holds within a request and is rewritten once, smaller, at the next typed message.
+ *
+ * @param {*}       result   The tool's result
+ * @param {number}  [seq]    Sequence number of the entry holding it
+ * @param {string}  [tool]   The tool that produced it
+ * @param {boolean} earlier  Whether the entry precedes the current request
+ * @returns {string}
+ */
+export function renderToolOutput(result, seq, tool, earlier) {
+  const text = JSON.stringify(result ?? null);
+  if (!earlier || text.length <= EARLIER_REQUEST_STUB_CHARS || seq === undefined || seq === null) {
+    return capOutput(text, seq, tool);
+  }
+  return JSON.stringify({
+    earlier_request: `${tool ?? 'This tool'} returned ${text.length} characters during an earlier request. ` +
+      `Recall them with read_session_entry({ sequence: ${seq} }) before building on them, or repeat the call for current data.`,
+  });
+}
+
+/**
+ * An earlier request's function_call items with large arguments replaced by a stub — the same
+ * rule renderToolOutput applies to results. A respond call is never stubbed: her reply is the
+ * request's summary, and the one thing a later request must not lose.
+ *
+ * @param {Array}   callItems  Gateway items of one entry
+ * @param {number}  [seq]      Sequence number of the entry holding the call's params
+ * @param {boolean} earlier    Whether the entry precedes the current request
+ * @returns {Array}
+ */
+export function renderCallItems(callItems, seq, earlier) {
+  if (!earlier || seq === undefined || seq === null) return callItems;
+  return callItems.map(it => {
+    if (it?.type !== 'function_call' || it.name === 'respond') return it;
+    const args = String(it.arguments ?? '');
+    if (args.length <= EARLIER_REQUEST_STUB_CHARS) return it;
+    return {
+      ...it,
+      arguments: JSON.stringify({
+        earlier_request: `This call's ${args.length}-character arguments are withheld. ` +
+          `Recall them with read_session_entry({ sequence: ${seq}, part: "arguments" }) before building on them.`,
+      }),
+    };
+  });
+}
+
 /**
  * Convert persisted PGC_SessionEntry rows into the canonical item array the gateway takes.
  *
@@ -2840,6 +3254,11 @@ export function unparseableCallEntry(tool, items, turn) {
  * Synthesised call_ids (the fallback path) only have to be unique and consistent inside this
  * array. They cannot collide with replayed gateway ids, which carry a provider prefix.
  *
+ * A request starts at each typed user message. Entries before the latest one belong to earlier
+ * requests, and their large results and call arguments render as stubs (renderToolOutput,
+ * renderCallItems). Continue, a gate approval and a test-run wake add no user entry, so they
+ * stay inside the request and render it exactly as the round before did.
+ *
  * @param {Array} workingHistory  PGC_SessionEntry rows in sequence order
  * @returns {Array} canonical items for callLlmWithTools
  */
@@ -2847,24 +3266,62 @@ export function toInputItems(workingHistory = []) {
   const items   = [];
   let   pending = null;   // { callId, name, kind } — a function_call still waiting for its output
 
+  // The current request starts at the latest typed message; everything before it is earlier.
+  const requestStart = workingHistory.reduce(
+    (latest, e) => (e?.role === 'user' && typeof e.sequence_number === 'number' ? Math.max(latest, e.sequence_number) : latest),
+    -Infinity,
+  );
+  const isEarlier = (entry) => typeof entry?.sequence_number === 'number' && entry.sequence_number < requestStart;
+
+  // A turn that made several calls is, in the loop's own input, every call and then every
+  // output. Its entries are stored one per call, so closing each call as it is read gives
+  // call, output, call, output instead, and the next round's cache read stops at the first
+  // parallel turn (session 1307, call 28: 25K tokens written again). The outputs of the turn
+  // being read are held until its last call is in. Entries with no turn are not grouped.
+  let turnGroup = null;   // { turn, outputs } — the turn whose calls are in and outputs held
+  const flushTurn = () => {
+    if (turnGroup) items.push(...turnGroup.outputs);
+    turnGroup = null;
+  };
+  const pushCalls = (callItems, turn) => {
+    const grouped = turn !== undefined && turn !== null;
+    if (!grouped || turnGroup?.turn !== turn) flushTurn();
+    items.push(...callItems);
+    if (grouped) turnGroup ??= { turn, outputs: [] };
+  };
+  const pushOutput = (item) => {
+    if (turnGroup) turnGroup.outputs.push(item);
+    else items.push(item);
+  };
+
   // With no output supplied, what closes the call depends on what opened it: a gated write is
   // still awaiting approval, a respond was already delivered to the user.
   const closePending = (output) => {
     const resolved = output
       ?? (pending.kind === 'respond' ? RESPONSE_DELIVERED_OUTPUT : AWAITING_APPROVAL_OUTPUT);
-    items.push({ type: 'function_call_output', call_id: pending.callId, output: resolved });
+    pushOutput({ type: 'function_call_output', call_id: pending.callId, output: resolved });
     pending = null;
   };
 
   // Replay the gateway's own items for this turn, and report which call the output attaches
   // to. Returns null when the entry predates `items` or carries none the loop can pair an
   // output with, so the caller falls back to synthesising the call.
-  const replayItems = (parsed) => {
+  const replayItems = (parsed, entry) => {
     if (!Array.isArray(parsed?.items) || parsed.items.length === 0) return null;
     const call = parsed.items.find(it => it?.type === 'function_call');
     if (!call?.call_id) return null;
-    items.push(...parsed.items);
+    pushCalls(renderCallItems(parsed.items, entry?.sequence_number, isEarlier(entry)), parsed.turn);
     return call.call_id;
+  };
+
+  // A call rebuilt from { name, params } when the entry predates `items`.
+  const synthesiseCall = (entry, callId, name, params, turn) => {
+    pushCalls(renderCallItems([{
+      type:      'function_call',
+      call_id:   callId,
+      name,
+      arguments: JSON.stringify(params ?? {}),
+    }], entry?.sequence_number, isEarlier(entry)), turn);
   };
 
   workingHistory.forEach((entry, i) => {
@@ -2877,12 +3334,14 @@ export function toInputItems(workingHistory = []) {
       // round's entire prefix credit, measured at $0.219 on a 56k transcript.
       if (pending?.kind === 'respond') {
         closePending(capOutput(JSON.stringify({ user_reply: text }), entry?.sequence_number));
+        flushTurn();
         return;
       }
       // Otherwise the user ignored a gate and sent a new message instead of answering it.
       // The call still has to be closed — an unpaired call followed by a user turn is not
       // a shape the gateway accepts.
       if (pending) closePending();
+      flushTurn();
       items.push({ role: 'user', content: text });
       return;
     }
@@ -2894,7 +3353,7 @@ export function toInputItems(workingHistory = []) {
       if (pending) closePending();
       // A respond persisted with the gateway's own items comes back as the function_call it
       // actually was, left open for whatever resolves it.
-      const respondId = replayItems(parsed);
+      const respondId = replayItems(parsed, entry);
       if (respondId) {
         pending = { callId: respondId, name: 'respond', kind: 'respond' };
         return;
@@ -2907,16 +3366,17 @@ export function toInputItems(workingHistory = []) {
       // reasoning and advisory are deliberately dropped: reasoning is per-turn scratch, and the
       // advisory was already delivered to the user when the round ended.
       if (parsed?.action === 'respond') {
-        items.push({
+        pushCalls([{
           type:      'function_call',
           call_id:   callId,
           name:      'respond',
           arguments: JSON.stringify({ message: parsed.message ?? '' }),
-        });
+        }], parsed.turn);
         pending = { callId, name: 'respond', kind: 'respond' };
         return;
       }
       // Content that is not a respond entry at all keeps the assistant rendering.
+      flushTurn();
       items.push({ role: 'assistant', content: parsed?.message ?? String(entry?.content ?? '') });
       return;
     }
@@ -2925,15 +3385,8 @@ export function toInputItems(workingHistory = []) {
 
     if (parsed.tool === '__pending__') {
       if (pending) closePending();
-      const replayedId = replayItems(parsed);
-      if (!replayedId) {
-        items.push({
-          type:      'function_call',
-          call_id:   callId,
-          name:      parsed.action,
-          arguments: JSON.stringify(parsed.params ?? {}),
-        });
-      }
+      const replayedId = replayItems(parsed, entry);
+      if (!replayedId) synthesiseCall(entry, callId, parsed.action, parsed.params, parsed.turn);
       pending = { callId: replayedId ?? callId, name: parsed.action, kind: 'tool' };
       return;
     }
@@ -2946,29 +3399,23 @@ export function toInputItems(workingHistory = []) {
     // The entry a gate resolves into carries the same action as the pending call, so it
     // becomes that call's output rather than a second call.
     if (pending && pending.name === parsed.tool) {
-      closePending(capOutput(JSON.stringify(parsed.result ?? null), entry?.sequence_number, parsed.tool));
+      closePending(renderToolOutput(parsed.result, entry?.sequence_number, parsed.tool, isEarlier(entry)));
       return;
     }
 
     if (pending) closePending();
 
-    const replayedId = replayItems(parsed);
-    if (!replayedId) {
-      items.push({
-        type:      'function_call',
-        call_id:   callId,
-        name:      parsed.tool,
-        arguments: JSON.stringify(parsed.params ?? {}),
-      });
-    }
-    items.push({
+    const replayedId = replayItems(parsed, entry);
+    if (!replayedId) synthesiseCall(entry, callId, parsed.tool, parsed.params, parsed.turn);
+    pushOutput({
       type:    'function_call_output',
       call_id: replayedId ?? callId,
-      output:  capOutput(JSON.stringify(parsed.result ?? null), entry?.sequence_number, parsed.tool),
+      output:  renderToolOutput(parsed.result, entry?.sequence_number, parsed.tool, isEarlier(entry)),
     });
   });
 
   if (pending) closePending();
+  flushTurn();
 
   return items;
 }
@@ -3024,6 +3471,78 @@ export function projectWorkflowSteps(steps, { selected, outline } = {}) {
   return { step_count: all.length, steps: all };
 }
 
+// A PGC_WorkflowRunStep row's step identifier, and its one-line outline.
+const stepOf = (row) => String(row.input_snapshot?.step ?? row.step_number);
+const stepLine = (row) => ({
+  step:         stepOf(row),
+  type:         row.step_type,
+  status:       row.status,
+  duration_ms:  row.duration_ms ?? null,
+  ...(row.retry_count ? { retry_count: row.retry_count } : {}),
+  ...(row.error       ? { error: row.error } : {}),
+  ...(row.output_snapshot?.answer ? { answered: row.output_snapshot.answer.userResponse } : {}),
+  output_chars: row.output_snapshot?.chars ?? null,
+});
+
+// Consecutive executed steps of one type and status, this many or more, are one outline line.
+const COLLAPSE_STEP_RUN = 3;
+
+/**
+ * Collapse runs of consecutive executed steps that share a type and status into one line with
+ * their count. An iterator's passes are the case that matters: in session 1293 one test-run
+ * event listed 111 lines, 51 of them the same `serv_query` once per receipt item, and a run's
+ * outline (194 steps) passed the transcript cap. A line carrying an error, a retry or a notify
+ * step's message is never folded in, because it is the line someone is looking for.
+ *
+ * @param {Array} lines  Outline lines in execution order ({ step, type, status, duration_ms, output_chars, … })
+ * @returns {Array}
+ */
+export function collapseStepLines(lines = []) {
+  const plain = (l) => !('error' in l) && !('retry_count' in l) && !('notified' in l) && !('answered' in l);
+  const sum   = (run, key) => run.every(l => l[key] == null) ? null : run.reduce((t, l) => t + (l[key] ?? 0), 0);
+  const out = [];
+  for (let i = 0; i < lines.length;) {
+    let j = i;
+    while (j + 1 < lines.length && plain(lines[i]) && plain(lines[j + 1])
+      && lines[j + 1].type === lines[i].type && lines[j + 1].status === lines[i].status) j++;
+    const run = lines.slice(i, j + 1);
+    out.push(...(run.length >= COLLAPSE_STEP_RUN
+      ? [{ steps: `${run[0].step}…${run[run.length - 1].step}`, type: run[0].type, status: run[0].status,
+          count: run.length, duration_ms: sum(run, 'duration_ms'), output_chars: sum(run, 'output_chars') }]
+      : run));
+    i = j + 1;
+  }
+  return out;
+}
+
+// A list in a gate dialog longer than this shows its first GATE_LIST_SHOWN entries.
+const GATE_LIST_MAX   = 20;
+const GATE_LIST_SHOWN = 10;
+
+/**
+ * Bound a gate dialog's long lists for a run event, and say where the rest is. A receipt gate
+ * carried all 51 items in its reveal on every event — a few thousand characters re-read on every
+ * later turn. The dialog in full stays one read away: read_workflow_run renders the waiting gate
+ * whole.
+ *
+ * @param {*}      dialog
+ * @param {number} runId
+ * @returns {*}
+ */
+export function boundGateDialog(dialog, runId) {
+  const walk = (v) => {
+    if (Array.isArray(v)) {
+      if (v.length <= GATE_LIST_MAX) return v.map(walk);
+      return [...v.slice(0, GATE_LIST_SHOWN).map(walk), {
+        withheld: `${v.length - GATE_LIST_SHOWN} more of ${v.length}. read_workflow_run({ runId: ${runId} }) shows the waiting gate in full.`,
+      }];
+    }
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)]));
+    return v;
+  };
+  return walk(dialog);
+}
+
 /**
  * What a test run's message means for the call waiting on it, or null when it does not end the
  * wait — a notification the run sent on its way to its next gate. A gate, an error, completion,
@@ -3044,7 +3563,7 @@ export function describeRunEvent({ message, run, workflow = null, stepRows = [] 
     || ((stopped || atBreak) && message?.type === 'HUMAN_NOTIFICATION');
   if (!endsWait) return null;
 
-  const { outline, note: _note, executed_step_count: _count, ...summary } =
+  const { outline: _outline, note: _note, executed_step_count: _count, ...summary } =
     projectWorkflowRun({ run, workflow, stepRows, outline: true });
   // A replay break: the llm_call whose recorded response could not be served. The assembled
   // prompt is left out — it is the size of a whole prompt; the drift says what changed.
@@ -3056,12 +3575,14 @@ export function describeRunEvent({ message, run, workflow = null, stepRows = [] 
     ...(report ? { break: breakSummary, resolutions: (message.breakActions ?? []).map(a => ({ resolution: a.resolution, ...(a.sessionId != null ? { sessionId: a.sessionId } : {}) })) } : {}),
     // The gate as it was sent, which can carry what the plain gate does not — a form redrawn
     // with "Please complete …" is the same gate, and the warning is the whole event.
-    ...(summary.waiting_gate && message.type === 'HUMAN_GATE' && message.dialog
-      ? { waiting_gate: { ...summary.waiting_gate, dialog: message.dialog } } : {}),
-    steps_since: outline.map((line, i) => (
-      stepRows[i]?.step_type === 'notify' && stepRows[i]?.output_snapshot?.summary
-        ? { ...line, notified: stepRows[i].output_snapshot.summary } : line
-    )),
+    ...(summary.waiting_gate
+      ? { waiting_gate: { ...summary.waiting_gate, dialog: boundGateDialog(
+          message.type === 'HUMAN_GATE' && message.dialog ? message.dialog : summary.waiting_gate.dialog, run.id) } }
+      : {}),
+    steps_since: collapseStepLines(stepRows.map(row => (
+      row.step_type === 'notify' && row.output_snapshot?.summary
+        ? { ...stepLine(row), notified: row.output_snapshot.summary } : stepLine(row)
+    ))),
     ...(message.message ? { message: message.message } : {}),
   };
 }
@@ -3084,13 +3605,14 @@ export function describeRunEvent({ message, run, workflow = null, stepRows = [] 
  * @param {Array}  args.stepRows   PGC_WorkflowRunStep rows, in execution order
  * @param {boolean} [args.outline] One line per executed step
  * @param {Array}  [args.selected] Step identifiers to return in full
+ * @param {string} [args.path]     Dot or JSONPath into each selected step's value — one field
+ *                                 instead of six run_sql calls to dig it out (session 1293)
  * @returns {object}
  */
-export function projectWorkflowRun({ run, workflow = null, stepRows = [], outline, selected }) {
+export function projectWorkflowRun({ run, workflow = null, stepRows = [], outline, selected, path }) {
   const stack      = Array.isArray(run.stack) ? run.stack : [];
   const top        = stack.length > 0 ? stack[stack.length - 1] : null;
   const localState = top?.local_state ?? run.state?.local_state ?? null;
-  const stepOf     = (row) => String(row.input_snapshot?.step ?? row.step_number);
 
   const waitingGate = run.status === 'awaiting_human_gate' && top?.type === 'human_gate'
     ? {
@@ -3101,16 +3623,6 @@ export function projectWorkflowRun({ run, workflow = null, stepRows = [], outlin
         dialog:        buildDialog(top.step_ref ?? {}, top.local_state ?? {}),
       }
     : null;
-
-  const line = (row) => ({
-    step:         stepOf(row),
-    type:         row.step_type,
-    status:       row.status,
-    duration_ms:  row.duration_ms ?? null,
-    ...(row.retry_count ? { retry_count: row.retry_count } : {}),
-    ...(row.error       ? { error: row.error } : {}),
-    output_chars: row.output_snapshot?.chars ?? null,
-  });
 
   const summary = {
     run_id:              run.id,
@@ -3130,8 +3642,8 @@ export function projectWorkflowRun({ run, workflow = null, stepRows = [], outlin
   if (outline) {
     return {
       ...summary,
-      outline: stepRows.map(line),
-      note:    'Outline only. Call read_workflow_run again with steps: ["<step>"] for those steps\' outputs in full.',
+      outline: collapseStepLines(stepRows.map(stepLine)),
+      note:    'Outline only; consecutive steps of one type and status are one line with their count. Call read_workflow_run again with steps: ["<step>"] for each execution of a step and its output in full.',
     };
   }
 
@@ -3142,13 +3654,15 @@ export function projectWorkflowRun({ run, workflow = null, stepRows = [], outlin
     const notRun   = wanted.filter(w => !picked.some(row => stepOf(row) === w));
     const current  = Object.fromEntries(wanted.map(w => {
       const outputKey = defs.find(s => String(s?.step) === w)?.output_key;
-      return [w, outputKey
-        ? { output_key: outputKey, value: localState ? resolvePath(localState, outputKey) ?? null : null }
-        : { output_key: null }];
+      if (!outputKey) return [w, { output_key: null }];
+      const value = localState ? resolvePath(localState, outputKey) ?? null : null;
+      return [w, path
+        ? { output_key: outputKey, path, value: value === null ? null : resolvePath(value, path) ?? null }
+        : { output_key: outputKey, value }];
     }));
     return {
       ...summary,
-      executions: picked.map(row => ({ ...line(row), executed_at: row.executed_at ?? null, output_summary: row.output_snapshot?.summary ?? null })),
+      executions: picked.map(row => ({ ...stepLine(row), executed_at: row.executed_at ?? null, output_summary: row.output_snapshot?.summary ?? null })),
       current_output: current,
       ...(localState ? {} : { note: 'This run kept no state (it was cancelled), so no output value can be read back.' }),
       ...(notRun.length && { not_run: notRun }),
@@ -3157,7 +3671,7 @@ export function projectWorkflowRun({ run, workflow = null, stepRows = [], outlin
 
   return {
     ...summary,
-    last_step: stepRows.length > 0 ? line(stepRows[stepRows.length - 1]) : null,
+    last_step: stepRows.length > 0 ? stepLine(stepRows[stepRows.length - 1]) : null,
     note:      'Pass outline: true for every executed step, or steps: ["<step>"] for named steps\' outputs in full.',
   };
 }
@@ -3195,7 +3709,7 @@ async function executeReadTool(action, params, traceId, session) {
       // a truncated tail is recoverable rather than lost. Bounded itself, and it says how much
       // is left — paging is the caller's decision, not a silent one.
       case 'read_session_entry': {
-        const { sequence, offset = 0, limit, path } = params;
+        const { sequence, offset = 0, limit, path, part = 'result' } = params;
         if (sequence === undefined || sequence === null) return { error: 'sequence is required' };
         if (!session?.id) return { error: 'read_session_entry is only available inside a session' };
 
@@ -3215,7 +3729,11 @@ async function executeReadTool(action, params, traceId, session) {
         try { stored = JSON.parse(row.content); } catch { /* a plain user message, not a JSON entry */ }
         // The stored envelope is { tool, params, result, items }. `result` is what the model
         // saw; `items` is the gateway's own echo of the call and is noise on the way back.
-        const payload  = stored && 'result' in stored ? stored.result : (stored ?? row.content);
+        // `part: 'arguments'` reads what the call was made with — `params`, the arguments less
+        // reasoning — which an earlier request's stub withholds as well as its result.
+        const payload  = part === 'arguments'
+          ? (stored?.params ?? null)
+          : stored && 'result' in stored ? stored.result : (stored ?? row.content);
         const selected = path ? resolvePath(payload, path) : payload;
         const text     = typeof selected === 'string' ? selected : JSON.stringify(selected ?? null);
 
@@ -3227,6 +3745,7 @@ async function executeReadTool(action, params, traceId, session) {
         return {
           sequence,
           tool:           stored?.tool ?? null,
+          ...(part === 'arguments' && { part }),
           ...(path && { path }),
           total_chars:    text.length,
           offset:         start,
@@ -3305,7 +3824,7 @@ async function executeReadTool(action, params, traceId, session) {
       }
 
       case 'read_workflow_run': {
-        const { runId, steps: selected, outline } = params;
+        const { runId, steps: selected, outline, path } = params;
         if (!runId) return { error: 'runId is required' };
         const runResp = await getRows(
           'PGC_WorkflowRun',
@@ -3322,7 +3841,7 @@ async function executeReadTool(action, params, traceId, session) {
             ['step_number', 'step_type', 'status', 'retry_count', 'input_snapshot', 'output_snapshot', 'error', 'duration_ms', 'executed_at']),
         ]);
         return {
-          ...projectWorkflowRun({ run, workflow: wfResp.rows?.[0] ?? null, stepRows: stepResp.rows ?? [], outline, selected }),
+          ...projectWorkflowRun({ run, workflow: wfResp.rows?.[0] ?? null, stepRows: stepResp.rows ?? [], outline, selected, path }),
           ...(stepResp.limit_applied && { step_rows: withReadProvenance(stepResp) }),
         };
       }
@@ -3450,12 +3969,15 @@ async function executeReadTool(action, params, traceId, session) {
 // Post a turn-limit notification
 // ---------------------------------------------------------------------------
 
-async function postTurnLimitGate(sessionId, callback, traceId, resetActionCount = false, budgetExhausted = false) {
+async function postTurnLimitGate(sessionId, callback, traceId, resetActionCount = false, budgetExhausted = false, atSeq = null) {
   if (!callback) return;
   await enqueueCallback(callback, {
     type:             'HUMAN_GATE',
     gate_type:        'minds_eye_continue_gate',
     sessionId,
+    // The session entry the gate was posted after. A click is refused once the session has
+    // moved past it (staleGateRefusal).
+    atSeq,
     traceId,
     resetActionCount,
     // Which limit was hit. The gate is identical either way — only what the user is told

@@ -1,7 +1,7 @@
 {
   "table_name": "PGC_WorkflowRunStep",
   "target": "pgc",
-  "description": "Append-only audit log — one row per step execution. Never updated after insert. Used for idempotency checks on SQS redelivery and debugging.",
+  "description": "Append-only audit log — one row per step execution, and one per gate answer. Never updated after insert. Used for idempotency checks on SQS redelivery and debugging.",
   "columns": [
     { "name": "id",              "type": "serial",      "primaryKey": true },
     { "name": "run_id",          "type": "integer",     "nullable": false },

@@ -410,9 +410,14 @@ describe('toInputItems — replayed gateway items', () => {
 
   it('passes the tool at every render site', () => {
     const src   = readFileSync('src/proc/minds-eye.mjs', 'utf8');
-    const calls = src.match(/capOutput\(JSON\.stringify\((?:result|parsed\.result) \?\? null\), [^)]*\)/g) ?? [];
-    assert.equal(calls.length, 3);
-    for (const c of calls) assert.match(c, /, (activeCall\.name|parsed\.tool)\)$/, c);
+    // In-round the loop caps the current request's result; the rebuild renders stored results
+    // through renderToolOutput, which caps them the same way unless they belong to an earlier request.
+    const inRound = src.match(/capOutput\(JSON\.stringify\(result \?\? null\), [^)]*\)/g) ?? [];
+    const rebuilt = src.match(/renderToolOutput\(parsed\.result, [^\n]*\)\)/g) ?? [];
+    assert.equal(inRound.length, 1);
+    assert.equal(rebuilt.length, 2);
+    assert.match(inRound[0], /, activeCall\.name\)$/);
+    for (const c of rebuilt) assert.match(c, /, parsed\.tool, isEarlier\(entry\)\)/, c);
   });
 
   it('renders the same history to the same bytes every time', () => {

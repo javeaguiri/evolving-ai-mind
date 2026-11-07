@@ -133,9 +133,20 @@ export async function callLlmWithTools(model, instructions, input, tools, traceI
     inputTokens:   usage.input_tokens,
     cacheCreation: details.cache_creation_input_tokens,
     cacheRead:     details.cache_read_input_tokens,
+    outputTokens:  usage.output_tokens,
+    reasoningTokens: usage.output_tokens_details?.reasoning_tokens,
     cost:          usage.cost?.total_cost,
     traceId,
   });
+
+  // A response cut off at the ceiling still comes back as items: in session 1307 a
+  // function_call held 234 characters of a patch the model had not finished writing. Raised
+  // as truncation, so the caller asks for something smaller instead of reporting bad JSON.
+  if (usage.output_tokens >= body.max_output_tokens) {
+    const truncated = new Error(`LLM response reached the output ceiling of ${body.max_output_tokens} tokens`);
+    truncated.isTruncated = true;
+    throw truncated;
+  }
 
   if (output.length === 0) throw new Error('LLM returned no output items');
 

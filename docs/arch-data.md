@@ -191,8 +191,14 @@ needs, plus `PGC_Memory` and `PGC_Workflow`, one at a time, made and dropped thr
 `/serv/sandbox/*`. Nothing in `public` refers to them. See `docs/arch-sandbox.md`.
 
 ##### PGC_WorkflowRunStep
-Append-only audit log — one row per step execution attempt. Never updated after insert.
-Used for idempotency checks on SQS redelivery and debugging.
+Append-only audit log — one row per step execution attempt, and one per gate answer. Never
+updated after insert. Used for idempotency checks on SQS redelivery and debugging.
+
+**A gate answer** is written by `resumeGate` beside the row the gate wrote on suspending: the same
+step, `input_snapshot.answer_to` the `gate_id`, `step_key` `<step>:answer:<gate_id>`, and
+`output_snapshot.answer` the answer as sent (`{ userResponse, responseData }`). A replay's gates
+are answered from these (`answer_gate { asSourceRun: true }`); gates answered before 2026-11-05
+have none.
 
 **Same caution as `PGC_WorkflowRun`** — `input_snapshot` holds
 that step's resolved input and can be large for steps handling bulk
@@ -634,7 +640,7 @@ CREATE TABLE "PGC_SessionEntry" (
 | role | varchar(15) NOT NULL | `system` \| `user` \| `assistant` \| `tool` — `tool` rows store Novia tool call results in the reasoning transcript |
 | content | text NOT NULL | Raw message content sent to or received from the LLM |
 | reasoning | text NULL | Diagnostic metadata — populated on `assistant` rows; **never** included in the reconstructed messages array |
-| compressed | boolean NOT NULL DEFAULT FALSE | ✦ When `true`, this entry's content has been summarised into a later compression entry and is excluded from the active context window |
+| compressed | boolean NOT NULL DEFAULT FALSE | ✦ Unused. Novia's transcript is bounded at render time instead, with earlier requests rendered as stubs (`arch-minds-eye.md` §6.1), and no row is changed |
 | created_at | timestamp | |
 
 **`chk_pgc_sessionentry_role` constraint:** `role IN ('system', 'user', 'assistant', 'tool')`
@@ -1217,7 +1223,14 @@ curl -s -X POST "$SERV_API_URL/api/v1/serv/entity/getEntity" -H "Content-Type: a
 ```bash
 curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/addColumn" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_Prompt", "column": { "name": "domain", "type": "text", "nullable": true } }'
 ```
-Runs `ALTER TABLE` + updates `PGC_Schema.columns`. Use `"schemaOnly": true` to update PGC_Schema metadata without running DDL (e.g. to backfill `embed_source` on an existing vector column). The `column` field is a **nested object** `{ name, type, nullable }` — not flat fields.
+Runs `ALTER TABLE` + updates `PGC_Schema.columns`. Use `"schemaOnly": true` to update PGC_Schema metadata without running DDL (e.g. to backfill `embed_source` on an existing vector column). The `column` field is a **nested object** `{ name, type, nullable, default }` — not flat fields. A `default` (a SQL expression such as `"'active'"`, `"0"`, `"now()"`, checked by `validateColumnDefault`) fills every existing row, so `nullable: false` needs no backfill.
+
+#### SERV-Schema — modifyColumn
+
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/modifyColumn" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGD_Items", "columnName": "status", "default": "'"'"'active'"'"'", "nullable": false }'
+```
+Changes a column's `newType` (with `using`), `default` (`null` or `dropDefault: true` drops it) and `nullable`, in that order, and keeps `PGC_Schema.columns` in step. A new default applies to new rows only: rows already NULL need a backfill before `nullable: false`.
 
 #### SERV-Schema — listTables
 

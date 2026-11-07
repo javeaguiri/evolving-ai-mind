@@ -195,6 +195,39 @@ count against `max_actions_per_session`.
 | Housekeeping | `write_memory` | None — silent episodic write |
 | Test | `start_test`, `reset_test`, `end_test`, `answer_gate`; `sandbox: true` on the data tools and `propose_workflow_fix`; `test: true` on `run_workflow` | None — confined to the sandbox and to her own test runs (§4.4) |
 
+**`propose_schema_fix`** — one operation (`operation`, `tableName` and that operation's
+fields), or an ordered sequence in `operations` under **one** approval (Sprint 15x). An
+operation without its own `tableName` takes the call's. A sequence that cannot run is refused
+before the gate. Approved, the operations run in order and the first failure stops the rest:
+the result lists `applied`, `failed` and `not_run`, and earlier operations stay applied.
+`addColumn` takes `column.default` and `modifyColumn` takes `default` / `dropDefault`, so a column
+can be given a default and then made required in one approval.
+
+**`testPlan` on `propose_workflow_fix` and `register_workflow`** (Sprint 15x) — the test plan
+`sop_test_cycle` asks for, at most 3000 characters, shown on the approval gate under the change
+(`withTestPlan`; a longer plan is refused before the gate, so the user can read all of what they
+approve). *Apply and test* approves the change and the plan together, and she starts the test at
+once (`withTestRequest`). *Apply* alone applies the change and she does not run the plan. A change
+goes live first and is tested after.
+
+**`respond` with `questions`** (Sprint 15x) — `[{ id, text, options? }]`, the questions the user
+must answer, kept separate from `message`. The experience layer draws an answer box under each
+question (choices with room for a comment when `options` is given), plus one for anything else.
+The answers return as `MINDS_EYE { sessionId, answers: [{ id, answer, comment }], note }`, and
+proc turns them into the next user message, each paired with its question's text
+(`composeAnswersPrompt`). In Slack the boxes sit in the message itself, so nothing covers it,
+and *Send answers* replaces them with a line saying they were sent.
+
+**A gate click is acted on only while the session stands where the gate was posted**
+(Sprint 15x). Every continue gate and action gate carries `atSeq`, the session entry it was
+posted at, on each of its buttons. `staleGateRefusal` refuses a click once anything has been
+added to the session since: "That button is out of date… nothing was done." An action gate is
+also held to its `__pending__` entry being the latest entry and a gated write, so a second
+Approve can't re-run an approved action, and an older gate can't approve a newer one. A
+Continue on a gate under one of her replies is delivered as the user's answer to it
+(`CONTINUE_AFTER_REPLY`), so she carries on rather than answering again. Sending a gate's
+Follow-up closes that gate in Slack (`followupClosedBlocks`).
+
 **`register_workflow`** (Sprint 9, AC4) — `{ name, domain?, description, steps, intentPhrases?,
 intentKeywords? }`. Creates a workflow: one `PGC_Workflow` row at version 1, and one
 `PGC_IntentMap` row per invocation phrase plus one for the workflow's own name (`source`
@@ -485,8 +518,8 @@ if action is action tool:
     on cancel: post cancellation message → end turn
 if turn_count >= turn_limit:
   post HUMAN_GATE (choice: Continue / Pause / Cancel)
-    Continue → compress session → reset turn_count → loop (reason again)
-    Pause    → compress session → post "Session paused. Resume with /novia continue." → end
+    Continue → reset turn_count → loop (reason again)
+    Pause    → post "Session paused. Resume with /novia continue." → end
     Cancel   → close session → end
 ```
 
@@ -505,21 +538,27 @@ describes flailing rather than progress; the error still reaches the model throu
 result, which is what has to act on it. An empty-but-valid result is reported: no rows found
 is an answer.
 
-**Session compression (triggered at turn_limit gate on Continue or Pause):**
-The full `PGC_SessionEntry` history is replayed to the LLM on every turn. As sessions grow long this expands the context window and increases inference cost. At the turn-limit gate, before continuing or pausing, Novia runs a compression step:
-1. Write an episodic memory summarising the session so far — what was diagnosed, what was changed, what remains open (scope: `{ workflow: name }` or `{ domain: name }`)
-2. Mark earlier `PGC_SessionEntry` rows for this session as `compressed = true` (requires a boolean column on `PGC_SessionEntry`)
-3. On subsequent turns, replay only the compressed summary memory (from PGC_Memory) + the uncompressed tail of the session, not the full entry history
+**Earlier requests render as stubs.** A request starts at each typed user message. When
+`toInputItems` rebuilds the transcript, a tool result or call argument from **before the latest
+typed message** that is over a small threshold (`EARLIER_REQUEST_STUB_CHARS`) renders as a
+one-line stub: the tool, the size, and the call that recalls it, `read_session_entry({ sequence })`
+for a result or `{ sequence, part: "arguments" }` for a call. The stub is worded as an instruction
+("recall them before building on them"), because the failure it guards against is a withheld value
+rebuilt from memory. Kept whole: the user's messages, every `respond` (her reply is the request's
+summary), small results, and everything in the current request. Stored entries are never changed.
 
-This keeps the context window bounded across long sessions without losing continuity. The summary memory serves as the episodic anchor if the session is resumed later.
-
-**Prerequisite:** `PGC_SessionEntry.compressed` boolean column (nullable, default false). Add via `addColumn` at bootstrap time alongside the other Session/SessionEntry columns.
+The rendering is a pure function of the stored entries. Continue, a gate approval and a test-run
+wake add no user entry, so every round of one request renders identically and keeps its cache
+credit. The next typed message rewrites the cache once, and the rewrite is small because the
+earlier requests are stubs. Session 1293 (seven requests, 85 calls, $6.45) re-rendered at its
+call points totals 28% of the transcript characters it actually carried, and its peak falls from
+636K to 198K characters.
 
 ### 6.2 Session Continuity
 
 Each Novia turn appends to `PGC_SessionEntry`:
 - Tool calls are recorded as `role = 'tool'` entries (content = JSON of tool name + params + result)
-- On each turn, the LLM receives: any compressed session summary (from PGC_Memory) + all uncompressed `PGC_SessionEntry` rows for this session, ordered by sequence_number. Compressed rows are excluded from replay.
+- On each round, the LLM receives every `PGC_SessionEntry` row for this session, ordered by sequence_number, with earlier requests' large results and call arguments rendered as stubs (§6.1).
 
 ### 6.3 Preferences
 
@@ -922,9 +961,8 @@ Remaining open:
    was absent from `minds_eye_preferences` entirely and falling through to a default). But the
    round runs its turns inside **one 240s Lambda invocation**, so a round dies at turn 3–4 and
    `turn_limit: 12` is unreachable. `roundBudgetExhausted` now stops before a turn there is no
-   room to finish. **Session compression at the turn-limit gate remains unexercised**, because a
-   round still cannot reach that gate — it carries to Sprint 10 behind the transcript fix, which
-   is what makes turns cheap enough for a round to get there.
+   room to finish. Session compression at the turn-limit gate was never built; Sprint 15x
+   replaced it with earlier-request stubs (§6.1).
 4. ✅ **CLOSED — Sprint 9, B1. A `level` selector, not a new tool.** L0 is `level: 0` on
    `runSimulation` and on the existing `/proc/simulate-workflow` endpoint, so "validate, then
    simulate" is `simulate_workflow { steps, level: 0 }` with no new surface for Novia to learn.

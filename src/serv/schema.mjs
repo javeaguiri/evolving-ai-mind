@@ -51,6 +51,30 @@ const ALLOWED_TYPES = new Set([
 // Allowed table name pattern — PGC_* system tables, PGD_* user domain tables
 const TABLE_NAME_PATTERN = /^(PGC|PGD)_[A-Za-z][A-Za-z0-9_]*$/;
 
+// A column DEFAULT is SQL spliced into DDL, so only the forms a default is written in are
+// accepted: a quoted literal ('active', '' for a quote inside), optionally cast to an allowed
+// type ('{}'::jsonb); a number; true, false or null; and the functions a row default calls.
+const DEFAULT_LITERAL   = /^'(?:[^']|'')*'(?:::[a-z][a-z ]*(?:\[\])?)?$/i;
+const DEFAULT_NUMBER    = /^-?\d+(?:\.\d+)?$/;
+const DEFAULT_KEYWORDS  = new Set(['true', 'false', 'null', 'now()', 'current_date', 'current_timestamp', 'gen_random_uuid()']);
+
+/**
+ * Why a column default cannot be used, or null when it can. Pure — exported for test.
+ *
+ * @param {string} expr  The DEFAULT expression as the caller wrote it
+ * @returns {string|null}
+ */
+export function validateColumnDefault(expr) {
+  if (typeof expr !== 'string' || !expr.trim()) return 'default must be a non-empty SQL expression string';
+  const e = expr.trim();
+  if (DEFAULT_KEYWORDS.has(e.toLowerCase()) || DEFAULT_NUMBER.test(e)) return null;
+  if (DEFAULT_LITERAL.test(e)) {
+    const cast = e.slice(e.lastIndexOf("'") + 1).replace(/^::/, '').replace(/\[\]$/, '').trim().toLowerCase();
+    return !cast || ALLOWED_TYPES.has(cast) ? null : `default cast "::${cast}" is not an allowed column type`;
+  }
+  return `default "${e}" is not an accepted form — use a quoted literal ('active'), a number, true/false/null, now(), current_date, current_timestamp or gen_random_uuid()`;
+}
+
 // ---------------------------------------------------------------------------
 // Route dispatcher
 // ---------------------------------------------------------------------------
@@ -323,7 +347,7 @@ async function addColumn(req) {
     return err(400, `Invalid table name "${tableName}"`, req.correlationId);
   }
 
-  const { name: colName, type: colType, nullable = true } = column;
+  const { name: colName, type: colType, nullable = true, default: colDefault } = column;
 
   if (!colName || !/^[a-z][a-z0-9_]*$/.test(colName)) {
     return err(400, `Invalid column name "${colName}" — must be lowercase alphanumeric + underscore`, req.correlationId);
@@ -331,6 +355,9 @@ async function addColumn(req) {
   if (!colType || !ALLOWED_TYPES.has(colType.toLowerCase().split('(')[0].trim())) {
     return err(400, `Column type "${colType}" is not allowed`, req.correlationId);
   }
+  const defaultError = colDefault === undefined || colDefault === null ? null : validateColumnDefault(colDefault);
+  if (defaultError) return err(400, defaultError, req.correlationId);
+  const hasDefault = colDefault !== undefined && colDefault !== null;
 
   const client = getClient(process.env.PGC_DATABASE_URL);
 
@@ -356,12 +383,14 @@ async function addColumn(req) {
 
     // Execute DDL unless schemaOnly is true (column already exists physically)
     if (!schemaOnly) {
-      const nullStr   = nullable ? '' : ' NOT NULL';
-      const ddlClient = target === 'pgd' ? getClient(process.env.PGD_DATABASE_URL) : client;
+      const nullStr    = nullable ? '' : ' NOT NULL';
+      const defaultStr = hasDefault ? ` DEFAULT ${colDefault.trim()}` : '';
+      const ddlClient  = target === 'pgd' ? getClient(process.env.PGD_DATABASE_URL) : client;
       if (target === 'pgd') await ddlClient.connect();
 
+      // A DEFAULT fills every existing row as the column is added, so NOT NULL holds at once.
       await ddlClient.query(
-        `ALTER TABLE "${tableName}" ADD COLUMN IF NOT EXISTS "${colName}" ${colType}${nullStr}`
+        `ALTER TABLE "${tableName}" ADD COLUMN IF NOT EXISTS "${colName}" ${colType}${defaultStr}${nullStr}`
       );
       console.info(`schema: added column ${colName} to ${tableName} on ${target.toUpperCase()}`);
 
@@ -372,7 +401,7 @@ async function addColumn(req) {
 
     // Register in PGC_Schema.columns
     // Preserve explicit embed_source; infer it for X_embedding vector columns when omitted.
-    const newCol = { name: colName, type: colType, nullable };
+    const newCol = { name: colName, type: colType, nullable, ...(hasDefault ? { default: colDefault.trim() } : {}) };
     if (Array.isArray(column.embed_source) && column.embed_source.length > 0) {
       newCol.embed_source = column.embed_source;
     } else if (colType?.startsWith('vector') && colName.endsWith('_embedding')) {
@@ -408,12 +437,19 @@ async function addColumn(req) {
 // ---------------------------------------------------------------------------
 
 async function modifyColumn(req) {
-  const { tableName, columnName, newType, nullable, using: usingExpr = null } = req.body;
+  const { tableName, columnName, newType, nullable, using: usingExpr = null, default: newDefault, dropDefault = false } = req.body;
+  // A default of null is SQL's DROP DEFAULT, as dropDefault: true is.
+  const droppingDefault = dropDefault === true || newDefault === null;
+  const settingDefault  = !droppingDefault && newDefault !== undefined;
 
   if (!tableName)  return err(400, 'tableName is required',  req.correlationId);
   if (!columnName) return err(400, 'columnName is required', req.correlationId);
-  if (!newType && nullable === undefined) {
-    return err(400, 'newType or nullable is required', req.correlationId);
+  if (!newType && nullable === undefined && !settingDefault && !droppingDefault) {
+    return err(400, 'newType, nullable, default or dropDefault is required', req.correlationId);
+  }
+  if (settingDefault) {
+    const defaultError = validateColumnDefault(newDefault);
+    if (defaultError) return err(400, defaultError, req.correlationId);
   }
 
   if (!TABLE_NAME_PATTERN.test(tableName)) {
@@ -460,6 +496,14 @@ async function modifyColumn(req) {
       console.info(`schema: modified column ${columnName} on ${tableName} — type now ${newType}`);
     }
 
+    if (settingDefault || droppingDefault) {
+      const defaultOp = settingDefault ? `SET DEFAULT ${newDefault.trim()}` : 'DROP DEFAULT';
+      await ddlClient.query(
+        `ALTER TABLE "${tableName}" ALTER COLUMN "${columnName}" ${defaultOp}`
+      );
+      console.info(`schema: modified column ${columnName} on ${tableName} — ${defaultOp}`);
+    }
+
     if (nullable !== undefined) {
       const nullOp = nullable ? 'DROP NOT NULL' : 'SET NOT NULL';
       await ddlClient.query(
@@ -475,6 +519,8 @@ async function modifyColumn(req) {
       const updated = { ...c };
       if (newType) updated.type = newType;
       if (nullable !== undefined) updated.nullable = nullable;
+      if (settingDefault) updated.default = newDefault.trim();
+      if (droppingDefault) delete updated.default;
       return updated;
     });
     await client.query(
@@ -482,7 +528,12 @@ async function modifyColumn(req) {
       [JSON.stringify(updatedCols), schemaId]
     );
 
-    return ok({ success: true, tableName, column: columnName, newType, nullable, action: 'modified' }, req.correlationId);
+    return ok({
+      success: true, tableName, column: columnName, newType, nullable,
+      ...(settingDefault ? { default: newDefault.trim() } : {}),
+      ...(droppingDefault ? { default_dropped: true } : {}),
+      action: 'modified',
+    }, req.correlationId);
 
   } catch (error) {
     console.error('schema modifyColumn error:', error.message);
