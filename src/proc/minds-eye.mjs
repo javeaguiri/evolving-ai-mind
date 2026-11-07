@@ -907,7 +907,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         // `items` carries the gateway's own function_call for this respond, exactly as every
         // tool entry does. A typed follow-up becomes that call's output on rebuild, so the
         // resumed round appends rather than ending on a user item — see toInputItems.
-        const assistantContent = JSON.stringify({ action: 'respond', message, reasoning, advisory, items: entryItems });
+        const assistantContent = JSON.stringify({ action: 'respond', message, reasoning, advisory, items: entryItems, turn: turnCount });
         await insertRow('PGC_SessionEntry', {
           session_id:      session.id,
           sequence_number: seq,
@@ -3004,12 +3004,33 @@ export function toInputItems(workingHistory = []) {
   );
   const isEarlier = (entry) => typeof entry?.sequence_number === 'number' && entry.sequence_number < requestStart;
 
+  // A turn that made several calls is, in the loop's own input, every call and then every
+  // output. Its entries are stored one per call, so closing each call as it is read gives
+  // call, output, call, output instead, and the next round's cache read stops at the first
+  // parallel turn (session 1307, call 28: 25K tokens written again). The outputs of the turn
+  // being read are held until its last call is in. Entries with no turn are not grouped.
+  let turnGroup = null;   // { turn, outputs } — the turn whose calls are in and outputs held
+  const flushTurn = () => {
+    if (turnGroup) items.push(...turnGroup.outputs);
+    turnGroup = null;
+  };
+  const pushCalls = (callItems, turn) => {
+    const grouped = turn !== undefined && turn !== null;
+    if (!grouped || turnGroup?.turn !== turn) flushTurn();
+    items.push(...callItems);
+    if (grouped) turnGroup ??= { turn, outputs: [] };
+  };
+  const pushOutput = (item) => {
+    if (turnGroup) turnGroup.outputs.push(item);
+    else items.push(item);
+  };
+
   // With no output supplied, what closes the call depends on what opened it: a gated write is
   // still awaiting approval, a respond was already delivered to the user.
   const closePending = (output) => {
     const resolved = output
       ?? (pending.kind === 'respond' ? RESPONSE_DELIVERED_OUTPUT : AWAITING_APPROVAL_OUTPUT);
-    items.push({ type: 'function_call_output', call_id: pending.callId, output: resolved });
+    pushOutput({ type: 'function_call_output', call_id: pending.callId, output: resolved });
     pending = null;
   };
 
@@ -3020,18 +3041,18 @@ export function toInputItems(workingHistory = []) {
     if (!Array.isArray(parsed?.items) || parsed.items.length === 0) return null;
     const call = parsed.items.find(it => it?.type === 'function_call');
     if (!call?.call_id) return null;
-    items.push(...renderCallItems(parsed.items, entry?.sequence_number, isEarlier(entry)));
+    pushCalls(renderCallItems(parsed.items, entry?.sequence_number, isEarlier(entry)), parsed.turn);
     return call.call_id;
   };
 
   // A call rebuilt from { name, params } when the entry predates `items`.
-  const synthesiseCall = (entry, callId, name, params) => {
-    items.push(...renderCallItems([{
+  const synthesiseCall = (entry, callId, name, params, turn) => {
+    pushCalls(renderCallItems([{
       type:      'function_call',
       call_id:   callId,
       name,
       arguments: JSON.stringify(params ?? {}),
-    }], entry?.sequence_number, isEarlier(entry)));
+    }], entry?.sequence_number, isEarlier(entry)), turn);
   };
 
   workingHistory.forEach((entry, i) => {
@@ -3044,12 +3065,14 @@ export function toInputItems(workingHistory = []) {
       // round's entire prefix credit, measured at $0.219 on a 56k transcript.
       if (pending?.kind === 'respond') {
         closePending(capOutput(JSON.stringify({ user_reply: text }), entry?.sequence_number));
+        flushTurn();
         return;
       }
       // Otherwise the user ignored a gate and sent a new message instead of answering it.
       // The call still has to be closed — an unpaired call followed by a user turn is not
       // a shape the gateway accepts.
       if (pending) closePending();
+      flushTurn();
       items.push({ role: 'user', content: text });
       return;
     }
@@ -3074,16 +3097,17 @@ export function toInputItems(workingHistory = []) {
       // reasoning and advisory are deliberately dropped: reasoning is per-turn scratch, and the
       // advisory was already delivered to the user when the round ended.
       if (parsed?.action === 'respond') {
-        items.push({
+        pushCalls([{
           type:      'function_call',
           call_id:   callId,
           name:      'respond',
           arguments: JSON.stringify({ message: parsed.message ?? '' }),
-        });
+        }], parsed.turn);
         pending = { callId, name: 'respond', kind: 'respond' };
         return;
       }
       // Content that is not a respond entry at all keeps the assistant rendering.
+      flushTurn();
       items.push({ role: 'assistant', content: parsed?.message ?? String(entry?.content ?? '') });
       return;
     }
@@ -3093,7 +3117,7 @@ export function toInputItems(workingHistory = []) {
     if (parsed.tool === '__pending__') {
       if (pending) closePending();
       const replayedId = replayItems(parsed, entry);
-      if (!replayedId) synthesiseCall(entry, callId, parsed.action, parsed.params);
+      if (!replayedId) synthesiseCall(entry, callId, parsed.action, parsed.params, parsed.turn);
       pending = { callId: replayedId ?? callId, name: parsed.action, kind: 'tool' };
       return;
     }
@@ -3113,8 +3137,8 @@ export function toInputItems(workingHistory = []) {
     if (pending) closePending();
 
     const replayedId = replayItems(parsed, entry);
-    if (!replayedId) synthesiseCall(entry, callId, parsed.tool, parsed.params);
-    items.push({
+    if (!replayedId) synthesiseCall(entry, callId, parsed.tool, parsed.params, parsed.turn);
+    pushOutput({
       type:    'function_call_output',
       call_id: replayedId ?? callId,
       output:  renderToolOutput(parsed.result, entry?.sequence_number, parsed.tool, isEarlier(entry)),
@@ -3122,6 +3146,7 @@ export function toInputItems(workingHistory = []) {
   });
 
   if (pending) closePending();
+  flushTurn();
 
   return items;
 }
