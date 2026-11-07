@@ -200,6 +200,15 @@ fields), or an ordered sequence in `operations` under **one** approval (Sprint 1
 operation without its own `tableName` takes the call's. A sequence that cannot run is refused
 before the gate. Approved, the operations run in order and the first failure stops the rest:
 the result lists `applied`, `failed` and `not_run`, and earlier operations stay applied.
+`addColumn` takes `column.default` and `modifyColumn` takes `default` / `dropDefault`, so a column
+can be given a default and then made required in one approval.
+
+**`testPlan` on `propose_workflow_fix` and `register_workflow`** (Sprint 15x) — the test plan
+`sop_test_cycle` asks for, at most 3000 characters, shown on the approval gate under the change
+(`withTestPlan`; a longer plan is refused before the gate, so the user can read all of what they
+approve). *Apply and test* approves the change and the plan together, and she starts the test at
+once (`withTestRequest`). *Apply* alone applies the change and she does not run the plan. A change
+goes live first and is tested after.
 
 **`respond` with `questions`** (Sprint 15x) — `[{ id, text, options? }]`, the questions the user
 must answer, kept separate from `message`. The experience layer draws an answer box under each

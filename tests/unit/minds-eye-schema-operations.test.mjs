@@ -12,7 +12,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { schemaOperations, schemaOperationsRefusal, applySchemaOperations, gateButtonConfig } from '../../src/proc/minds-eye.mjs';
+import { schemaOperations, schemaOperationsRefusal, applySchemaOperations, gateButtonConfig, schemaOperationLines } from '../../src/proc/minds-eye.mjs';
 
 const addCol   = { operation: 'addColumn', column: { name: 'kind', type: 'text' } };
 const addCheck = { operation: 'modifyConstraint', constraintName: 'chk_t_kind', expression: "kind IN ('a','b')", columns: ['kind'] };
@@ -93,5 +93,23 @@ describe('gateButtonConfig — a schema sequence', () => {
 
   it('is a standard Apply gate otherwise', () => {
     assert.deepEqual(gateButtonConfig('propose_schema_fix', { tableName: 'PGD_T', operations: [addCol, addCheck] }), { confirmLabel: 'Apply', confirmStyle: null });
+  });
+});
+
+describe('schemaOperationLines — a default on the gate', () => {
+  it('says an added column\'s default fills the existing rows', () => {
+    assert.deepEqual(schemaOperationLines({ operation: 'addColumn', column: { name: 'kind', type: 'text', default: "'a'", nullable: false } }),
+      ["Add column: `kind` (text, default `'a'`, NOT NULL) — existing rows get the default"]);
+  });
+
+  it('says a changed default applies to new rows only, then the nullability', () => {
+    assert.deepEqual(schemaOperationLines({ operation: 'modifyColumn', columnName: 'kind', default: "'a'", nullable: false }), [
+      "Set `kind` default → `'a'` (new rows only; existing rows keep their value)",
+      'Set `kind` nullable: false',
+    ]);
+  });
+
+  it('shows a dropped default', () => {
+    assert.deepEqual(schemaOperationLines({ operation: 'modifyColumn', columnName: 'kind', dropDefault: true }), ["Drop `kind`'s default"]);
   });
 });

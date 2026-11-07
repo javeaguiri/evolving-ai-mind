@@ -547,7 +547,7 @@ async function handleGateResume(body, callback, traceId, req) {
   }
 
   // Execute the approved gated action
-  const result    = withTestRequest(await executeWriteTool(action, params, traceId), test);
+  const result    = withTestRequest(await executeWriteTool(action, params, traceId), test, params.testPlan);
   const resultStr = JSON.stringify({ tool: action, params, result });
   await insertRow('PGC_SessionEntry', {
     session_id:      session.id,
@@ -1320,8 +1320,8 @@ export function gateButtonConfig(action, params = {}) {
 }
 
 async function postActionGate({ session, action, params, items, turn, callback, traceId, currentTurnCount, currentSeq }) {
-  const gateText = await buildGateText(action, params, traceId);
   const { confirmLabel, confirmStyle, testLabel } = gateButtonConfig(action, params);
+  const gateText = withTestPlan(await buildGateText(action, params, traceId), params, testLabel);
 
   await insertRow('PGC_SessionEntry', {
     session_id:      session.id,
@@ -1492,6 +1492,9 @@ async function simulateForRegistration(steps, traceId) {
  * genuinely is the human's to determine.
  */
 async function preGateRefusal(action, params, traceId) {
+  const planRefusal = testPlanRefusal(params);
+  if (planRefusal) return planRefusal;
+
   if (action === 'register_workflow') {
     const steps = params?.steps;
     if (!Array.isArray(steps) || steps.length === 0) return null;
@@ -1607,21 +1610,26 @@ export async function applySchemaOperations(ops, send) {
 }
 
 /**
- * The gate lines for one schema operation. Pure.
+ * The gate lines for one schema operation. Pure — exported for test.
  *
  * @param {object} op
  * @returns {Array<string>}
  */
-function schemaOperationLines(op) {
+export function schemaOperationLines(op) {
   switch (op.operation) {
     case 'addColumn': {
       const { column = {} } = op;
-      return [`Add column: \`${column.name}\` (${column.type}${column.nullable === false ? ', NOT NULL' : ''})`];
+      const hasDefault = column.default !== undefined && column.default !== null;
+      return [`Add column: \`${column.name}\` (${column.type}${hasDefault ? `, default \`${column.default}\`` : ''}${column.nullable === false ? ', NOT NULL' : ''})` +
+        (hasDefault ? ' — existing rows get the default' : '')];
     }
     case 'modifyColumn': {
-      const { columnName, newType, nullable, using: usingExpr } = op;
+      const { columnName, newType, nullable, using: usingExpr, default: newDefault, dropDefault } = op;
+      const dropping = dropDefault === true || newDefault === null;
       return [
         ...(newType ? [`Change \`${columnName}\` type → \`${newType}\`${usingExpr ? ` USING ${usingExpr}` : ''}`] : []),
+        ...(dropping ? [`Drop \`${columnName}\`'s default`]
+          : newDefault !== undefined ? [`Set \`${columnName}\` default → \`${newDefault}\` (new rows only; existing rows keep their value)`] : []),
         ...(nullable !== undefined ? [`Set \`${columnName}\` nullable: ${nullable}`] : []),
       ];
     }
@@ -2591,9 +2599,51 @@ async function executeTriggerTool(action, params, callback, traceId, threadTs, t
  * An approved change the user also asked to have tested (Apply and test). Marked on the result
  * only when the change was applied — there is nothing to test after a refusal.
  */
-export function withTestRequest(result, test) {
-  if (!test || !result || result.error || result.success === false) return result;
-  return { ...result, test_requested: true, next: 'The user asked you to test this change. Read sop_test_cycle, then respond with a test plan for their approval.' };
+export function withTestRequest(result, test, testPlan) {
+  if (!result || result.error || result.success === false) return result;
+  if (!test) {
+    return testPlan
+      ? { ...result, test_requested: false, next: 'The user applied this change without the test plan on its gate. Do not run the plan.' }
+      : result;
+  }
+  return testPlan
+    ? { ...result, test_requested: true, test_plan_approved: true, next: 'The user approved this change and the test plan on its gate together, with Apply and test. Start the test now (sop_test_cycle, step 3) without asking for approval again.' }
+    : { ...result, test_requested: true, next: 'The user asked you to test this change. Read sop_test_cycle, then respond with a test plan for their approval.' };
+}
+
+// A test plan on a gate is approved with the change, so the user must be able to read all of
+// it there: one longer than this is refused before the gate rather than cut.
+const GATE_TEST_PLAN_CHARS = 3000;
+
+/**
+ * Why a call's testPlan cannot go on its gate, or null. Pure — exported for test.
+ *
+ * @param {object} params
+ * @returns {object|null}
+ */
+export function testPlanRefusal(params = {}) {
+  const plan = params?.testPlan;
+  if (plan === undefined || plan === null) return null;
+  if (typeof plan !== 'string' || !plan.trim()) return { error: 'testPlan must be the plan as text — nothing was sent for approval.' };
+  if (plan.length > GATE_TEST_PLAN_CHARS) {
+    return { error: `testPlan is ${plan.length} characters; a plan on the approval gate is at most ${GATE_TEST_PLAN_CHARS}, so the user can read all of what they approve. Shorten it and send the call again — nothing was sent for approval.` };
+  }
+  return null;
+}
+
+/**
+ * The gate text with the call's test plan under it, when the gate offers a test. Pure —
+ * exported for test.
+ *
+ * @param {string} gateText
+ * @param {object} params
+ * @param {string} [testLabel]  The gate's test button, absent when it offers none
+ * @returns {string}
+ */
+export function withTestPlan(gateText, params = {}, testLabel) {
+  const plan = typeof params?.testPlan === 'string' ? params.testPlan.trim() : '';
+  if (!plan || !testLabel) return gateText;
+  return `${gateText}\n\n**Test plan** — *${testLabel}* approves this plan too, and the test starts straight away.\n\n${plan}`;
 }
 
 /** Whether a run is a test run this session started — the only runs whose gates she answers. */

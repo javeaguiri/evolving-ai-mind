@@ -1223,7 +1223,14 @@ curl -s -X POST "$SERV_API_URL/api/v1/serv/entity/getEntity" -H "Content-Type: a
 ```bash
 curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/addColumn" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_Prompt", "column": { "name": "domain", "type": "text", "nullable": true } }'
 ```
-Runs `ALTER TABLE` + updates `PGC_Schema.columns`. Use `"schemaOnly": true` to update PGC_Schema metadata without running DDL (e.g. to backfill `embed_source` on an existing vector column). The `column` field is a **nested object** `{ name, type, nullable }` — not flat fields.
+Runs `ALTER TABLE` + updates `PGC_Schema.columns`. Use `"schemaOnly": true` to update PGC_Schema metadata without running DDL (e.g. to backfill `embed_source` on an existing vector column). The `column` field is a **nested object** `{ name, type, nullable, default }` — not flat fields. A `default` (a SQL expression such as `"'active'"`, `"0"`, `"now()"`, checked by `validateColumnDefault`) fills every existing row, so `nullable: false` needs no backfill.
+
+#### SERV-Schema — modifyColumn
+
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/modifyColumn" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGD_Items", "columnName": "status", "default": "'"'"'active'"'"'", "nullable": false }'
+```
+Changes a column's `newType` (with `using`), `default` (`null` or `dropDefault: true` drops it) and `nullable`, in that order, and keeps `PGC_Schema.columns` in step. A new default applies to new rows only: rows already NULL need a backfill before `nullable: false`.
 
 #### SERV-Schema — listTables
 
