@@ -174,3 +174,38 @@ export function invalidNumberFields(stateValues = {}) {
   }
   return invalid;
 }
+
+// Novia's questions. Each question's answer box is identified by
+//   novia_answer::<question id>
+// and, for a question with choices, its comment box by novia_comment::<question id>; the
+// closing free-text box is novia_note. Written by callback.mjs, read back here.
+export const NOVIA_ANSWER_PREFIX  = 'novia_answer::';
+export const NOVIA_COMMENT_PREFIX = 'novia_comment::';
+export const NOVIA_NOTE_BLOCK     = 'novia_note';
+
+/**
+ * Rebuild the answers to Novia's questions from a block_actions payload, in the order the
+ * questions were shown. `position` is each question's number as displayed, counted over every
+ * question, answered or not. A question with neither an answer nor a comment is left out.
+ *
+ * @param {object} stateValues  payload.state.values
+ * @param {Array}  blocks       payload.message.blocks — the order the questions were shown in
+ * @returns {{ answers: Array<{ id, position, answer, comment }>, note: string|null }}
+ */
+export function collectNoviaAnswers(stateValues = {}, blocks = []) {
+  const read = (blockId) => {
+    const [, actionValue] = Object.entries(stateValues?.[blockId] ?? {})[0] ?? [];
+    return extractFieldValue(actionValue);
+  };
+  const ids = (blocks ?? [])
+    .map(b => b?.block_id)
+    .filter(id => typeof id === 'string' && id.startsWith(NOVIA_ANSWER_PREFIX))
+    .map(id => id.slice(NOVIA_ANSWER_PREFIX.length));
+
+  const answers = ids.flatMap((id, i) => {
+    const answer  = read(`${NOVIA_ANSWER_PREFIX}${id}`);
+    const comment = read(`${NOVIA_COMMENT_PREFIX}${id}`);
+    return answer === null && comment === null ? [] : [{ id, position: i + 1, answer, comment }];
+  });
+  return { answers, note: read(NOVIA_NOTE_BLOCK) };
+}

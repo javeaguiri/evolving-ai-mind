@@ -195,6 +195,20 @@ count against `max_actions_per_session`.
 | Housekeeping | `write_memory` | None — silent episodic write |
 | Test | `start_test`, `reset_test`, `end_test`, `answer_gate`; `sandbox: true` on the data tools and `propose_workflow_fix`; `test: true` on `run_workflow` | None — confined to the sandbox and to her own test runs (§4.4) |
 
+**`propose_schema_fix`** — one operation (`operation`, `tableName` and that operation's
+fields), or an ordered sequence in `operations` under **one** approval (Sprint 15x). An
+operation without its own `tableName` takes the call's. A sequence that cannot run is refused
+before the gate. Approved, the operations run in order and the first failure stops the rest:
+the result lists `applied`, `failed` and `not_run`, and earlier operations stay applied.
+
+**`respond` with `questions`** (Sprint 15x) — `[{ id, text, options? }]`, the questions the user
+must answer, kept separate from `message`. The experience layer draws an answer box under each
+question (choices with room for a comment when `options` is given), plus one for anything else.
+The answers return as `MINDS_EYE { sessionId, answers: [{ id, answer, comment }], note }`, and
+proc turns them into the next user message, each paired with its question's text
+(`composeAnswersPrompt`). In Slack the boxes sit in the message itself, so nothing covers it,
+and *Send answers* replaces them with a line saying they were sent.
+
 **`register_workflow`** (Sprint 9, AC4) — `{ name, domain?, description, steps, intentPhrases?,
 intentKeywords? }`. Creates a workflow: one `PGC_Workflow` row at version 1, and one
 `PGC_IntentMap` row per invocation phrase plus one for the workflow's own name (`source`

@@ -3204,11 +3204,34 @@ paths:
           application/json:
             schema:
               type: object
-              required: [userInput]
+              description: >
+                Either prompt (typed text) or answers (replies to the questions her last
+                respond asked) is required. Answers become the session's next user message,
+                each paired with its question's text by proc.
               properties:
-                userInput:
+                prompt:
                   type: string
                   description: User prompt for Novia
+                answers:
+                  type: array
+                  description: Answers to the questions of the session's last respond
+                  items:
+                    type: object
+                    required: [id]
+                    properties:
+                      id:
+                        type: string
+                        description: The question's id, as the respond sent it
+                      answer:
+                        type: string
+                        nullable: true
+                      comment:
+                        type: string
+                        nullable: true
+                note:
+                  type: string
+                  nullable: true
+                  description: Free text sent with the answers
                 sessionId:
                   type: integer
                   description: Existing PGC_Session.id — omit to start a new session
@@ -3218,12 +3241,20 @@ paths:
               new_session:
                 summary: Start a new Novia session
                 value:
-                  userInput: "show me my flashcard decks"
+                  prompt: "show me my flashcard decks"
               continue_session:
                 summary: Continue an existing session
                 value:
-                  userInput: "now fix the routing issue on step 17"
+                  prompt: "now fix the routing issue on step 17"
                   sessionId: 42
+              answer_questions:
+                summary: Answer the questions of her last reply
+                value:
+                  sessionId: 42
+                  answers:
+                    - { id: "q1", answer: "Yes", comment: null }
+                    - { id: "q2", answer: "Only for the second group" }
+                  note: 'Start with the schema.'
       responses:
         '200':
           description: Agentic loop completed — respond action posted to Slack

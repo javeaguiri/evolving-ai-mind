@@ -29,7 +29,7 @@ import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { WebClient }                     from '@slack/web-api';
 import { ok, err }                       from '../../shared/lambda-utils.mjs';
 import { randomUUID }                    from 'crypto';
-import { FORM_BLOCK_PREFIX, LIST_ID_BLOCK_PREFIX, collectFormValues, collectListIdValue, invalidNumberFields } from './form-fields.mjs';
+import { FORM_BLOCK_PREFIX, LIST_ID_BLOCK_PREFIX, collectFormValues, collectListIdValue, invalidNumberFields, collectNoviaAnswers } from './form-fields.mjs';
 
 const sqs   = new SQSClient({});
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
@@ -125,6 +125,12 @@ export async function handle(req) {
   // Routes to MINDS_EYE with existingSessionId.
   if (buttonValue.action === 'minds_eye_followup') {
     return handleMindsEyeFollowupButton(buttonValue, payload, req.correlationId);
+  }
+
+  // minds_eye_answers — "Send answers" under Novia's questions.
+  // Routes to MINDS_EYE with the answers; /proc pairs each with its question.
+  if (buttonValue.action === 'minds_eye_answers') {
+    return handleMindsEyeAnswers(buttonValue, payload, req.correlationId);
   }
 
   // minds_eye_action_gate — Approve/Cancel on a Novia action gate.
@@ -570,6 +576,80 @@ async function handleMindsEyeFollowupButton(buttonValue, payload, correlationId)
     console.warn('interactive: minds_eye_followup missing trigger_id', { sessionId, traceId });
   }
 
+  return { statusCode: 200, body: '' };
+}
+
+// handleMindsEyeAnswers — "Send answers" clicked under Novia's questions.
+// Reads every answer box from the message state, replaces the boxes with a line saying they
+// were sent (so a second click cannot send them twice), echoes the answers into the thread,
+// and enqueues MINDS_EYE with them. A click with nothing filled in does nothing.
+// ---------------------------------------------------------------------------
+
+export function answersEcho(answers, note) {
+  const lines = answers.map(a => `${a.position}. ${[a.answer, a.comment].filter(Boolean).join(' — ')}`);
+  if (note) lines.push(note);
+  return `🧠 ${lines.join('\n')}`;
+}
+
+async function handleMindsEyeAnswers(buttonValue, payload, correlationId) {
+  const { sessionId } = buttonValue;
+  const channel  = payload.channel?.id;
+  const threadTs = payload.container?.message_ts ?? payload.message?.ts;
+  const traceId  = correlationId || randomUUID();
+
+  if (!sessionId || !channel) {
+    console.warn('interactive: minds_eye_answers missing sessionId or channel', { traceId });
+    return err(400, 'minds_eye_answers button value missing sessionId', correlationId);
+  }
+
+  const { answers, note } = collectNoviaAnswers(payload.state?.values ?? {}, payload.message?.blocks ?? []);
+  if (answers.length === 0 && !note) {
+    console.info('interactive: minds_eye_answers clicked with nothing filled in', { sessionId, traceId });
+    return { statusCode: 200, body: '' };
+  }
+
+  try {
+    await slack.chat.update({
+      channel,
+      ts:     threadTs,
+      text:   payload.message?.text ?? 'Answers sent',
+      blocks: [
+        ...preservedContentBlocks(payload.message?.blocks),
+        { type: 'context', elements: [{ type: 'mrkdwn', text: '✅ Answers sent to Novia.' }] },
+      ],
+    });
+  } catch (error) {
+    console.warn('interactive: minds_eye_answers chat.update failed (non-fatal)', { error: error.message, traceId });
+  }
+
+  let ackTs;
+  try {
+    const ack = await slack.chat.postMessage({ channel, thread_ts: threadTs || undefined, text: answersEcho(answers, note) });
+    ackTs = ack.ts;
+  } catch (error) {
+    console.warn('interactive: minds_eye_answers echo failed (non-fatal)', { error: error.message });
+  }
+
+  try {
+    await sqs.send(new SendMessageCommand({
+      QueueUrl:    process.env.SQS_WORKFLOW_URL,
+      MessageBody: JSON.stringify({
+        type:       'MINDS_EYE',
+        traceId,
+        sessionId,
+        answers:    answers.map(({ id, answer, comment }) => ({ id, answer, comment })),
+        note,
+        slackUser:  payload.user?.id,
+        callback:   { provider: 'slack', channel, threadId: ackTs ?? threadTs },
+        enqueuedAt: new Date().toISOString(),
+      }),
+    }));
+  } catch (error) {
+    console.error('interactive: minds_eye_answers SQS enqueue failed', { error: error.message, traceId });
+    return err(500, `SQS enqueue failed: ${error.message}`, correlationId);
+  }
+
+  console.info('interactive: minds_eye_answers — enqueued MINDS_EYE', { sessionId, answers: answers.length, traceId });
   return { statusCode: 200, body: '' };
 }
 

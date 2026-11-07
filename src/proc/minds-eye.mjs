@@ -260,10 +260,11 @@ export async function handle(req) {
     return handleGateResume(body, callback, traceId, req);
   }
 
-  const { prompt, sessionId: existingSessionId, slackUser } = body;
+  const { prompt: typed, answers, note, sessionId: existingSessionId, slackUser } = body;
 
-  if (!prompt?.trim()) {
-    if (req.source === 'http') return err(400, 'prompt is required', req.correlationId);
+  // A reply is either typed text or answers to the questions her last respond asked.
+  if (!typed?.trim() && !Array.isArray(answers)) {
+    if (req.source === 'http') return err(400, 'prompt or answers is required', req.correlationId);
     return;
   }
 
@@ -301,6 +302,8 @@ export async function handle(req) {
 
   const { layer1Context, layer2Context } = await assembleContext();
 
+  const prompt = typed?.trim() ? typed : composeAnswersPrompt(lastQuestions(existingEntries), answers, note);
+
   // Save user message
   const nextSeq = existingEntries.length > 0
     ? Math.max(...existingEntries.map(e => e.sequence_number)) + 1
@@ -336,6 +339,70 @@ export async function handle(req) {
   if (req.source === 'http') {
     return ok({ success: true, sessionId: session.id }, req.correlationId);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Questions on a respond, and the answers that come back
+// ---------------------------------------------------------------------------
+
+/**
+ * The questions a respond asks, as the experience layer renders them: each with an id the
+ * answer comes back under, its text, and the choices it offers if any. An entry with no text
+ * is dropped; an id defaults to its position. Pure — exported for test.
+ *
+ * @param {*} raw  The respond call's `questions`
+ * @returns {Array<{ id: string, text: string, options?: string[] }>}
+ */
+export function normaliseQuestions(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter(q => typeof q?.text === 'string' && q.text.trim())
+    .map((q, i) => {
+      const options = Array.isArray(q.options) ? q.options.map(String).filter(o => o.trim()) : [];
+      return { id: String(q.id ?? `q${i + 1}`), text: q.text.trim(), ...(options.length ? { options } : {}) };
+    });
+}
+
+/**
+ * The questions of the last respond in a session, which a set of answers replies to.
+ *
+ * @param {Array} entries  PGC_SessionEntry rows in sequence order
+ * @returns {Array}
+ */
+export function lastQuestions(entries = []) {
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    if (entries[i]?.role !== 'assistant') continue;
+    try { return JSON.parse(entries[i].content)?.questions ?? []; } catch { return []; }
+  }
+  return [];
+}
+
+/**
+ * The user message a set of answers becomes: each question she asked, numbered as it was
+ * shown, with its answer under it, so neither side has to match answers to questions by
+ * position. Pure — exported for test.
+ *
+ * @param {Array}  questions  From lastQuestions
+ * @param {Array}  answers    [{ id, answer?, comment? }]
+ * @param {string} [note]     The reply's free text
+ * @returns {string}
+ */
+export function composeAnswersPrompt(questions = [], answers = [], note = null) {
+  const byId  = new Map((answers ?? []).map(a => [String(a.id), a]));
+  const known = new Set(questions.map(q => q.id));
+  const lines = ['My answers to your questions:'];
+  questions.forEach((q, i) => {
+    const a = byId.get(q.id);
+    lines.push('', `${i + 1}. ${q.text}`, `Answer: ${a?.answer ?? '(no answer)'}`);
+    if (a?.comment) lines.push(`Comment: ${a.comment}`);
+  });
+  for (const a of answers ?? []) {
+    if (known.has(String(a.id))) continue;
+    lines.push('', `Question ${a.id}`, `Answer: ${a.answer ?? '(no answer)'}`);
+    if (a.comment) lines.push(`Comment: ${a.comment}`);
+  }
+  if (note?.trim()) lines.push('', `Also: ${note.trim()}`);
+  return lines.join('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -907,7 +974,8 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         // `items` carries the gateway's own function_call for this respond, exactly as every
         // tool entry does. A typed follow-up becomes that call's output on rebuild, so the
         // resumed round appends rather than ending on a user item — see toInputItems.
-        const assistantContent = JSON.stringify({ action: 'respond', message, reasoning, advisory, items: entryItems, turn: turnCount });
+        const questions = normaliseQuestions(params.questions);
+        const assistantContent = JSON.stringify({ action: 'respond', message, reasoning, advisory, ...(questions.length ? { questions } : {}), items: entryItems, turn: turnCount });
         await insertRow('PGC_SessionEntry', {
           session_id:      session.id,
           sequence_number: seq,
@@ -935,6 +1003,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
             message:   replyText,
             queryId:   session.query_id,
             sessionId: session.id,
+            ...(questions.length ? { questions } : {}),
           });
         }
 
@@ -1244,7 +1313,7 @@ export function gateButtonConfig(action, params = {}) {
   if (action === 'register_workflow')    return { confirmLabel: 'Register', confirmStyle: null, testLabel: 'Register and test' };
   if (action === 'propose_workflow_fix') return { confirmLabel: 'Apply',  confirmStyle: null, testLabel: 'Apply and test' };
   if (action === 'propose_schema_fix') {
-    const isDrop = params.operation === 'dropColumn';
+    const isDrop = schemaOperations(params).some(op => op.operation === 'dropColumn');
     return { confirmLabel: isDrop ? 'Drop' : 'Apply', confirmStyle: isDrop ? 'danger' : null };
   }
   return                                        { confirmLabel: 'Approve', confirmStyle: null };
@@ -1456,7 +1525,115 @@ async function preGateRefusal(action, params, traceId) {
     };
   }
 
+  if (action === 'propose_schema_fix') return schemaOperationsRefusal(params);
+
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// propose_schema_fix — one operation, or an ordered list of them under one approval
+// ---------------------------------------------------------------------------
+
+const SCHEMA_OPERATIONS = new Set(['addColumn', 'modifyColumn', 'dropColumn', 'modifyConstraint', 'dropConstraint']);
+
+/**
+ * The operations a propose_schema_fix call asks for, in order. A schema change is usually a
+ * sequence (a column, then its CHECK), and one approval per operation stopped the session at
+ * each: session 1307 took four for two columns. `operations` is that sequence, as a migration
+ * lists it; an operation without its own tableName takes the call's. Without `operations`,
+ * the call itself is the one operation. Pure — exported for test.
+ *
+ * @param {object} params  The call's params
+ * @returns {Array<object>} [{ operation, tableName, ...fields }]
+ */
+export function schemaOperations(params = {}) {
+  const { operations, ...single } = params ?? {};
+  if (!Array.isArray(operations)) return [single];
+  return operations.map(op => ({ ...op, tableName: op?.tableName ?? params.tableName }));
+}
+
+/**
+ * Why a propose_schema_fix call cannot be sent for approval, or null when it can. Refused
+ * before the gate, so the user is never asked to approve a change that cannot run. Pure.
+ *
+ * @param {object} params
+ * @returns {object|null}
+ */
+export function schemaOperationsRefusal(params = {}) {
+  const ops = schemaOperations(params);
+  if (ops.length === 0) return { error: 'operations is empty — send at least one operation.' };
+  const problems = ops.flatMap((op, i) => {
+    if (!op?.operation || !op?.tableName) return [`operation ${i + 1}: operation and tableName are required`];
+    if (!SCHEMA_OPERATIONS.has(op.operation)) return [`operation ${i + 1}: unknown schema operation ${op.operation}`];
+    return [];
+  });
+  return problems.length
+    ? { error: 'Not sent for approval — nothing was changed. Correct these and send the call again.', problems }
+    : null;
+}
+
+/**
+ * Apply schema operations in order, stopping at the first that fails. Earlier operations stay
+ * applied (each is its own DDL), so the result names what was applied, what failed and what
+ * never ran — the next call starts from there, not from the beginning.
+ *
+ * @param {Array<object>} ops    From schemaOperations
+ * @param {Function}      send   (operation, body) → SERV result; throws on an HTTP failure
+ * @returns {Promise<object>}
+ */
+export async function applySchemaOperations(ops, send) {
+  const applied = [];
+  const label   = (op, i) => ({ operation: i + 1, type: op.operation, tableName: op.tableName });
+  for (const [i, op] of ops.entries()) {
+    const { operation, tableName, ...rest } = op;
+    let error = null;
+    try {
+      const result = await send(operation, { tableName, ...rest });
+      if (result?.success === false) error = result.error ?? 'failed';
+    } catch (e) {
+      error = e.message;
+    }
+    if (error) {
+      return {
+        success: false,
+        applied,
+        failed:  { ...label(op, i), error },
+        not_run: ops.slice(i + 1).map((o, j) => label(o, i + 1 + j)),
+      };
+    }
+    applied.push(label(op, i));
+  }
+  return { success: true, applied };
+}
+
+/**
+ * The gate lines for one schema operation. Pure.
+ *
+ * @param {object} op
+ * @returns {Array<string>}
+ */
+function schemaOperationLines(op) {
+  switch (op.operation) {
+    case 'addColumn': {
+      const { column = {} } = op;
+      return [`Add column: \`${column.name}\` (${column.type}${column.nullable === false ? ', NOT NULL' : ''})`];
+    }
+    case 'modifyColumn': {
+      const { columnName, newType, nullable, using: usingExpr } = op;
+      return [
+        ...(newType ? [`Change \`${columnName}\` type → \`${newType}\`${usingExpr ? ` USING ${usingExpr}` : ''}`] : []),
+        ...(nullable !== undefined ? [`Set \`${columnName}\` nullable: ${nullable}`] : []),
+      ];
+    }
+    case 'dropColumn':
+      return [`Drop column \`${op.columnName}\` — irreversible, cascades to dependent constraints.`];
+    case 'modifyConstraint':
+      return [`Replace constraint \`${op.constraintName}\` with: \`CHECK (${op.expression})\``];
+    case 'dropConstraint':
+      return [`Drop constraint \`${op.constraintName}\` — irreversible, removes from DB and PGC_Schema.`];
+    default:
+      return [`\`\`\`json\n${JSON.stringify(op, null, 2)}\n\`\`\``];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1827,41 +2004,18 @@ async function buildGateText(action, params, traceId) {
       }
 
       case 'propose_schema_fix': {
-        const { operation, tableName } = params;
-        if (!operation || !tableName) {
-          return `**Proposed schema fix** — missing operation or tableName`;
+        if (!Array.isArray(params.operations)) {
+          const { operation, tableName } = params;
+          if (!operation || !tableName) {
+            return `**Proposed schema fix** — missing operation or tableName`;
+          }
+          return [`**Proposed schema fix: \`${tableName}\`** — \`${operation}\``, ...schemaOperationLines(params)].join('\n');
         }
-        const lines = [`**Proposed schema fix: \`${tableName}\`** — \`${operation}\``];
-        switch (operation) {
-          case 'addColumn': {
-            const { column = {} } = params;
-            lines.push(`Add column: \`${column.name}\` (${column.type}${column.nullable === false ? ', NOT NULL' : ''})`);
-            break;
-          }
-          case 'modifyColumn': {
-            const { columnName, newType, nullable, using: usingExpr } = params;
-            if (newType)               lines.push(`Change \`${columnName}\` type → \`${newType}\`${usingExpr ? ` USING ${usingExpr}` : ''}`);
-            if (nullable !== undefined) lines.push(`Set \`${columnName}\` nullable: ${nullable}`);
-            break;
-          }
-          case 'dropColumn': {
-            const { columnName } = params;
-            lines.push(`Drop column \`${columnName}\` — irreversible, cascades to dependent constraints.`);
-            break;
-          }
-          case 'modifyConstraint': {
-            const { constraintName, expression } = params;
-            lines.push(`Replace constraint \`${constraintName}\` with: \`CHECK (${expression})\``);
-            break;
-          }
-          case 'dropConstraint': {
-            const { constraintName } = params;
-            lines.push(`Drop constraint \`${constraintName}\` — irreversible, removes from DB and PGC_Schema.`);
-            break;
-          }
-          default:
-            lines.push(`\`\`\`json\n${JSON.stringify(params, null, 2)}\n\`\`\``);
-        }
+        const ops   = schemaOperations(params);
+        const lines = [`**Proposed schema change — ${ops.length} operations**, applied in order. If one fails, the ones before it stay applied and the rest do not run.`];
+        ops.forEach((op, i) => {
+          lines.push('', `**${i + 1}. \`${op.tableName}\`** — \`${op.operation}\``, ...schemaOperationLines(op));
+        });
         return lines.join('\n');
       }
 
@@ -2251,12 +2405,15 @@ async function executeWriteTool(action, params, traceId) {
       }
 
       case 'propose_schema_fix': {
-        const { operation, tableName, ...rest } = params;
-        if (!operation || !tableName) return { error: 'operation and tableName are required' };
-        const allowed = new Set(['addColumn', 'modifyColumn', 'dropColumn', 'modifyConstraint', 'dropConstraint']);
-        if (!allowed.has(operation)) return { error: `Unknown schema operation: ${operation}` };
+        const refusal = schemaOperationsRefusal(params);
+        if (refusal) return refusal;
         const { servPost } = await import('../shared/serv-client.mjs');
-        return await servPost(`/api/v1/serv/schema/${operation}`, { tableName, ...rest });
+        const send = (operation, body) => servPost(`/api/v1/serv/schema/${operation}`, body);
+        if (!Array.isArray(params.operations)) {
+          const { operation, ...body } = params;
+          return await send(operation, body);
+        }
+        return await applySchemaOperations(schemaOperations(params), send);
       }
 
       case 'drop_table': {
@@ -2616,7 +2773,7 @@ export function deriveScope(workingHistory) {
     // the second — which is how a review_inventory design came to be filed under `recipes`.
     if (tool === 'search_domain_help'   && result.results?.[0]?.domain && !scope.domain) scope.domain = result.results[0].domain;
     if (tool === 'list_tables'          && params.domain && !scope.domain) scope.domain  = params.domain;
-    if (tool === 'propose_schema_fix'   && params.tableName)              scope.table    = params.tableName;
+    if (tool === 'propose_schema_fix'   && schemaOperations(params)[0]?.tableName) scope.table = schemaOperations(params)[0].tableName;
     if (tool === 'drop_table'           && params.tableName)              scope.table    = params.tableName;
     if (tool === 'create_view'          && params.tableName)              scope.table    = params.tableName;
     if (tool === 'drop_view'            && params.tableName)              scope.table    = params.tableName;
@@ -2689,7 +2846,9 @@ async function writeFactualMemory(action, params, result, sessionId, traceId) {
                 `${result.intent_map_error ? `; intent map write failed: ${result.intent_map_error}` : ''}.`;
 
     } else if (action === 'propose_schema_fix') {
-      const { operation, tableName } = params;
+      const ops       = schemaOperations(params);
+      const tableName = ops[0]?.tableName;
+      const operation = ops.map(op => op.tableName === tableName ? op.operation : `${op.operation} on ${op.tableName}`).join(', ');
       let domain = null;
       try {
         const schemaResp = await getRows('PGC_Schema', [{ column: 'table_name', op: 'eq', value: tableName }], null, 1);

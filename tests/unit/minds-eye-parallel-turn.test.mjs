@@ -100,6 +100,6 @@ describe('toInputItems — a turn with several calls', () => {
 
   it('carries the turn onto a respond entry, so a rebuild can group it', () => {
     const loopSrc = readFileSync('src/proc/minds-eye.mjs', 'utf8');
-    assert.match(loopSrc, /action: 'respond', message, reasoning, advisory, items: entryItems, turn: turnCount/);
+    assert.match(loopSrc, /action: 'respond', message, reasoning, advisory, [^\n]*items: entryItems, turn: turnCount/);
   });
 });
