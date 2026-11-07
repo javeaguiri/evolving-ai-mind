@@ -244,15 +244,15 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 
 ## Current State
 
-Sprints 7–15: see `docs/sprints/sprint-07.md` through `docs/sprints/sprint-15.md` (outcome, validation, retro).
+Sprints 7–15x: see `docs/sprints/sprint-07.md` through `docs/sprints/sprint-15x.md` (outcome, validation, retro).
 
-**Sprint 15 closed 2026-11-02 → 2 sessions, branch `sprint/15-encrypt-novia-self-test`. 1185 → 1334 unit tests. All 11 ACs met.** **Encryption at rest:** prod on `aws/rds`, template `IN_SYNC`, no unencrypted copy left (`docs/ops-encryption-at-rest.md`). **Novia tests her own work:** a sandbox schema per test (`docs/arch-sandbox.md` — `x-sandbox` → `search_path`, PGD writes outside it refused); `read_workflow_run`; `gate_id` + `POST /proc/gates/{runId}/responses`; test runs (`callback.provider: 'novia'`) wake her session instead of reaching Slack; `run_workflow { test: true }`, `answer_gate`, `replay_run`, `resolve_replay_break` record her wait before acting and the run's next event becomes their result; *Apply and test* on the commit gate; `sop_test_cycle` (`docs/arch-minds-eye.md` §4.4). Proven live: session 1284 found and fixed four spaced-repetition defects in `flashcard_quiz_session` (v3 → v4, `docs/flashcard-quiz-sm2-analysis.md`) — $1.79, 96% cache reads, household rows unchanged; session 1287 replayed `process_receipt` run 946 with no LLM call. **Also:** PGC template / seed / registry / database agree four ways (`dev_scripts/upsert-schema-registry.mjs`, `PGC_Archetype` removed); a SERV connection leak fixed; a replay reads its source run's clock (`docs/arch-replay.md` §9a). **Decided:** the Anthropic-direct move is not needed for self-testing (AC5).
+**Sprint 15x closed 2026-11-07 → 2 sessions, branch `sprint/15x-novia-cost`. 1334 → 1483 unit tests. 13 ACs met, AC11/12/15 struck (not exercised live, unit tests met).** **Novia costs what the request needs:** earlier requests render as stubs (`renderToolOutput` / `renderCallItems`), run events fold iterator passes, writes don't echo vectors, `read_workflow_run` reads a path, and output tokens are logged. Session 1293 cost $0.076/call at a 287K peak; 1307, 1308 and 1320 cost $0.050, $0.041 and $0.040 at 75–93K. **The harness stopped misleading her:** an output-ceiling cut-off raises `isTruncated` (not "invalid JSON"), and a parallel turn rebuilds in loop order. **Fewer stops:** `propose_schema_fix { operations }` is one approval, `testPlan` rides on the gate so *Apply and test* approves both (a change goes live first, then is tested; Javear's preference), a replay answers gates `asSourceRun`, and `fromSandbox` commits a tested copy. **Answering in place:** `respond { questions }` draws an answer box per question in Slack (`noviaQuestionBlocks`, `collectNoviaAnswers`). **Engine:** column defaults on existing tables (`validateColumnDefault`, `addColumn` `column.default`, `modifyColumn` `default` / `dropDefault`), and a Novia gate click is acted on only while its gate is current (`staleGateRefusal`, `atSeq`). Before, an Approve could re-run an approved write.
 
-Read `docs/sprints/sprint-15.md` (outcome, retro) before scoping Sprint 16.
+Read `docs/sprints/sprint-15x.md` (outcome, retro) before scoping Sprint 16.
 
-### Open Work (Sprint 16 — not yet scoped)
+### Open Work (Sprint 16 — proposed, not started)
 
-The web app's Phase 0 build, from `docs/arch-web-app.md` §10 (approved v0.5) — `gate_id` and the provider-neutral gate responses endpoint it needs are already built. Sprint 15's findings are in `docs/backlog.md` (High Priority).
+The web app's Phase 0 build, from `docs/arch-web-app.md` §10 (approved v0.5), proposed in `docs/sprints/CURRENT.md`; branch not created. `gate_id` and the provider-neutral gate responses endpoint it needs are already built.
 
 ### Deferred
 
