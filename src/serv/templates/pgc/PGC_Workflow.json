@@ -20,6 +20,7 @@
     { "name": "window_seconds",           "type": "integer",     "nullable": true },
     { "name": "version",                  "type": "integer",     "nullable": true,  "default": "1" },
     { "name": "parent_workflow_id",       "type": "integer",     "nullable": true },
+    { "name": "display",                  "type": "jsonb",       "nullable": true },
     { "name": "created_at",              "type": "timestamptz", "nullable": false, "default": "now()" },
     { "name": "updated_at",              "type": "timestamptz", "nullable": false, "default": "now()" }
   ],

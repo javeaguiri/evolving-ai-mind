@@ -41,6 +41,7 @@ import { resolvePath }          from './template-resolver.mjs';
 import { resolveOutputWrites }  from './state-utils.mjs';
 import { extractTemplateRefs }  from './simulation-engine.mjs';
 import { shouldWriteEpisodicMemory } from './memory-writer.mjs';
+import { resolveRunLabel }      from './workflow-display.mjs';
 
 // ---------------------------------------------------------------------------
 // HTTP entry point
@@ -463,6 +464,7 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
         status:     'awaiting_human_gate',
         stack:      run.stack,
         step_count: (run.step_count ?? 0) + 1,
+        ...labelUpdate(run),
       }
     );
 
@@ -516,6 +518,7 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
         stack:        [],
         state:        { local_state: frame.local_state },
         step_count:   (run.step_count ?? 0) + 1,
+        ...labelUpdate(run),
       }
     );
     console.info('run-workflow: workflow completed', { workflowRunId: run.id, traceId });
@@ -543,6 +546,7 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
     {
       stack:      run.stack,
       step_count: (run.step_count ?? 0) + 1,
+      ...labelUpdate(run),
     }
   );
 
@@ -950,6 +954,7 @@ async function resumeGate({ workflowRunId, gateId, userResponse, responseData, m
       status:     'running',
       stack:      run.stack,
       step_count: (run.step_count ?? 0) + 1,
+      ...labelUpdate(run),
     }
   );
 
@@ -1677,7 +1682,7 @@ async function cancelRun({ workflowRunId, traceId }) {
 // replay_source_run_id + llm_break_policy MUST be here: the replay harness reads the
 // break policy off the run row at the seam (docs/arch-replay.md §7a). Omit them and they
 // arrive undefined — failing closed to `never` and silently billing a run meant to replay.
-export const LOAD_RUN_COLUMNS = ['id', 'workflow_id', 'status', 'input', 'stack', 'callback', 'step_count', 'error', 'replay_source_run_id', 'llm_break_policy', 'sandbox', 'created_at'];
+export const LOAD_RUN_COLUMNS = ['id', 'workflow_id', 'status', 'input', 'stack', 'callback', 'step_count', 'error', 'replay_source_run_id', 'llm_break_policy', 'sandbox', 'label', 'created_at'];
 
 async function loadRun(workflowRunId, traceId) {
   const resp = await getRows(
@@ -1710,7 +1715,8 @@ async function loadRun(workflowRunId, traceId) {
       [{ column: 'id', op: 'eq', value: run.workflow_id }],
       undefined, 1
     );
-    run.workflow_name = wfResp.rows?.[0]?.name ?? 'unknown';
+    run.workflow_name    = wfResp.rows?.[0]?.name ?? 'unknown';
+    run.workflow_display = wfResp.rows?.[0]?.display ?? null;
   }
 
   return run;
@@ -1738,6 +1744,19 @@ function findStep(steps, stepKey) {
  */
 export function withGateId(gatePayload, gateId) {
   return { ...gatePayload, dialog: { ...gatePayload.dialog, gate_id: gateId } };
+}
+
+/**
+ * The run's label, the first time its workflow's display.run_label can be filled from the root
+ * frame's state (docs/arch-web-app.md §2.4). Spread into the update that persists the step, so a
+ * label costs no write of its own; once set it is never resolved again.
+ */
+export function labelUpdate(run) {
+  if (run.label != null) return {};
+  const label = resolveRunLabel(run.workflow_display?.run_label, run.stack?.[0]?.local_state);
+  if (!label) return {};
+  run.label = label;
+  return { label };
 }
 
 function topFrame(run) {

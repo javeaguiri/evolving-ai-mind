@@ -705,7 +705,7 @@ the browser through `GET /inbox?after=<id>` (`arch-web-app.md` §2.1, §7.2).
 | id | bigserial PK | The inbox cursor — `GET /inbox?after=<id>` returns rows past it |
 | provider | text | `slack`, `web` |
 | channel | text | Slack channel, or the web user's Cognito `sub` |
-| thread_id | text | Slack thread ts, or for the web the run's id |
+| thread_id | text | Slack thread ts. Null for a web run's message: the run is its own thread, named by `workflow_run_id` |
 | workflow_run_id | integer | Nullable, **no FK** — runs are purged independently of the inbox |
 | message_type | text | `HUMAN_GATE`, `HUMAN_NOTIFICATION`, `WORKFLOW_ERROR` |
 | payload | jsonb | The message exactly as enqueued — markdown text, or `gate_type` + `dialog` |

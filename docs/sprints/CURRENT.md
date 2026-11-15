@@ -25,7 +25,7 @@ front end needs exists behind a tested, specified API.
 | # | Item |
 |---|---|
 | **1** | 🟡 **The inbox:** `PGC_UiMessage`, written by `enqueueCallback` for `provider: 'web'`; `GET /proc/inbox` |
-| **2** | ⬜ **Run labels (§2.4)**, `GET /proc/runs`, and starting a named workflow |
+| **2** | 🟡 **Run labels (§2.4)**, `GET /proc/runs`, and starting a named workflow |
 | **3** | ⬜ **Pages:** `PGC_Page` with the seeded Home — panel kinds `workflow`, `records`, `summary`, `novia` (`arch-web-app.md` v0.6: a records panel's view is the viewer's switch); `upsert-page.mjs` for the household's pages from a household file (never system seeds); `GET /proc/pages` |
 | **4** | ⬜ **Reads:** `GET /proc/gates`, `GET /proc/outputs` (§2.6), and the read-only `records` read behind `GET /sources/{source}/rows` |
 | **5** | ⬜ **Contract:** `row`, `column` and `group` on the `human_gate` contract (`PGC_StepType`) |
@@ -55,6 +55,17 @@ state changes, not at close.**
   household role from `HOUSEHOLD_PRINCIPALS` (`principal.mjs`). Spec first (`75344f2`). To go live:
   the SSM parameter `/evolving-mind-ai/household-principals`, `sam deploy`, then the table through
   `POST /serv/schema/createTable` and `upsert-schema-registry.mjs --check`.
+- **Item 2 — code and tests (2026-11-15), not yet deployed.** `PGC_WorkflowRun.label`,
+  `PGC_Workflow.display`, `'web'` in `chk_triggered_by` (templates and registry seed);
+  `labelUpdate` in `run-workflow.mjs` writes the label with the step that first fills
+  `display.run_label`; `GET`/`POST /proc/runs` (`runs.mjs`); Novia writes `display` through
+  `register_workflow` and `propose_workflow_fix` (Javear: in item 2, so AC1 can show a label).
+  Spec first. A web callback carries no `threadId` — the run is its thread.
+- **Deploy at the end of the sprint (Javear).** Order: the SSM parameter (Javear) → `createTable`
+  `PGC_UiMessage` → `addColumn` `PGC_WorkflowRun.label`, `PGC_Workflow.display` →
+  `modifyConstraint` `chk_triggered_by` → `upsert-schema-registry.mjs --check` →
+  `sam deploy --no-confirm-changeset` → `upsert-system-context.mjs` (tool schemas v18).
+  The schema first: once deployed, every Slack message writes the inbox.
 - **Design v0.6 (2026-11-15, Javear):** a records panel names its source, not a widget; grid, list
   and document are views the viewer switches between. Mock-up republished at the same link.
 

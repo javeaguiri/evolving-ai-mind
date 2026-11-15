@@ -44,6 +44,7 @@ import { handle as mindsEye }           from './minds-eye.mjs';
 import { handle as replay }             from './replay.mjs';
 import { handle as gates }              from './gates.mjs';
 import { handle as inbox }              from './inbox.mjs';
+import { handle as runs }               from './runs.mjs';
 import { processScheduledRun }          from './scheduled-run.mjs';
 
 /**
@@ -284,6 +285,9 @@ async function dispatch(req) {
   switch (req.route) {
     case 'inbox':
       return inbox(req);
+
+    case 'runs':
+      return runs(req);
 
     case 'ping-llm':
       return pingLlm(req);

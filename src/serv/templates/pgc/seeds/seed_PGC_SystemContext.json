@@ -1372,7 +1372,7 @@
     "section": "rules",
     "inject_always": false,
     "inject_for": [],
-    "version": 17,
+    "version": 18,
     "content": {
       "tools": [
         {
@@ -1471,7 +1471,7 @@
         },
         {
           "name": "read_workflow",
-          "description": "Read a workflow's name, version, domain, description, expected_input and steps. expected_input lists the input keys the workflow actually reads, derived from its steps; run_workflow requires all of them. A long workflow does not fit one tool result, so call it with outline true to see every step's number, type, output_key, routing and size, then call it again with steps to read the ones you need in full. Read a step before you change it: composing a replacement from memory is how a message_template loses fields nobody agreed to drop. Do not re-read the same projection twice in one session; it is already in your history.",
+          "description": "Read a workflow's name, version, domain, description, display, expected_input and steps. expected_input lists the input keys the workflow actually reads, derived from its steps; run_workflow requires all of them. A long workflow does not fit one tool result, so call it with outline true to see every step's number, type, output_key, routing and size, then call it again with steps to read the ones you need in full. Read a step before you change it: composing a replacement from memory is how a message_template loses fields nobody agreed to drop. Do not re-read the same projection twice in one session; it is already in your history.",
           "parameters": {
             "type": "object",
             "properties": {
@@ -1796,6 +1796,10 @@
               "intentKeywords": {
                 "type": "array"
               },
+              "display": {
+                "type": "object",
+                "description": "How people see this workflow in menus and lists: an object with up to three keys. label: what a person reads instead of the name, as text or a language map such as {\"en\": \"...\", \"es\": \"...\"}. menu: false keeps it out of menus. run_label: a {{...}} template over the run's local_state that names one run in lists. The engine fills it the first time every token has a value and never formats: a date or amount appears exactly as stored, so prepare the readable value in a js_transform and name that key. Any other key is refused."
+              },
               "reasoning": {
                 "type": "string",
                 "description": "Why this call, in one sentence."
@@ -1849,6 +1853,13 @@
               "baseVersion": {
                 "type": "integer",
                 "description": "The version read_workflow returned. Required with patch and with fromSandbox (the live version the copy was made from). After a successful write, use the nextBaseVersion it returns."
+              },
+              "display": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "How people see this workflow in menus and lists: an object with up to three keys. label: what a person reads instead of the name, as text or a language map such as {\"en\": \"...\", \"es\": \"...\"}. menu: false keeps it out of menus. run_label: a {{...}} template over the run's local_state that names one run in lists. The engine fills it the first time every token has a value and never formats: a date or amount appears exactly as stored, so prepare the readable value in a js_transform and name that key. Any other key is refused. Sent here it replaces the stored display whole; omit it to leave the display as it is, or send null to clear it. It may be sent on its own, with baseVersion and no patch."
               }
             },
             "required": [

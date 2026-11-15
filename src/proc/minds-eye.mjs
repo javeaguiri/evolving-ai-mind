@@ -43,6 +43,7 @@ import { loadStepTypeContracts }                          from './step-type-regi
 import { resolvePath }                                    from './template-resolver.mjs';
 import { buildDialog }                                    from './step-executor.mjs';
 import { answerGate }                                     from './gates.mjs';
+import { displayProblem }                                 from './workflow-display.mjs';
 import { createReplayRun, applyBreakResolution, breakReport } from './replay.mjs';
 
 // Closes the round's instructions. Constant, so it rides in the cached prefix rather than
@@ -1555,6 +1556,11 @@ async function preGateRefusal(action, params, traceId) {
   const planRefusal = testPlanRefusal(params);
   if (planRefusal) return planRefusal;
 
+  if (action === 'register_workflow' || action === 'propose_workflow_fix') {
+    const problem = displayProblem(params?.display);
+    if (problem) return { error: `${problem} — nothing was written, and it was not sent for approval.` };
+  }
+
   if (action === 'register_workflow') {
     const steps = params?.steps;
     if (!Array.isArray(steps) || steps.length === 0) return null;
@@ -1892,13 +1898,13 @@ function stepRoutesTo(step, targetKey) {
  * can form a different opinion about what is being written.
  */
 export async function resolveProposedSteps(params, { requireBaseVersion = true } = {}) {
-  const { workflowName, steps, patch, removeSteps = [], baseVersion, fromSandbox } = params ?? {};
+  const { workflowName, steps, patch, removeSteps = [], baseVersion, fromSandbox, display } = params ?? {};
   if (!workflowName) return { error: 'workflowName is required' };
   if (fromSandbox && (Array.isArray(steps) || Array.isArray(patch))) {
     return { error: 'fromSandbox commits the tested copy as it stands — send it without patch or steps.' };
   }
-  if (!fromSandbox && !Array.isArray(steps) && !Array.isArray(patch)) {
-    return { error: 'Send either patch (the steps you changed), steps (the whole array), or fromSandbox: true to commit the copy you tested' };
+  if (!fromSandbox && !Array.isArray(steps) && !Array.isArray(patch) && display === undefined) {
+    return { error: 'Send either patch (the steps you changed), steps (the whole array), fromSandbox: true to commit the copy you tested, or display on its own' };
   }
 
   const wfResp = await getRows(
@@ -1979,6 +1985,16 @@ export async function resolveProposedSteps(params, { requireBaseVersion = true }
   return { wf, currentSteps, merged: result.merged, mode: 'patch', mergeReport: result };
 }
 
+/** One line for a workflow's display on an approval gate. */
+export function displayLine(display) {
+  if (!display) return '_(none)_';
+  const parts = [];
+  if (display.label !== undefined)     parts.push(`label ${typeof display.label === 'string' ? `\`${display.label}\`` : `\`${JSON.stringify(display.label)}\``}`);
+  if (display.menu === false)          parts.push('kept out of menus');
+  if (display.run_label !== undefined) parts.push(`runs named \`${display.run_label}\``);
+  return parts.join(' · ') || '_(empty)_';
+}
+
 async function buildGateText(action, params, traceId) {
   try {
     switch (action) {
@@ -1998,6 +2014,7 @@ async function buildGateText(action, params, traceId) {
           `${steps.length} steps`,
           '',
           description ? `${description}\n` : '',
+          params.display ? `Display: ${displayLine(params.display)}` : '',
           sim.passed
             ? `Validation: **passed** (L0 shape, L1 static, L2 routing + data flow)`
             : `Validation: **FAILED** — registration will be refused:\n${sim.error_summary}`,
@@ -2019,14 +2036,16 @@ async function buildGateText(action, params, traceId) {
         const { workflowName } = params;
         let currentSteps  = [];
         let proposedSteps = [];
+        let currentDisplay = null;
         try {
           // The merged array, not the submitted one. Under a patch only the steps she sent
           // can differ, so the diff below stops being an inference and becomes exactly what
           // changed — a whole-array resubmission could previously show spurious differences
           // wherever an untouched step came back reformatted.
           const resolved = await resolveProposedSteps(params);
-          currentSteps  = resolved.currentSteps ?? [];
-          proposedSteps = resolved.merged ?? [];
+          currentSteps   = resolved.currentSteps ?? [];
+          proposedSteps  = resolved.merged ?? [];
+          currentDisplay = resolved.wf?.display ?? null;
         } catch { /* best-effort */ }
 
         const currentMap  = Object.fromEntries(currentSteps.map(s => [String(s.step), s]));
@@ -2041,6 +2060,8 @@ async function buildGateText(action, params, traceId) {
           `**Proposed workflow fix: \`${workflowName}\`**`,
           `${currentSteps.length} steps → ${proposedSteps.length} steps\n`,
         ];
+        const displayChanged = params.display !== undefined && JSON.stringify(params.display) !== JSON.stringify(currentDisplay);
+        if (displayChanged) lines.push(`Display: ${displayLine(currentDisplay)} → ${displayLine(params.display)}`);
         if (added.length)   lines.push(`Added steps: ${added.join(', ')}`);
         if (removed.length) lines.push(`Removed steps: ${removed.join(', ')}`);
 
@@ -2064,7 +2085,7 @@ async function buildGateText(action, params, traceId) {
           }
         }
 
-        if (!added.length && !removed.length && !changed.length) {
+        if (!added.length && !removed.length && !changed.length && !displayChanged) {
           lines.push('_(No differences detected — proposed steps match current version.)_');
         }
 
@@ -2345,6 +2366,9 @@ async function executeWriteTool(action, params, traceId) {
           return { error: 'name and a non-empty steps array are required' };
         }
 
+        const displayAtWrite = displayProblem(params.display);
+        if (displayAtWrite) return { error: `${displayAtWrite} — not registered.` };
+
         // Registration creates a workflow; changing one is propose_workflow_fix. Keeping
         // them separate means neither tool can silently do the other's job — a name
         // collision here is a mistake to report, not an update to perform.
@@ -2390,6 +2414,7 @@ async function executeWriteTool(action, params, traceId) {
           version: 1,
           state_strategy: 'sequential_with_confirmation',
           intent_keywords: effectiveKeywords,
+          display:        params.display ?? null,
         });
         if (!wfResp.success) return { error: `PGC_Workflow insert failed: ${wfResp.error}` };
 
@@ -2450,7 +2475,10 @@ async function executeWriteTool(action, params, traceId) {
           }
         }
 
-        const resp = await updateRows('PGC_Workflow', [{ column: 'id', op: 'eq', value: wf.id }], { steps, version: wf.version + 1 });
+        const displayProblemAtWrite = displayProblem(params.display);
+        if (displayProblemAtWrite) return { error: `${displayProblemAtWrite} — nothing was written.` };
+        const displayUpdate = params.display === undefined ? {} : { display: params.display };
+        const resp = await updateRows('PGC_Workflow', [{ column: 'id', op: 'eq', value: wf.id }], { steps, version: wf.version + 1, ...displayUpdate });
         return {
           success:          resp.success,
           newVersion:       wf.version + 1,
@@ -2469,6 +2497,7 @@ async function executeWriteTool(action, params, traceId) {
           // Echoing it back spends the round's budget on something she is not missing.
           ...(mode === 'steps' ? { steps_written: steps } : {}),
           ...(resolved.sandbox ? { committed_from: resolved.sandbox } : {}),
+          ...(params.display !== undefined ? { display: { from: wf.display ?? null, to: params.display } } : {}),
         };
       }
 
@@ -2944,7 +2973,8 @@ async function writeFactualMemory(action, params, result, sessionId, traceId) {
       const countNote = result.stepCountMismatch
         ? ` (step count changed: ${result.stepCountBefore} → ${result.stepCountAfter})`
         : '';
-      content = `Session ${sessionId}: fixed ${workflowName} v${(result.newVersion ?? 1) - 1}→v${result.newVersion ?? '?'}. ${diffSummary}${countNote}. Outcome: ${result.success ? 'success' : 'failed'}.`;
+      const displayNote = result.display ? ` display: ${JSON.stringify(result.display.from)} → ${JSON.stringify(result.display.to)}.` : '';
+      content = `Session ${sessionId}: fixed ${workflowName} v${(result.newVersion ?? 1) - 1}→v${result.newVersion ?? '?'}. ${diffSummary}${countNote}.${displayNote} Outcome: ${result.success ? 'success' : 'failed'}.`;
 
     } else if (action === 'register_workflow') {
       const { name, domain = null } = params;
@@ -3815,6 +3845,7 @@ async function executeReadTool(action, params, traceId, session) {
           version:     wf.version,
           domain:      wf.domain,
           description: wf.description ?? null,
+          display:     wf.display ?? null,
           // Derived from the steps, because PGC_Workflow declares no input schema. These
           // are the keys the workflow READS — supplying a key it does not read is silently
           // discarded, and omitting one it does read resolves to undefined with no error.

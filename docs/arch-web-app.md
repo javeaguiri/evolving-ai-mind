@@ -78,7 +78,7 @@ enqueued to the results queue as today; for the web the row **is** the delivery.
 | id | bigserial PK | The inbox cursor |
 | provider | text | `slack`, `web` |
 | channel | text | Slack channel, or the web user's `sub` |
-| thread_id | text | Slack thread ts, or the web thread id the app generated |
+| thread_id | text | Slack thread ts. Null for a web run's message: the run is its own thread, named by `workflow_run_id` |
 | workflow_run_id | integer | Nullable, no FK — runs are purged independently |
 | message_type | text | `HUMAN_GATE`, `HUMAN_NOTIFICATION`, `WORKFLOW_ERROR` |
 | payload | jsonb | The message exactly as enqueued — markdown text, or `gate_type` + `dialog` |
@@ -184,7 +184,7 @@ before implementation. Errors are `{ error: { code, message, fields? } }`.
 | `GET /gates/{runId}` | — | `200` one gate as above, or `404 gate_not_waiting` | Same read, one run |
 | `POST /gates/{runId}/responses` | `{ gateId, action, formValues?, inputValue?, listGroup?, selectedValue? }` | `202 { runId }`; `409 gate_moved` when `gateId` is not the waiting gate; `422 invalid_fields` with `fields` when a `number` field fails the shared rule — the run is not resumed | Validates, then enqueues `WORKFLOW_STEP resume_gate` with the run's own callback — the answer never re-points a run at another provider |
 | `GET /inbox` | `?after=<id>&run=<id>&limit=` | `200 { messages: [...], cursor }` | `GET /proc/inbox`: the user's web messages, plus every message of runs the user answered from the web |
-| `POST /runs` | `{ workflow }` | `202 { runId }`; `404 workflow_not_found` | Starts the named workflow — no intent classification — with `callback: { provider: 'web', channel: <sub>, threadId: <runId>, locale }`. The run (§4.3) is its thread |
+| `POST /runs` | `{ workflow }` | `202 { runId }`; `403 household_required`; `404 workflow_not_found` | `POST /proc/runs`: starts the latest version of the named domain workflow — no intent classification; a system workflow (`domain` null) is not startable by name — with `triggered_by: 'web'` and `callback: { provider: 'web', channel: <sub> }`, `locale` joining it with the profile (§13). The run (§4.3) is its thread, so the callback carries no `threadId` |
 | `GET /runs` | `?workflow=&domain=&status=&limit=&before=` | `200 { runs: [{ runId, workflowName, label, status, startedAt }], cursor }`, newest first | `GET /proc/runs`: `PGC_WorkflowRun` with explicit `columns`; `label` per §2.4. Feeds workflow panels and the run list in 🔔 |
 | `GET /pages` | — | `200 { pages: [{ pageKey, version, title, order, panels }] }`, latest version of each, `title` resolved to the caller's locale | `GET /proc/pages`. Feeds the *Pages* menu and every household page |
 | `GET /sources/{source}/rows` | `?filter=&order_by=&columns=&limit=` | `200 { columns: [{ name, type }], rows }` | A records or summary panel's read (§4.2): the PROC `records` read of a registered table or view, read-only in Phase 0 |

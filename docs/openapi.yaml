@@ -1780,6 +1780,81 @@ paths:
         '403': { description: "run_forbidden — the run is another user's web run, or the principal lacks the household role." }
         '404': { description: run_not_found }
 
+  /api/v1/proc/runs:
+    get:
+      summary: Runs the principal may see, newest first
+      description: >
+        Lists PGC_WorkflowRun rows (docs/arch-web-app.md §2.4, §3.1) with explicit columns — never
+        the stack. Each run is checked against the principal: a web-started run must be the
+        principal's own, any other needs the 'household' role. Up to `limit` runs are examined
+        and those the principal may not see are dropped, so a page can hold fewer than `limit`;
+        `cursor` is the id of the last run examined, and `more` is true when runs past it remain.
+        `label` is the run's own label (its workflow's display.run_label, resolved once every token
+        has a value) or null; the app then shows `workflowLabel` and `startedAt`.
+      operationId: listRuns
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+        - { name: workflow, in: query, required: false, schema: { type: string }, description: Only runs of this workflow name. }
+        - { name: domain,   in: query, required: false, schema: { type: string }, description: Only runs of this domain's workflows. }
+        - { name: status,   in: query, required: false, schema: { type: string, enum: [pending, running, awaiting_human_gate, awaiting_llm_break, completed, failed, cancelled] } }
+        - { name: limit,    in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { name: before,   in: query, required: false, schema: { type: integer }, description: Only runs with an id below this — the previous response's cursor. }
+      responses:
+        '200':
+          description: "{ runs, cursor, more }"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [runs, cursor, more]
+                properties:
+                  runs:
+                    type: array
+                    items:
+                      type: object
+                      required: [runId, workflowName, status, startedAt]
+                      properties:
+                        runId:         { type: integer }
+                        workflowName:  { type: string }
+                        workflowLabel: { type: string, nullable: true, description: "The workflow's display.label — a string or a language map, as stored." }
+                        label:         { type: string, nullable: true }
+                        status:        { type: string }
+                        startedAt:     { type: string, format: date-time }
+                  cursor: { type: integer, nullable: true, description: The id of the last run examined, or null when none were. }
+                  more:   { type: boolean }
+        '400': { description: "invalid_query — limit, before or status out of range." }
+        '401': { description: principal_required }
+    post:
+      summary: Start a named domain workflow for the principal
+      description: >
+        Starts the named workflow with no intent classification (docs/arch-web-app.md §3.1):
+        the latest version of a workflow belonging to a domain — a system workflow (domain null)
+        is not startable by name. The run is created with triggered_by 'web' and callback
+        { provider: 'web', channel: <principal> }; every message it sends is written to the inbox
+        and nowhere else. The run is its own thread, so the callback carries no threadId.
+      operationId: startRun
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workflow]
+              properties:
+                workflow: { type: string, description: The workflow's name. }
+      responses:
+        '202': { description: "Accepted; execute_top enqueued. Body: { runId }" }
+        '400': { description: workflow missing }
+        '401': { description: principal_required }
+        '403': { description: "household_required — only a household principal starts the household's workflows." }
+        '404': { description: "workflow_not_found — no domain workflow has this name." }
+
   /api/v1/proc/ping-db:
     post:
       summary: DB ping — proc → serv → RDS health check

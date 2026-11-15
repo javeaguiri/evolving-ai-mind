@@ -446,6 +446,11 @@
         "nullable": true
       },
       {
+        "name": "display",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
         "name": "created_at",
         "type": "timestamptz",
         "nullable": false,
@@ -601,6 +606,11 @@
         "nullable": true
       },
       {
+        "name": "label",
+        "type": "text",
+        "nullable": true
+      },
+      {
         "name": "created_at",
         "type": "timestamptz",
         "nullable": false,
@@ -638,7 +648,7 @@
       {
         "type": "check",
         "name": "chk_triggered_by",
-        "expression": "triggered_by IN ('slack', 'api', 'workflow', 'system', 'minds_eye', 'intent_classify', 'schedule')"
+        "expression": "triggered_by IN ('slack', 'api', 'workflow', 'system', 'minds_eye', 'intent_classify', 'schedule', 'web')"
       }
     ],
     "triggers": [
