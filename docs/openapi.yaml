@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: evolving-mind-ai
-  version: 3.5.0
+  version: 3.6.0
   description: >
     Self-evolving cognitive automation system.
     Slack → Lambda → PostgreSQL → LLM pipeline.
@@ -17,6 +17,16 @@ servers:
 # Reusable components
 # ---------------------------------------------------------------------------
 components:
+  securitySchemes:
+    CognitoBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        A Cognito user pool access token (docs/arch-web-app.md §1), verified by the API Gateway
+        Cognito authorizer before WebApiFunction runs. The user is the token's sub. The web routes
+        carry no API key; the browser never holds the internal key.
+
   parameters:
     CorrelationId:
       name: x-correlation-id
@@ -83,6 +93,84 @@ components:
         messageType:   { type: string, enum: [HUMAN_GATE, HUMAN_NOTIFICATION, WORKFLOW_ERROR] }
         payload:       { type: object, description: "The message exactly as enqueued, without its callback — text for a notification, gate_type + dialog for a gate." }
         createdAt:     { type: string, format: date-time }
+    Page:
+      type: object
+      required: [pageKey, version, title, position, panels]
+      properties:
+        pageKey:  { type: string }
+        version:  { type: integer }
+        title:    { type: string }
+        position: { type: integer }
+        panels:
+          type: array
+          items:
+            type: object
+            required: [id, kind, width, config]
+            properties:
+              id:     { type: string }
+              kind:   { type: string, enum: [workflow, records, summary, novia] }
+              width:  { type: string, enum: ['1/3', '1/2', '2/3', full] }
+              title:  { description: A string or a language map. }
+              config: { type: object, description: "workflow: workflow | domain, limit?, show_output?. records: source (a table or view) | entity, view? (grid, list, document), columns?, filter?, order_by?, limit?, title_column?, detail_columns?, picker_column?. summary: widget (chart, metric, report) with source and its options, or workflow for a report. novia: topic." }
+    RunSummary:
+      type: object
+      required: [runId, workflowName, status, startedAt]
+      properties:
+        runId:         { type: integer }
+        workflowName:  { type: string }
+        workflowLabel: { type: string, nullable: true, description: "The workflow's display.label — a string or a language map, as stored." }
+        label:         { type: string, nullable: true }
+        status:        { type: string }
+        startedAt:     { type: string, format: date-time }
+    DomainMenu:
+      type: object
+      description: >
+        One domain as the Domains menu and its domain page draw it (docs/arch-web-app.md §3.1),
+        already in the caller's language. A label is resolved from its language map — the
+        caller's locale, then the household's, then the map's first entry — and, with no label
+        stored, is the humanised identifier (budgets_expenses → "Budgets expenses") with
+        labelFallback true.
+      required: [domain, label, workflows]
+      properties:
+        domain:        { type: string }
+        label:         { type: string, description: "PGC_DomainHelp.display.label, resolved." }
+        labelFallback: { type: boolean, description: True when label is the humanised identifier. }
+        workflows:
+          type: array
+          description: >
+            The latest version of each of the domain's workflows whose display.menu is not false,
+            sorted by label in the caller's locale. Empty when the domain has none.
+          items:
+            type: object
+            required: [name, label]
+            properties:
+              name:          { type: string }
+              label:         { type: string, description: "PGC_Workflow.display.label, resolved." }
+              labelFallback: { type: boolean }
+              description:   { type: string, nullable: true, description: "PGC_Workflow.description." }
+    WebError:
+      type: object
+      description: >
+        Every web route's error body (docs/arch-web-app.md §3). WebApiFunction translates PROC's
+        { error: <code>, …extras } into it: code is PROC's code, message is English text for
+        the catalog to fall back on, fields carries invalid_fields' list. A 401 from the Cognito
+        authorizer is API Gateway's own body and never reaches WebApiFunction.
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:    { type: string }
+            message: { type: string }
+            fields:
+              type: array
+              items:
+                type: object
+                properties:
+                  name:    { type: string }
+                  problem: { type: string }
+
     CorrelationResponse:
       type: object
       properties:
@@ -1571,6 +1659,272 @@ paths:
         '500':
           description: Slack ACK post failed or SQS enqueue failed
 
+  # ── UI / Web ───────────────────────────────────────────────────────────────
+  # WebApiFunction (EXP), behind /api/v1/ui/web/{proxy+} with the Cognito authorizer and no API
+  # key (docs/arch-web-app.md §1, §3.1). Each route calls its PROC route over HTTP with the
+  # internal key and x-principal-user set to the token's sub — never a request field — and
+  # returns PROC's body unchanged on success. Errors are WebError: PROC's code, an English
+  # message, and fields where PROC sent them.
+
+  /api/v1/ui/web/me:
+    get:
+      summary: The signed-in user
+      description: >
+        GET /proc/me joined with the user's Cognito attributes, read with GetUser and the
+        request's own access token. Drawn by Settings › Profile, and read once at start for the
+        locale and timezone every Intl format uses (docs/arch-web-app.md §13).
+      operationId: webGetMe
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      responses:
+        '200':
+          description: "{ name, email, roles, locale, timezone }"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [email, roles, locale, timezone]
+                properties:
+                  name:     { type: string, nullable: true, description: "The Cognito name attribute, when set." }
+                  email:    { type: string }
+                  roles:    { type: array, items: { type: string, enum: [household] } }
+                  locale:   { type: string }
+                  timezone: { type: string }
+        '401': { description: The Cognito authorizer refused the token. }
+
+  /api/v1/ui/web/workflows:
+    get:
+      summary: The Domains menu — each domain and the workflows started from it
+      description: GET /proc/workflows.
+      operationId: webListWorkflows
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      responses:
+        '200':
+          description: "{ domains }"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [domains]
+                properties:
+                  domains: { type: array, items: { $ref: '#/components/schemas/DomainMenu' } }
+        '401': { description: The Cognito authorizer refused the token. }
+        '403': { description: household_required, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+
+  /api/v1/ui/web/pages:
+    get:
+      summary: The household's pages — the Pages menu and every page drawn
+      description: GET /proc/pages.
+      operationId: webListPages
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      responses:
+        '200':
+          description: "{ pages }"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [pages]
+                properties:
+                  pages: { type: array, items: { $ref: '#/components/schemas/Page' } }
+        '401': { description: The Cognito authorizer refused the token. }
+        '403': { description: household_required, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '500': { description: pages_truncated, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+
+  /api/v1/ui/web/sources/{source}/rows:
+    get:
+      summary: A records or summary panel's rows, read-only
+      description: GET /proc/sources/{source}/rows, its query passed through.
+      operationId: webReadSourceRows
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      parameters:
+        - { name: source,   in: path,  required: true,  schema: { type: string } }
+        - { name: columns,  in: query, required: false, schema: { type: string } }
+        - { name: filter,   in: query, required: false, schema: { type: string } }
+        - { name: order_by, in: query, required: false, schema: { type: string } }
+        - { name: limit,    in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+      responses:
+        '200': { description: "{ columns: [{ name, type }], rows, more, totalMatching? }" }
+        '400': { description: invalid_query, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '401': { description: The Cognito authorizer refused the token. }
+        '403': { description: household_required, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '404': { description: source_not_found, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+
+  /api/v1/ui/web/outputs/{workflow}:
+    get:
+      summary: A report widget's content — the workflow's latest output
+      description: GET /proc/outputs/{workflow}.
+      operationId: webGetOutput
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      parameters:
+        - { name: workflow, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: "{ runId, label, completedAt, payload }" }
+        '401': { description: The Cognito authorizer refused the token. }
+        '403': { description: household_required, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '404': { description: "workflow_not_found, or no_output", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+
+  /api/v1/ui/web/runs:
+    get:
+      summary: Runs the user may see, newest first — workflow panels and the run list in 🔔
+      description: GET /proc/runs, its query passed through.
+      operationId: webListRuns
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      parameters:
+        - { name: workflow, in: query, required: false, schema: { type: string } }
+        - { name: domain,   in: query, required: false, schema: { type: string } }
+        - { name: status,   in: query, required: false, schema: { type: string, enum: [pending, running, awaiting_human_gate, awaiting_llm_break, completed, failed, cancelled] } }
+        - { name: limit,    in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { name: before,   in: query, required: false, schema: { type: integer } }
+      responses:
+        '200':
+          description: "{ runs, cursor, more }"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [runs, cursor, more]
+                properties:
+                  runs:   { type: array, items: { $ref: '#/components/schemas/RunSummary' } }
+                  cursor: { type: integer, nullable: true }
+                  more:   { type: boolean }
+        '400': { description: invalid_query, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '401': { description: The Cognito authorizer refused the token. }
+    post:
+      summary: Start a domain workflow from the page — a panel's Start
+      description: >
+        POST /proc/runs. The run's callback is { provider: 'web', channel: <sub> }, so every
+        message it sends reaches this user's inbox and nowhere else.
+      operationId: webStartRun
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workflow]
+              properties:
+                workflow: { type: string }
+      responses:
+        '202': { description: "{ runId }" }
+        '400': { description: workflow missing, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '401': { description: The Cognito authorizer refused the token. }
+        '403': { description: household_required, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '404': { description: workflow_not_found, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+
+  /api/v1/ui/web/inbox:
+    get:
+      summary: The user's messages after a cursor — what the app polls
+      description: >
+        GET /proc/inbox, its query passed through (docs/arch-web-app.md §1 Result delivery).
+        One change on the way: a WORKFLOW_ERROR's payload carries `summary` — the same summary
+        Slack posts, from the function both experience layers share — in place of PROC's raw
+        `message`, which stays in CloudWatch and the run.
+      operationId: webReadInbox
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      parameters:
+        - { name: after, in: query, required: false, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: run,   in: query, required: false, schema: { type: integer } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: "{ messages, cursor, more }"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [messages, cursor, more]
+                properties:
+                  messages: { type: array, items: { $ref: '#/components/schemas/UiMessage' } }
+                  cursor:   { type: integer }
+                  more:     { type: boolean }
+        '400': { description: invalid_query, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '401': { description: The Cognito authorizer refused the token. }
+        '403': { description: run_forbidden, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '404': { description: run_not_found, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+
+  /api/v1/ui/web/gates:
+    get:
+      summary: Every gate waiting for the user — 🔔 Needs you
+      description: GET /proc/gates.
+      operationId: webListGates
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      responses:
+        '200':
+          description: "{ gates, more }"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [gates, more]
+                properties:
+                  gates: { type: array, items: { $ref: '#/components/schemas/WaitingGate' } }
+                  more:  { type: boolean }
+        '401': { description: The Cognito authorizer refused the token. }
+
+  /api/v1/ui/web/gates/{runId}:
+    get:
+      summary: The gate one run is waiting at — a run stepped through in place
+      description: GET /proc/gates/{runId}.
+      operationId: webGetGate
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      parameters:
+        - { name: runId, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: The waiting gate.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WaitingGate' }
+        '401': { description: The Cognito authorizer refused the token. }
+        '403': { description: run_forbidden, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '404': { description: "run_not_found, or gate_not_waiting", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+
+  /api/v1/ui/web/gates/{runId}/responses:
+    post:
+      summary: Answer the gate a run is waiting at
+      description: >
+        POST /proc/gates/{runId}/responses, the body passed through. A 409 gate_moved is what
+        the app shows as "This was answered elsewhere" (docs/arch-web-app.md §8); a 422 names
+        the fields to mark, and the run is not resumed.
+      operationId: webAnswerGate
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      parameters:
+        - { name: runId, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [gateId, action]
+              properties:
+                gateId:        { type: string }
+                action:        { type: string }
+                formValues:    { type: object }
+                inputValue:    { type: string }
+                listGroup:     { type: string }
+                selectedValue: { type: string }
+      responses:
+        '202': { description: "{ runId }" }
+        '400': { description: gateId or action missing, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '401': { description: The Cognito authorizer refused the token. }
+        '403': { description: run_forbidden, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '404': { description: run_not_found, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '409': { description: "gate_not_waiting, or gate_moved", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '422': { description: "invalid_fields — WebError.error.fields names each", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+
   # ── PROC ───────────────────────────────────────────────────────────────────
 
   /api/v1/proc/replay:
@@ -1827,18 +2181,7 @@ paths:
                 type: object
                 required: [runs, cursor, more]
                 properties:
-                  runs:
-                    type: array
-                    items:
-                      type: object
-                      required: [runId, workflowName, status, startedAt]
-                      properties:
-                        runId:         { type: integer }
-                        workflowName:  { type: string }
-                        workflowLabel: { type: string, nullable: true, description: "The workflow's display.label — a string or a language map, as stored." }
-                        label:         { type: string, nullable: true }
-                        status:        { type: string }
-                        startedAt:     { type: string, format: date-time }
+                  runs:   { type: array, items: { $ref: '#/components/schemas/RunSummary' } }
                   cursor: { type: integer, nullable: true, description: The id of the last run examined, or null when none were. }
                   more:   { type: boolean }
         '400': { description: "invalid_query — limit, before or status out of range." }
@@ -1895,27 +2238,7 @@ paths:
                 type: object
                 required: [pages]
                 properties:
-                  pages:
-                    type: array
-                    items:
-                      type: object
-                      required: [pageKey, version, title, position, panels]
-                      properties:
-                        pageKey:  { type: string }
-                        version:  { type: integer }
-                        title:    { type: string }
-                        position: { type: integer }
-                        panels:
-                          type: array
-                          items:
-                            type: object
-                            required: [id, kind, width, config]
-                            properties:
-                              id:     { type: string }
-                              kind:   { type: string, enum: [workflow, records, summary, novia] }
-                              width:  { type: string, enum: ['1/3', '1/2', '2/3', full] }
-                              title:  { description: A string or a language map. }
-                              config: { type: object, description: "workflow: workflow | domain, limit?, show_output?. records: source (a table or view) | entity, view? (grid, list, document), columns?, filter?, order_by?, limit?, title_column?, detail_columns?, picker_column?. summary: widget (chart, metric, report) with source and its options, or workflow for a report. novia: topic." }
+                  pages: { type: array, items: { $ref: '#/components/schemas/Page' } }
         '401': { description: principal_required }
         '403': { description: "household_required — pages belong to the household." }
         '500': { description: "pages_truncated — SERV cut the PGC_Page read short, so a page could be missing; refused rather than served. Body carries totalMatching." }
@@ -2014,6 +2337,64 @@ paths:
         '401': { description: principal_required }
         '403': { description: household_required }
         '404': { description: source_not_found }
+
+  /api/v1/proc/me:
+    get:
+      summary: The principal, its roles, and the language and timezone it works in
+      description: >
+        What the web app needs to know about its user before it draws anything
+        (docs/arch-web-app.md §3.1, §13). `roles` come from configuration, as for every
+        web-family route (proc/principal.mjs). `locale` and `timezone` are the household's
+        defaults — SSM String parameters household-locale and household-timezone — until a
+        user's own profile exists (Settings › Language, Phase 1). Name and email are not
+        PROC's: WebApiFunction adds them from Cognito.
+      operationId: getPrincipal
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: "{ user, roles, locale, timezone }"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user, roles, locale, timezone]
+                properties:
+                  user:     { type: string, description: The principal — the Cognito sub. }
+                  roles:    { type: array, items: { type: string, enum: [household] } }
+                  locale:   { type: string, description: "BCP 47, e.g. en or es-ES." }
+                  timezone: { type: string, description: "IANA name, e.g. Europe/Madrid." }
+        '401': { description: principal_required }
+
+  /api/v1/proc/workflows:
+    get:
+      summary: The household's domains and the workflows a person can start in each
+      description: >
+        What the Domains menu and each domain page's workflow panel draw (docs/arch-web-app.md
+        §3.1), the workflows part of Phase 1's GET /domains. Every domain with a PGC_DomainHelp
+        row or a domain workflow, sorted by label in the caller's locale; each with the latest
+        version of its workflows whose display.menu is not false. System workflows (domain null)
+        are never listed — they are not startable by name. Labels are resolved as DomainMenu
+        says. The household role is required — the workflows are the household's.
+      operationId: listWorkflows
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: "{ domains }"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [domains]
+                properties:
+                  domains: { type: array, items: { $ref: '#/components/schemas/DomainMenu' } }
+        '401': { description: principal_required }
+        '403': { description: household_required }
 
   /api/v1/proc/ping-db:
     post:
