@@ -39,7 +39,7 @@ state changes, not at close.**
 
 | # | Status | Criterion | Scope | Threshold |
 |---|---|---|---|---|
-| **AC1** | 🟡 | A named workflow started for `provider: 'web'` runs to completion with every message in `GET /proc/inbox`, and none in Slack; the run appears in `GET /proc/runs` under its label | [1](#scope), [2](#scope) | Shown live — Javear starts the run (workflow-testing convention); Wren supplies the command and reads the evidence |
+| **AC1** | ✅ | A named workflow started for `provider: 'web'` runs to completion with every message in `GET /proc/inbox`, and none in Slack; the run appears in `GET /proc/runs` under its label | [1](#scope), [2](#scope) | Shown live — Javear starts the run (workflow-testing convention); Wren supplies the command and reads the evidence |
 | **AC2** | 🟡 | A gate waiting in a web-started run is listed by `GET /proc/gates` and answered through `POST /proc/gates/{runId}/responses`; a gate already answered elsewhere is refused `409 gate_moved`. `GET /proc/gates` also lists a gate from a Slack-started run | [4](#scope), [6](#scope) | Shown live, one form gate and one other gate type |
 | **AC3** | 🟡 | In Slack, a button carries `gate_id`, and a click on a gate already answered gets the ephemeral "already answered" instead of a resume | [6](#scope) | Shown live, or unit tests if no double answer can be staged without a write to a real run (post-deploy checks are read-only) |
 | **AC4** | 🟡 | `GET /proc/pages` returns the seeded Home and the household's pages from `upsert-page.mjs`; no household page is in a system seed. `GET /proc/outputs` and `GET /sources/{source}/rows` return what a Home panel names, read-only | [3](#scope), [4](#scope) | Shown by curl |
@@ -114,6 +114,13 @@ state changes, not at close.**
   `PGC_WorkflowRun`; 1029's label was set at its step-8 gate, once step 2 had run. First live inbox
   rows: 17 Slack messages (her session's), none for her test runs (provider `novia`), as designed.
   Her sessions post many messages, which bears on inbox retention (§12, open).
+- **AC1 met — run 1030 (2026-11-15).** `POST /proc/runs` started `budget_vs_expense_report` for the
+  web; its form gate was the inbox's row 18 (`web`, no thread id); answered through
+  `POST /proc/gates/1030/responses` (`202`), it completed with the label "Budget vs expenses —
+  November 2026" in `GET /proc/runs`, its report as row 19 and in
+  `GET /proc/outputs/budget_vs_expense_report`; the Slack results listener logged nothing for it.
+  The same answer resent: `409 gate_not_waiting`. AC2 still needs a second gate type and a live
+  `gate_moved`.
 - **Design v0.6 (2026-11-15, Javear):** a records panel names its source, not a widget; grid, list
   and document are views the viewer switches between. Mock-up republished at the same link.
 
