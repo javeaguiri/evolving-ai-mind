@@ -64,7 +64,12 @@ if (checkOnly) {
   process.exit(0);
 }
 
-const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+// jsonb stores an object's keys in its own order, so a page read back is compared by value, not
+// by the text it serialises to — or every run would write a new, identical version.
+const canonical = v => Array.isArray(v) ? v.map(canonical)
+  : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, canonical(v[k])]))
+  : v;
+const same = (a, b) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 
 for (const page of pages) {
   const latestResp = await getRows('PGC_Page', [{ column: 'page_key', op: 'eq', value: page.page_key }],
