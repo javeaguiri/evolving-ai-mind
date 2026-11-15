@@ -2,8 +2,14 @@
 
 Source of the mock-ups for `docs/arch-web-app.md`.
 
-**v0.5 (current, approved):** `console-v0.5.html`, published at
-<https://claude.ai/artifact/V13D3yERqnvQDkm8Xsuu8z> (private until shared). v0.4 with the Pages,
+**v0.6 (current):** `console-v0.6.html`, published at the same link,
+<https://claude.ai/artifact/V13D3yERqnvQDkm8Xsuu8z>. v0.5 with records panels: a table, view or
+entity panel carries a Grid · List · Document switch in its header, opens on its config's view, else
+the source's `display.view`, else Grid, and remembers the viewer's choice per panel in the browser
+without changing the page. Chart, metric and report are summary panels. *+ Add panel* offers
+Records (no widget step; an optional *Opens on*) and Summary. P0 offers Grid and List; Document is P1.
+
+**v0.5 (record, approved):** `console-v0.5.html`, the same artifact's previous version. v0.4 with the Pages,
 Domains and Activity menus across the top bar (open on hover and on click), 🏠 always Home, Novia on
 the left — collapsible with «, stepping aside while a run needs the width, remembered on the device —
 and Phase 0 drawing the household's Home, Money and Inventory pages read-only.

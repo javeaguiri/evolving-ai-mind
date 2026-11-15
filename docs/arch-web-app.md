@@ -13,9 +13,9 @@ Previously: 2026-10-31 (v0.4 — console layout, pages of panels, widgets as dat
 Previously: 2026-10-30 (v0.3 — ☰ menu, labelled runs, Novia separate; §2.4 run labels)
 Previously: 2026-10-25 (v0.2 — pages of widgets, one Ask, ⚙ for the machinery; §2.3 `PGC_Page`)
 
-**Working mock-up (v0.5):** <https://claude.ai/artifact/V13D3yERqnvQDkm8Xsuu8z> — the wireframes for
+**Working mock-up (v0.6):** <https://claude.ai/artifact/V13D3yERqnvQDkm8Xsuu8z> — the wireframes for
 this document, clickable, with a P0/P1 and a desktop/phone switch; source
-`docs/web-app-mockup/console-v0.5.html`. Private until shared from its Share menu. The v0.2 mock-up
+`docs/web-app-mockup/console-v0.6.html`. Private until shared from its Share menu. The v0.2 mock-up
 (<https://claude.ai/artifact/CiBwcLPCVTH3YfKt85L1ro>) is kept as a record.
 
 This document takes `docs/arch-home-brain.md` §4 (product direction, v0.1) to buildable depth for
