@@ -263,6 +263,93 @@ Resources:
                   - s3:GetEncryptionConfiguration
                   - s3:PutEncryptionConfiguration
                 Resource: "*"
+              # The web app (docs/arch-web-app.md §1). Granted in a deploy of their own, before the
+              # resources that need them: CloudFormation runs as THIS role. S3 — the site bucket's
+              # policy, public-access block and ownership; deploy-web.mjs syncs into it.
+              - Effect: Allow
+                Action:
+                  - s3:PutBucketPolicy
+                  - s3:GetBucketPolicy
+                  - s3:DeleteBucketPolicy
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:GetBucketPublicAccessBlock
+                  - s3:PutBucketOwnershipControls
+                  - s3:GetBucketOwnershipControls
+                  - s3:PutBucketTagging
+                  - s3:GetBucketTagging
+                  - s3:GetBucketVersioning
+                  - s3:DeleteBucket
+                Resource: "*"
+              # CloudFront — the site's distribution, origin access control, security headers and
+              # SPA rewrite function; invalidations from deploy-web.mjs
+              - Effect: Allow
+                Action:
+                  - cloudfront:CreateDistribution
+                  - cloudfront:UpdateDistribution
+                  - cloudfront:DeleteDistribution
+                  - cloudfront:GetDistribution
+                  - cloudfront:GetDistributionConfig
+                  - cloudfront:ListDistributions
+                  - cloudfront:TagResource
+                  - cloudfront:UntagResource
+                  - cloudfront:ListTagsForResource
+                  - cloudfront:CreateOriginAccessControl
+                  - cloudfront:UpdateOriginAccessControl
+                  - cloudfront:DeleteOriginAccessControl
+                  - cloudfront:GetOriginAccessControl
+                  - cloudfront:GetOriginAccessControlConfig
+                  - cloudfront:ListOriginAccessControls
+                  - cloudfront:CreateResponseHeadersPolicy
+                  - cloudfront:UpdateResponseHeadersPolicy
+                  - cloudfront:DeleteResponseHeadersPolicy
+                  - cloudfront:GetResponseHeadersPolicy
+                  - cloudfront:GetResponseHeadersPolicyConfig
+                  - cloudfront:ListResponseHeadersPolicies
+                  - cloudfront:GetCachePolicy
+                  - cloudfront:ListCachePolicies
+                  - cloudfront:GetOriginRequestPolicy
+                  - cloudfront:ListOriginRequestPolicies
+                  - cloudfront:CreateFunction
+                  - cloudfront:UpdateFunction
+                  - cloudfront:PublishFunction
+                  - cloudfront:DeleteFunction
+                  - cloudfront:DescribeFunction
+                  - cloudfront:GetFunction
+                  - cloudfront:ListFunctions
+                  - cloudfront:CreateInvalidation
+                  - cloudfront:GetInvalidation
+                  - cloudfront:ListInvalidations
+                Resource: "*"
+              # Cognito — the web user pool, its client, domain and managed login branding; the
+              # administrator creates the household's users
+              - Effect: Allow
+                Action:
+                  - cognito-idp:CreateUserPool
+                  - cognito-idp:UpdateUserPool
+                  - cognito-idp:DeleteUserPool
+                  - cognito-idp:DescribeUserPool
+                  - cognito-idp:SetUserPoolMfaConfig
+                  - cognito-idp:GetUserPoolMfaConfig
+                  - cognito-idp:CreateUserPoolClient
+                  - cognito-idp:UpdateUserPoolClient
+                  - cognito-idp:DeleteUserPoolClient
+                  - cognito-idp:DescribeUserPoolClient
+                  - cognito-idp:CreateUserPoolDomain
+                  - cognito-idp:UpdateUserPoolDomain
+                  - cognito-idp:DeleteUserPoolDomain
+                  - cognito-idp:DescribeUserPoolDomain
+                  - cognito-idp:CreateManagedLoginBranding
+                  - cognito-idp:UpdateManagedLoginBranding
+                  - cognito-idp:DeleteManagedLoginBranding
+                  - cognito-idp:DescribeManagedLoginBranding
+                  - cognito-idp:DescribeManagedLoginBrandingByClient
+                  - cognito-idp:TagResource
+                  - cognito-idp:UntagResource
+                  - cognito-idp:ListTagsForResource
+                  - cognito-idp:AdminCreateUser
+                  - cognito-idp:AdminGetUser
+                  - cognito-idp:ListUsers
+                Resource: "*"
               # Lambda — full management for sam deploy (create, update, event source mappings)
               - Effect: Allow
                 Action:
