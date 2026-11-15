@@ -4,13 +4,16 @@
 // tests/unit/workflows-me.test.mjs
 //
 // Sprint 17 scope 2 (docs/arch-web-app.md §3.1, v0.8): GET /proc/workflows — the Domains menu —
-// and GET /proc/me — the principal with the household's locale and timezone.
+// GET /proc/me — the principal with the household's locale and timezone — and the domain
+// display that dev_scripts/upsert-domain-display.mjs writes.
 
 import { describe, it, afterEach } from 'node:test';
 import assert                      from 'node:assert/strict';
+import { readFileSync }            from 'node:fs';
 
 import { humanise, domainMenus, handle as workflows } from '../../src/proc/workflows.mjs';
 import { describePrincipal, handle as me }            from '../../src/proc/me.mjs';
+import { planDomainDisplays, displayProblem, DOMAIN_DISPLAY_KEYS } from '../../src/proc/workflow-display.mjs';
 
 const wf = (name, domain, version, display = null, description = null) => ({ name, domain, version, display, description });
 
@@ -56,6 +59,12 @@ describe('domainMenus — what the Domains menu draws', () => {
     ];
     assert.deepEqual(domainMenus(rows, [], 'es').map(d => d.label), ['Alfa', 'Bêta']);
     assert.deepEqual(domainMenus(rows, [], 'de').map(d => d.label), ['Alpha', 'Bêta']);
+  });
+
+  it('a domain whose display.menu is false is left out, with its workflows', () => {
+    const menus = domainMenus([{ domain: 'system', display: { menu: false } }, { domain: 'things', display: null }],
+      [wf('in_system', 'system', 1), wf('do_thing', 'things', 1)], 'en');
+    assert.deepEqual(menus.map(d => d.domain), ['things']);
   });
 
   it('a malformed label falls back to the identifier rather than showing it', () => {
@@ -139,5 +148,52 @@ describe('GET /proc/me — the principal, in the household\'s language and timez
     assert.deepEqual([inside.user, inside.roles, inside.locale, inside.timezone], ['sub-a', ['household'], 'en', 'Europe/Madrid']);
     const outside = JSON.parse((await me(req({ 'x-principal-user': 'sub-z' }))).body);
     assert.deepEqual(outside.roles, []);
+  });
+});
+
+describe('planDomainDisplays — what upsert-domain-display.mjs writes', () => {
+  const live = [
+    { domain: 'things', display: { menu: true, label: { es: 'Cosas', en: 'Things' } } },
+    { domain: 'other',  display: null },
+  ];
+
+  it('a domain display takes label and menu, never run_label', () => {
+    assert.equal(displayProblem({ label: 'Things', menu: false }, DOMAIN_DISPLAY_KEYS), null);
+    assert.match(displayProblem({ run_label: '{{x}}' }, DOMAIN_DISPLAY_KEYS), /accepts label, menu — not run_label/);
+  });
+
+  it('a rerun writes nothing: the live display is compared by value, whatever its key order', () => {
+    const plan = planDomainDisplays([{ domain: 'things', display: { label: { en: 'Things', es: 'Cosas' }, menu: true } }, { domain: 'other', display: null }], live);
+    assert.deepEqual(plan, { problems: [], writes: [], current: ['things', 'other'] });
+  });
+
+  it('writes a changed display, and null clears one', () => {
+    const plan = planDomainDisplays([{ domain: 'other', display: { label: 'Other things' } }, { domain: 'things', display: null }], live);
+    assert.deepEqual(plan.writes, [{ domain: 'other', display: { label: 'Other things' } }, { domain: 'things', display: null }]);
+    assert.deepEqual(plan.problems, []);
+  });
+
+  it('refuses a domain that does not exist, one named twice, a missing display, or a bad key', () => {
+    const { problems, writes } = planDomainDisplays([
+      { domain: 'nowhere', display: null },
+      { domain: 'other', display: { label: 'A' } },
+      { domain: 'other', display: { label: 'B' } },
+      { domain: 'things' },
+      { display: null },
+    ], live);
+    assert.equal(problems.length, 4);
+    assert.match(problems[0], /nowhere — no PGC_DomainHelp row/);
+    assert.match(problems[1], /other — named twice/);
+    assert.match(problems[2], /things — display is required/);
+    assert.match(problems[3], /names no domain/);
+    assert.deepEqual(writes, [{ domain: 'other', display: { label: 'A' } }]);
+  });
+
+  it('the seed keeps the system domain out of the menu, and the household file passes', () => {
+    const seed = JSON.parse(readFileSync(new URL('../../src/serv/templates/pgc/seeds/seed_PGC_DomainHelp.json', import.meta.url), 'utf8'));
+    assert.deepEqual(seed.find(r => r.domain === 'system').display, { menu: false });
+    const household = JSON.parse(readFileSync(new URL('../../household/domains.json', import.meta.url), 'utf8'));
+    const rows = household.map(e => ({ domain: e.domain, display: null }));
+    assert.deepEqual(planDomainDisplays(household, rows).problems, []);
   });
 });

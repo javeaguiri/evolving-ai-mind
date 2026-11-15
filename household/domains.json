@@ -1,0 +1,6 @@
+[
+  { "domain": "budgets_expenses", "display": { "label": "Budgets and expenses" } },
+  { "domain": "flashcards",       "display": { "label": "Flashcards" } },
+  { "domain": "inventory",        "display": { "label": "Inventory" } },
+  { "domain": "recipes",          "display": { "label": "Recipes" } }
+]

@@ -2375,7 +2375,8 @@ paths:
       description: >
         What the Domains menu and each domain page's workflow panel draw (docs/arch-web-app.md
         §3.1), the workflows part of Phase 1's GET /domains. Every domain with a PGC_DomainHelp
-        row or a domain workflow, sorted by label in the caller's locale; each with the latest
+        row or a domain workflow, except one whose display.menu is false, sorted by label in the
+        caller's locale; each with the latest
         version of its workflows whose display.menu is not false. System workflows (domain null)
         are never listed — they are not startable by name. Labels are resolved as DomainMenu
         says. The household role is required — the workflows are the household's.

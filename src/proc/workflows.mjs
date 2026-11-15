@@ -6,7 +6,7 @@
 // GET /api/v1/proc/workflows — the household's domains and the workflows a person can start in
 // each: the Domains menu and a domain page's workflow panel (docs/arch-web-app.md §3.1), the
 // workflows part of Phase 1's GET /domains. A domain is any with a PGC_DomainHelp row or a
-// domain workflow; a workflow is the latest version of each domain workflow whose display.menu
+// domain workflow, unless its display.menu is false; a workflow is the latest version of each domain workflow whose display.menu
 // is not false. System workflows (domain null) are never listed — they are not startable by
 // name (runs.mjs). Labels come from display.label on PGC_DomainHelp and PGC_Workflow, in the
 // household's language; with none stored, the humanised identifier, marked labelFallback.
@@ -47,7 +47,7 @@ export function domainMenus(domainRows, workflowRows, locale) {
   const domains = new Map(domainRows.map(d => [d.domain, d.display]));
   for (const wf of latest.values()) if (!domains.has(wf.domain)) domains.set(wf.domain, null);
 
-  return [...domains].map(([domain, display]) => ({
+  return [...domains].filter(([, display]) => display?.menu !== false).map(([domain, display]) => ({
     domain,
     ...labelOf(display, domain, locale),
     workflows: [...latest.values()]

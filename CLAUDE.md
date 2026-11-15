@@ -186,6 +186,7 @@ No linter or formatter is configured. Code review is done against `docs/code-rev
 | `node dev_scripts/upsert-step-type.mjs` | Push step type definitions |
 | `node dev_scripts/upsert-system-context.mjs` | Push system context |
 | `node dev_scripts/upsert-page.mjs [household/pages.json] [--check]` | Push web app pages to `PGC_Page`: no file = the generic Home seed (only created, never overwrites); a file = the household's pages, a new version when changed. Each panel checked against the live registry first; `--check` writes nothing |
+| `node dev_scripts/upsert-domain-display.mjs [household/domains.json] [--check]` | Push `PGC_DomainHelp.display` (a domain's label and menu visibility): no file = the seed's rows, a file = the household's domains. Existing domains only; compared by value, so a rerun prints "no changes" |
 | `node dev_scripts/upsert-schema-registry.mjs [--check]` | Push PGC tables' `PGC_Schema` registry rows from `seed_PGC_Schema.json`; refuses any row the live database disagrees with |
 | `node dev_scripts/pull-prompt.mjs` | Pull prompts from DB to seed file |
 | `node dev_scripts/backfill-embeddings.mjs` | Embed PGC_DomainHelp rows |
