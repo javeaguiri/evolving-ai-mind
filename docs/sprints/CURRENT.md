@@ -87,16 +87,21 @@ state changes, not at close.**
   ephemeral to the clicker alone, in the run's thread. The check stays in `resumeGate`; the design
   said `interactive.mjs` would answer, but it acks within 3 seconds, before the answer is checked,
   and cannot read the run (§8 corrected).
-- **Deploy at the end of the sprint (Javear).** The schema first: once deployed, every Slack
-  message writes the inbox.
-  1. ✅ The SSM parameter `/evolving-mind-ai/household-principals` (Javear, 2026-11-15; v1, `String`).
-  2. `createTable` `PGC_UiMessage` and `PGC_Page`; `addColumn` `PGC_WorkflowRun.label` and
-     `PGC_Workflow.display`; `modifyConstraint` `chk_triggered_by` (`'web'`).
-  3. `upsert-schema-registry.mjs --check`, and `information_schema` read back.
-  4. `sam deploy --no-confirm-changeset`.
-  5. `upsert-system-context.mjs` (tool schemas v18); `upsert-step-type.mjs` (grid hints);
-     `upsert-page.mjs` (the Home seed);
-     `upsert-page.mjs household/pages.json`.
+- **Deployed 2026-11-15 (branch `sprint/16-web-seam`, `b7a33fa`), schema first, every change read
+  from the templates and seeds (Javear: no drift).**
+  1. ✅ SSM `/evolving-mind-ai/household-principals` (Javear; v1, `String`).
+  2. ✅ `createTable` `PGC_UiMessage`, `PGC_Page`; `addColumn` `PGC_WorkflowRun.label`,
+     `PGC_Workflow.display`; `modifyConstraint` `chk_triggered_by` — each request built from its
+     template file, not typed.
+  3. ✅ `upsert-schema-registry.mjs`, then `--check`: 18 of 18 ok. Columns, defaults, CHECKs, the
+     `(page_key, version)` UNIQUE and both `PGC_TableMap` rows read back from the catalog.
+  4. ✅ `sam deploy --no-confirm-changeset`; `HOUSEHOLD_PRINCIPALS` set on `ProcFunction`.
+  5. ✅ `upsert-system-context.mjs` (`minds_eye_tool_schemas` v17 → v18), `upsert-step-type.mjs`
+     (`human_gate`), `upsert-page.mjs` (Home v1), `upsert-page.mjs household/pages.json`. The page
+     upsert compared `jsonb` by text and wrote identical versions on a rerun (Home v3, Money v2,
+     Inventory v2 — same content as the version before); fixed in `b7a33fa`, now idempotent.
+  6. ✅ Read-only smoke checks of every new endpoint, refusals included; logs clean on all four
+     Lambdas. Seven Slack-started runs are waiting at gates (left as they are).
 - **Design v0.6 (2026-11-15, Javear):** a records panel names its source, not a widget; grid, list
   and document are views the viewer switches between. Mock-up republished at the same link.
 
