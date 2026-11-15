@@ -102,6 +102,13 @@ state changes, not at close.**
      Inventory v2 — same content as the version before); fixed in `b7a33fa`, now idempotent.
   6. ✅ Read-only smoke checks of every new endpoint, refusals included; logs clean on all four
      Lambdas. Seven Slack-started runs are waiting at gates (left as they are).
+- **Session 1355 (2026-11-15) — the first `display` write.** Asked for a run label, Novia proposed
+  `display.run_label` "Budget vs expenses — {{report_period_label}}" on `budget_vs_expense_report`,
+  with step 2 preparing `report_period_label` in its `js_transform` (the engine never formats), a
+  passing simulation, and a two-path test plan. Her plan checks the run's label, which
+  `read_workflow_run` did not return — the field she can write was missing from the run read she
+  checks it with (the sibling lesson again). Fixed and deployed in `fa4b116`: both reads of one run
+  share `RUN_READ_COLUMNS`, with `label`. Then approved with *Apply and test* (Javear).
 - **Design v0.6 (2026-11-15, Javear):** a records panel names its source, not a widget; grid, list
   and document are views the viewer switches between. Mock-up republished at the same link.
 
