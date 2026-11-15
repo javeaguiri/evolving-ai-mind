@@ -126,8 +126,6 @@ reason, so the record shows what was decided rather than what quietly vanished.
 
 > **No test environment (interim process):** deploy branch to prod → validate end-to-end → then merge to main. Main must always reflect what is actually running in prod. Once a test environment exists, this flips: deploy to test → validate → merge to main → deploy to prod.
 
-> **The web front end stays off main until Javear says it is stable (decided 2026-11-15).** Web front-end code — `src/ui/web/`, `WebApiFunction`, the site's S3, CloudFront and Cognito, `deploy-web.mjs` — lives on the long-lived branch `web/phase-0`: each web sprint branches from it and merges back into it, never into main. It deploys as its own CloudFormation stack, `evomind-web`, so the prod stack `evomind-infrastructure` and main are never changed by it, and main still equals prod. A backend change the web needs (a PROC endpoint, a column, a contract) goes through the normal path — its own branch, deployed to prod, merged to main — and `web/phase-0` merges main in. `web/phase-0` merges to main only on Javear's word that the web is thoroughly tested and its design has stabilised.
-
 > **Deployment = code + seeds.** `sam deploy` only updates Lambda code. After every deploy, run `git diff main...HEAD -- src/serv/templates/pgc/seeds/` to identify changed seed files, then upsert each one: `node dev_scripts/upsert-workflow.mjs`, `node dev_scripts/upsert-step-type.mjs`, `node dev_scripts/upsert-prompt.mjs`, `node dev_scripts/upsert-system-context.mjs`. Seeds not upserted means the DB is still running the old definitions.
 
 ### Interaction shorthands
