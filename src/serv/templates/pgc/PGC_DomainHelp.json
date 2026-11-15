@@ -11,6 +11,7 @@
     { "name": "embedding",   "type": "vector",      "nullable": true,
       "embed_source": ["domain", "description", "aliases"],
       "comment": "pgvector 1024-dim embedding computed by SERV from domain+description+aliases. NULL until backfill-embeddings.mjs runs on existing rows." },
+    { "name": "display",     "type": "jsonb",       "nullable": true },
     { "name": "created_at",  "type": "timestamptz", "nullable": false, "default": "now()" },
     { "name": "updated_at",  "type": "timestamptz", "nullable": false, "default": "now()" }
   ],

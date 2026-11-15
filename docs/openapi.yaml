@@ -127,10 +127,10 @@ components:
       description: >
         One domain as the Domains menu and its domain page draw it (docs/arch-web-app.md §3.1),
         already in the caller's language. A label is resolved from its language map — the
-        caller's locale, then the household's, then the map's first entry — and, with no label
-        stored, is the humanised identifier (budgets_expenses → "Budgets expenses") with
-        labelFallback true.
-      required: [domain, label, workflows]
+        caller's locale (the household's until a profile exists), then English, then the map's
+        first entry — and, with no label stored, is the humanised identifier (budgets_expenses →
+        "Budgets expenses") with labelFallback true.
+      required: [domain, label, labelFallback, workflows]
       properties:
         domain:        { type: string }
         label:         { type: string, description: "PGC_DomainHelp.display.label, resolved." }
@@ -142,7 +142,7 @@ components:
             sorted by label in the caller's locale. Empty when the domain has none.
           items:
             type: object
-            required: [name, label]
+            required: [name, label, labelFallback, description]
             properties:
               name:          { type: string }
               label:         { type: string, description: "PGC_Workflow.display.label, resolved." }
@@ -1711,6 +1711,7 @@ paths:
                   domains: { type: array, items: { $ref: '#/components/schemas/DomainMenu' } }
         '401': { description: The Cognito authorizer refused the token. }
         '403': { description: household_required, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '500': { description: workflows_truncated, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
 
   /api/v1/ui/web/pages:
     get:
@@ -2395,6 +2396,7 @@ paths:
                   domains: { type: array, items: { $ref: '#/components/schemas/DomainMenu' } }
         '401': { description: principal_required }
         '403': { description: household_required }
+        '500': { description: "workflows_truncated — SERV cut a registry read short, so a domain or workflow could be missing; refused rather than served. Body carries totalMatching." }
 
   /api/v1/proc/ping-db:
     post:

@@ -696,6 +696,9 @@ Resources:
           INTERNAL_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/internal-api-key:2}}'
           # Comma-separated principals (web user subs) holding the household role — proc/principal.mjs
           HOUSEHOLD_PRINCIPALS: '{{resolve:ssm:/evolving-mind-ai/household-principals:1}}'
+          # The household's language (BCP 47) and timezone (IANA) — every principal's until a profile exists — proc/me.mjs
+          HOUSEHOLD_LOCALE:     '{{resolve:ssm:/evolving-mind-ai/household-locale:1}}'
+          HOUSEHOLD_TIMEZONE:   '{{resolve:ssm:/evolving-mind-ai/household-timezone:1}}'
       Events:
         ProcProxy:
           Type: Api
