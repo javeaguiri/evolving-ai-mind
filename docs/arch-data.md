@@ -692,7 +692,7 @@ GROUP BY workflow_id;
 
 Designed for the web front end (`docs/arch-web-app.md`, Sprint 14). **Phase 0 is built (Sprint 16):**
 `PGC_UiMessage`, `PGC_Page`, `PGC_WorkflowRun.label` and `PGC_Workflow.display` exist in the database,
-created from their templates. Everything marked Phase 1 below is designed and not yet built.
+created from their templates; `PGC_DomainHelp.display` joined them in Sprint 17. Everything marked Phase 1 below is designed and not yet built.
 
 ##### PGC_UiMessage — Phase 0
 
