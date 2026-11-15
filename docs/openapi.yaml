@@ -1712,11 +1712,14 @@ paths:
         applies (src/shared/number-rule.mjs) and handed on as numbers; a field that fails it
         is refused and the run is not resumed. On success enqueues WORKFLOW_STEP resume_gate
         carrying gateId; the run keeps its own callback, so an answer never re-points a run at
-        another provider. Callers: Novia's answer_gate (her own test runs only — enforced in
-        minds-eye.mjs), and the web app's POST /gates/{runId}/responses.
+        another provider. Over HTTP the run is checked against the principal (a web run is its
+        starter's, any other the household's) and a Novia test run is refused — its gates are
+        hers. Callers: the web app's POST /gates/{runId}/responses; Novia's answer_gate calls the
+        same answerGate in process, on her own test runs only (minds-eye.mjs).
       operationId: answerGate
       tags: [PROC]
       parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
         - name: runId
           in: path
           required: true
@@ -1742,6 +1745,8 @@ paths:
       responses:
         '202': { description: "Accepted; resume_gate enqueued. Body: { runId }" }
         '400': { description: gateId or action missing }
+        '401': { description: principal_required }
+        '403': { description: "run_forbidden — another user's web run, a run outside the principal's household, or a Novia test run." }
         '404': { description: "run_not_found" }
         '409': { description: "gate_not_waiting — the run is not at a gate; gate_moved — gateId is not the gate it is waiting at. Body carries the waiting gate_id, if any." }
         '422': { description: "invalid_fields — a number field fails its rule. Body: { fields: [{ name, problem }] }; the run is not resumed." }

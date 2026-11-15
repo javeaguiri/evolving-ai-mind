@@ -46,6 +46,8 @@ import { handle as gates }              from './gates.mjs';
 import { handle as inbox }              from './inbox.mjs';
 import { handle as runs }               from './runs.mjs';
 import { handle as pages }              from './pages.mjs';
+import { handle as outputs }            from './outputs.mjs';
+import { handle as sources }            from './sources.mjs';
 import { processScheduledRun }          from './scheduled-run.mjs';
 
 /**
@@ -281,6 +283,13 @@ async function dispatch(req) {
   // Gate responses carry the run id in the path, as replay does (/gates/{runId}/responses).
   if ((req.proxy || '').split('/').filter(Boolean)[0] === 'gates') {
     return gates(req);
+  }
+  // A workflow's output and a source's rows name their subject in the path, as gates do.
+  if ((req.proxy || '').split('/').filter(Boolean)[0] === 'outputs') {
+    return outputs(req);
+  }
+  if ((req.proxy || '').split('/').filter(Boolean)[0] === 'sources') {
+    return sources(req);
   }
 
   switch (req.route) {

@@ -27,7 +27,7 @@ front end needs exists behind a tested, specified API.
 | **1** | 🟡 **The inbox:** `PGC_UiMessage`, written by `enqueueCallback` for `provider: 'web'`; `GET /proc/inbox` |
 | **2** | 🟡 **Run labels (§2.4)**, `GET /proc/runs`, and starting a named workflow |
 | **3** | 🟡 **Pages:** `PGC_Page` with the seeded Home — panel kinds `workflow`, `records`, `summary`, `novia` (`arch-web-app.md` v0.6: a records panel's view is the viewer's switch); `upsert-page.mjs` for the household's pages from a household file (never system seeds); `GET /proc/pages` |
-| **4** | ⬜ **Reads:** `GET /proc/gates`, `GET /proc/outputs` (§2.6), and the read-only `records` read behind `GET /sources/{source}/rows` |
+| **4** | 🟡 **Reads:** `GET /proc/gates`, `GET /proc/outputs` (§2.6), and the read-only `records` read behind `GET /sources/{source}/rows` |
 | **5** | ⬜ **Contract:** `row`, `column` and `group` on the `human_gate` contract (`PGC_StepType`) |
 | **6** | ⬜ **Slack:** `gate_id` on buttons, and the ephemeral "already answered" |
 | **7** | 🟡 **Principal and object checks (§11):** PROC takes the principal from its caller, never from a request body field; every id-taking resource above is checked against it |
@@ -40,7 +40,7 @@ state changes, not at close.**
 | # | Status | Criterion | Scope | Threshold |
 |---|---|---|---|---|
 | **AC1** | 🟡 | A named workflow started for `provider: 'web'` runs to completion with every message in `GET /proc/inbox`, and none in Slack; the run appears in `GET /proc/runs` under its label | [1](#scope), [2](#scope) | Shown live — Javear starts the run (workflow-testing convention); Wren supplies the command and reads the evidence |
-| **AC2** | ⬜ | A gate waiting in a web-started run is listed by `GET /proc/gates` and answered through `POST /proc/gates/{runId}/responses`; a gate already answered elsewhere is refused `409 gate_moved`. `GET /proc/gates` also lists a gate from a Slack-started run | [4](#scope), [6](#scope) | Shown live, one form gate and one other gate type |
+| **AC2** | 🟡 | A gate waiting in a web-started run is listed by `GET /proc/gates` and answered through `POST /proc/gates/{runId}/responses`; a gate already answered elsewhere is refused `409 gate_moved`. `GET /proc/gates` also lists a gate from a Slack-started run | [4](#scope), [6](#scope) | Shown live, one form gate and one other gate type |
 | **AC3** | ⬜ | In Slack, a button carries `gate_id`, and a click on a gate already answered gets the ephemeral "already answered" instead of a resume | [6](#scope) | Shown live, or unit tests if no double answer can be staged without a write to a real run (post-deploy checks are read-only) |
 | **AC4** | 🟡 | `GET /proc/pages` returns the seeded Home and the household's pages from `upsert-page.mjs`; no household page is in a system seed. `GET /proc/outputs` and `GET /sources/{source}/rows` return what a Home panel names, read-only | [3](#scope), [4](#scope) | Shown by curl |
 | **AC5** | ⬜ | The `human_gate` contract carries `row`, `column` and `group`; L0 accepts a gridded form and rejects a malformed one | [5](#scope) | Unit tests, and `simulate` on a gridded form. The live vehicle, `manage_budget`, moves to Sprint 17 |
@@ -67,6 +67,12 @@ state changes, not at close.**
   in the committed `household/pages.json` (Javear), never the system seeds — Home, Money and
   Inventory, passing `--check` against the live registry. Spec first (`63755fa`). `order` named
   `position` (a reserved word otherwise); a records panel names `source` or `entity`.
+- **Item 4 — code and tests (2026-11-15), not yet deployed.** `GET /proc/gates[/{runId}]` (every
+  provider's waiting gates, rebuilt with `buildDialog`; Novia's test runs left out);
+  `GET /proc/outputs/{workflow}` (`outputs.mjs`); `GET /proc/sources/{source}/rows` (`sources.mjs`:
+  `PGD_` tables, views and entities only). Spec first (`33a2521`). Sibling check (15x retro): the
+  HTTP answer route `POST /proc/gates/{runId}/responses` took a run id unchecked — it now needs the
+  principal and refuses a Novia test run; her `answer_gate` calls `answerGate` in process, unchanged.
 - **Deploy at the end of the sprint (Javear).** The schema first: once deployed, every Slack
   message writes the inbox.
   1. ✅ The SSM parameter `/evolving-mind-ai/household-principals` (Javear, 2026-11-15; v1, `String`).
