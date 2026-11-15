@@ -109,6 +109,11 @@ state changes, not at close.**
   `read_workflow_run` did not return — the field she can write was missing from the run read she
   checks it with (the sibling lesson again). Fixed and deployed in `fa4b116`: both reads of one run
   share `RUN_READ_COLUMNS`, with `label`. Then approved with *Apply and test* (Javear).
+  **Result:** v12 live; test runs 1028 (Nov 2026) and 1029 (Dec 2026) both completed with their
+  labels — "Budget vs expenses — November 2026" / "— December 2026" — read back from
+  `PGC_WorkflowRun`; 1029's label was set at its step-8 gate, once step 2 had run. First live inbox
+  rows: 17 Slack messages (her session's), none for her test runs (provider `novia`), as designed.
+  Her sessions post many messages, which bears on inbox retention (§12, open).
 - **Design v0.6 (2026-11-15, Javear):** a records panel names its source, not a widget; grid, list
   and document are views the viewer switches between. Mock-up republished at the same link.
 
