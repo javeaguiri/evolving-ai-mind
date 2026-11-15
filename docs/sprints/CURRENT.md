@@ -41,7 +41,7 @@ state changes, not at close.**
 |---|---|---|---|---|
 | **AC1** | ✅ | A named workflow started for `provider: 'web'` runs to completion with every message in `GET /proc/inbox`, and none in Slack; the run appears in `GET /proc/runs` under its label | [1](#scope), [2](#scope) | Shown live — Javear starts the run (workflow-testing convention); Wren supplies the command and reads the evidence |
 | **AC2** | ✅ | A gate waiting in a web-started run is listed by `GET /proc/gates` and answered through `POST /proc/gates/{runId}/responses`; a gate already answered elsewhere is refused `409 gate_moved`. `GET /proc/gates` also lists a gate from a Slack-started run | [4](#scope), [6](#scope) | Shown live, one form gate and one other gate type |
-| **AC3** | 🟡 | In Slack, a button carries `gate_id`, and a click on a gate already answered gets the ephemeral "already answered" instead of a resume | [6](#scope) | Shown live, or unit tests if no double answer can be staged without a write to a real run (post-deploy checks are read-only) |
+| **AC3** | ✅ | In Slack, a button carries `gate_id`, and a click on a gate already answered gets the ephemeral "already answered" instead of a resume | [6](#scope) | Shown live, or unit tests if no double answer can be staged without a write to a real run (post-deploy checks are read-only) |
 | **AC4** | 🟡 | `GET /proc/pages` returns the seeded Home and the household's pages from `upsert-page.mjs`; no household page is in a system seed. `GET /proc/outputs` and `GET /sources/{source}/rows` return what a Home panel names, read-only | [3](#scope), [4](#scope) | Shown by curl |
 | **AC5** | 🟡 | The `human_gate` contract carries `row`, `column` and `group`; L0 accepts a gridded form and rejects a malformed one | [5](#scope) | Unit tests, and `simulate` on a gridded form. The live vehicle, `manage_budget`, moves to Sprint 17 |
 | **AC6** | 🟡 | No id-taking endpoint trusts an id without checking it against the principal; the principal never comes from a body field | [7](#scope) | Review against §11, and a refusal test per endpoint |
@@ -133,6 +133,12 @@ state changes, not at close.**
   id now on each Slack button. All nine clicks accepted, none refused. AC3 needs a stale click on a
   gate posted after the deploy (older buttons carry no id and are accepted as before): a fresh
   `ping_core` gate answered on the web, then its Slack button clicked.
+- **AC3 met — run 1032 (2026-11-15).** Javear started `ping_core` in Slack; its Test 1 choice gate
+  was answered on the web (`POST /proc/gates/1032/responses`, `202`) and the run moved to Test 2.
+  Javear then clicked B on the Test 1 message: PROC logged `answer is for another gate` (Test 1's
+  `gateId` against Test 2's), the run stayed at Test 2 untouched, and the listener posted
+  `GATE_MOVED` — Javear saw "already answered" ephemerally. One trace id end to end. Not in the
+  inbox, as designed. Run 1032 left waiting at Test 2.
 - **Design v0.6 (2026-11-15, Javear):** a records panel names its source, not a widget; grid, list
   and document are views the viewer switches between. Mock-up republished at the same link.
 
