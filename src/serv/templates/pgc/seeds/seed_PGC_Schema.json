@@ -1564,5 +1564,68 @@
         "function": "set_updated_at()"
       }
     ]
+  },
+  {
+    "table_name": "PGC_UiMessage",
+    "target": "pgc",
+    "domain": null,
+    "description": "The inbox: every message PROC sends a person, for every provider. Written by enqueueCallback before it enqueues to Slack; for the web the row is the delivery. id is the inbox cursor. workflow_run_id has no FK \u2014 runs are purged independently.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "bigserial",
+        "primaryKey": true
+      },
+      {
+        "name": "provider",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "channel",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "thread_id",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "workflow_run_id",
+        "type": "integer",
+        "nullable": true
+      },
+      {
+        "name": "message_type",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "payload",
+        "type": "jsonb",
+        "nullable": false
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      }
+    ],
+    "foreign_keys": [],
+    "constraints": [
+      {
+        "type": "check",
+        "name": "chk_uimessage_provider",
+        "expression": "provider IN ('slack', 'web')"
+      },
+      {
+        "type": "check",
+        "name": "chk_uimessage_type",
+        "expression": "message_type IN ('HUMAN_GATE', 'HUMAN_NOTIFICATION', 'WORKFLOW_ERROR')"
+      }
+    ],
+    "triggers": []
   }
 ]
