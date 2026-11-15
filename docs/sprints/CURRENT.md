@@ -127,6 +127,12 @@ state changes, not at close.**
   gates (smoke check). No December 2026 rows exist in `PGD_Budgets` or `PGD_Expenses` (0, against
   22 and 49 for November) — run 1029's inserts were in Novia's dropped sandbox — so the requested
   December clean-up had nothing to delete.
+- **Run 996 (2026-11-15, Javear in Slack) — evidence for items 1 and 6, not AC3.** A Slack-started
+  `review_inventory` worked through eight gates to its shopping list: every message reached Slack
+  and the inbox (rows 23–31, `slack`), and every gate row's dialog carries its own `gate_id` — the
+  id now on each Slack button. All nine clicks accepted, none refused. AC3 needs a stale click on a
+  gate posted after the deploy (older buttons carry no id and are accepted as before): a fresh
+  `ping_core` gate answered on the web, then its Slack button clicked.
 - **Design v0.6 (2026-11-15, Javear):** a records panel names its source, not a widget; grid, list
   and document are views the viewer switches between. Mock-up republished at the same link.
 
