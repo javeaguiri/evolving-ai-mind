@@ -4,7 +4,12 @@
 "start sprint". The second half of `docs/arch-web-app.md` (v0.6) §10 Phase 0; Sprint 16 built the
 backend seam it sits on. The prior sprint's retro is `docs/sprints/sprint-16.md`.
 
-**Branch (proposed):** `sprint/17-web-front`
+**Branches (proposed) — the web stays off main (`CLAUDE.md`, decided 2026-11-15):**
+
+| Work | Branch | Deploys to | Merges to |
+|---|---|---|---|
+| Backend the web needs — item 2's PROC endpoints, any column or contract | `sprint/17-web-backend`, from main | the prod stack `evomind-infrastructure`, as every sprint does | main, at close |
+| The web front end — items 1, 3–6 | `sprint/17-web-front`, from `web/phase-0` (created from main) | its own stack, `evomind-web` | `web/phase-0` only; main on Javear's word that the web is stable |
 
 ---
 
@@ -27,7 +32,7 @@ answered in the browser; `edit_budget` edits a month in one grid.
 
 | # | Item |
 |---|---|
-| **1** | ⬜ **Infrastructure:** S3 + CloudFront, a Cognito pool with one user, `WebApiFunction` and the web routes, `deploy-web.mjs`, the CSP and the §11 controls. `household-principals` moves to the Cognito `sub` (SSM v2, pin bumped) |
+| **1** | ⬜ **Infrastructure — the `evomind-web` stack:** S3 + CloudFront, a Cognito pool with one user, `WebApiFunction` and the web routes, `deploy-web.mjs`, the CSP and the §11 controls. `household-principals` gains the Cognito `sub` alongside the curl id (SSM v2, pin bumped in prod) |
 | **2** | ⬜ **The two §3.1 reads Sprint 16 did not build:** `GET /workflows` (the *Domains* menu and domain pages' workflow panel, from `PGC_Workflow.display` `label`/`menu`) and `GET /me` |
 | **3** | ⬜ **The shell:** sign-in; 🏠, the *Pages* and *Domains* menus, 🔔, ⚙; Settings › Profile; English catalogs from day one (§13) |
 | **4** | ⬜ **Panels:** workflow panels (*Start*, runs by label, a run stepped through in place); records panels with the view switch (`grid` read-only, `list`); summary panels (`chart`, `metric`, `report`); click-through and report Refresh; domain pages' workflow panel; the run page and run drawer |
