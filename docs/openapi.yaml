@@ -40,8 +40,37 @@ components:
         sandbox does not hold is refused (409), and so is every schema change and bootstrap
         (403). Sent by PROC for a test run's SERV calls and for Novia's sandbox tools; accepted
         on every SERV route. An unknown or malformed name is a 400.
+    PrincipalUser:
+      name: x-principal-user
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 1
+      description: >
+        The person a web-family PROC request acts for (docs/arch-security.md S5, the header form
+        while there is one user): the Cognito sub, set by WebApiFunction from the verified token.
+        Never read from a request body. Only a caller holding the internal key reaches PROC, so
+        only that caller can set it. The principal's roles come from configuration, not the
+        request: 'household' when the user is one of the household's principals. A web-started
+        run belongs to the sub that started it; Slack-started and scheduled runs, and pages,
+        belong to the household. Absent or empty → 401 principal_required.
 
   schemas:
+    UiMessage:
+      type: object
+      description: >
+        One message PROC sent a person — a PGC_UiMessage row (docs/arch-data.md §4.3.7). Written
+        by enqueueCallback for every provider; for the web the row is the delivery.
+      required: [id, provider, messageType, payload, createdAt]
+      properties:
+        id:            { type: integer, description: The inbox cursor. }
+        provider:      { type: string, enum: [slack, web] }
+        threadId:      { type: string, nullable: true }
+        workflowRunId: { type: integer, nullable: true }
+        messageType:   { type: string, enum: [HUMAN_GATE, HUMAN_NOTIFICATION, WORKFLOW_ERROR] }
+        payload:       { type: object, description: "The message exactly as enqueued, without its callback — text for a notification, gate_type + dialog for a gate." }
+        createdAt:     { type: string, format: date-time }
     CorrelationResponse:
       type: object
       properties:
@@ -1704,6 +1733,52 @@ paths:
         '404': { description: "run_not_found" }
         '409': { description: "gate_not_waiting — the run is not at a gate; gate_moved — gateId is not the gate it is waiting at. Body carries the waiting gate_id, if any." }
         '422': { description: "invalid_fields — a number field fails its rule. Body: { fields: [{ name, problem }] }; the run is not resumed." }
+
+  /api/v1/proc/inbox:
+    get:
+      summary: The principal's messages, after a cursor
+      description: >
+        Reads PGC_UiMessage (docs/arch-web-app.md §2.1, §3.1). Without `run`, the principal's own
+        web messages (provider 'web', channel = the principal's sub). With `run`, every message of
+        that run whichever provider it was sent to — how a Slack-started run is followed on the
+        web (§8) — once the run is checked against the principal: a web-started run must be the
+        principal's own, any other run needs the 'household' role. Oldest first. The page is
+        bounded and says so: `more` is true when rows past the last one returned remain.
+      operationId: readInbox
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+        - name: after
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+          description: Return messages with an id greater than this — the previous response's cursor.
+        - name: run
+          in: query
+          required: false
+          schema: { type: integer }
+          description: Only this run's messages, from every provider.
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        '200':
+          description: "{ messages, cursor, more } — cursor is the last id returned, or `after` when none were."
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [messages, cursor, more]
+                properties:
+                  messages: { type: array, items: { $ref: '#/components/schemas/UiMessage' } }
+                  cursor:   { type: integer }
+                  more:     { type: boolean }
+        '400': { description: "invalid_query — after, run or limit is not a valid integer in range." }
+        '401': { description: principal_required }
+        '403': { description: "run_forbidden — the run is another user's web run, or the principal lacks the household role." }
+        '404': { description: run_not_found }
 
   /api/v1/proc/ping-db:
     post:
