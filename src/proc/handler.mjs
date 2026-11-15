@@ -45,6 +45,7 @@ import { handle as replay }             from './replay.mjs';
 import { handle as gates }              from './gates.mjs';
 import { handle as inbox }              from './inbox.mjs';
 import { handle as runs }               from './runs.mjs';
+import { handle as pages }              from './pages.mjs';
 import { processScheduledRun }          from './scheduled-run.mjs';
 
 /**
@@ -288,6 +289,9 @@ async function dispatch(req) {
 
     case 'runs':
       return runs(req);
+
+    case 'pages':
+      return pages(req);
 
     case 'ping-llm':
       return pingLlm(req);

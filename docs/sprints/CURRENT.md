@@ -26,7 +26,7 @@ front end needs exists behind a tested, specified API.
 |---|---|
 | **1** | 🟡 **The inbox:** `PGC_UiMessage`, written by `enqueueCallback` for `provider: 'web'`; `GET /proc/inbox` |
 | **2** | 🟡 **Run labels (§2.4)**, `GET /proc/runs`, and starting a named workflow |
-| **3** | ⬜ **Pages:** `PGC_Page` with the seeded Home — panel kinds `workflow`, `records`, `summary`, `novia` (`arch-web-app.md` v0.6: a records panel's view is the viewer's switch); `upsert-page.mjs` for the household's pages from a household file (never system seeds); `GET /proc/pages` |
+| **3** | 🟡 **Pages:** `PGC_Page` with the seeded Home — panel kinds `workflow`, `records`, `summary`, `novia` (`arch-web-app.md` v0.6: a records panel's view is the viewer's switch); `upsert-page.mjs` for the household's pages from a household file (never system seeds); `GET /proc/pages` |
 | **4** | ⬜ **Reads:** `GET /proc/gates`, `GET /proc/outputs` (§2.6), and the read-only `records` read behind `GET /sources/{source}/rows` |
 | **5** | ⬜ **Contract:** `row`, `column` and `group` on the `human_gate` contract (`PGC_StepType`) |
 | **6** | ⬜ **Slack:** `gate_id` on buttons, and the ephemeral "already answered" |
@@ -42,7 +42,7 @@ state changes, not at close.**
 | **AC1** | 🟡 | A named workflow started for `provider: 'web'` runs to completion with every message in `GET /proc/inbox`, and none in Slack; the run appears in `GET /proc/runs` under its label | [1](#scope), [2](#scope) | Shown live — Javear starts the run (workflow-testing convention); Wren supplies the command and reads the evidence |
 | **AC2** | ⬜ | A gate waiting in a web-started run is listed by `GET /proc/gates` and answered through `POST /proc/gates/{runId}/responses`; a gate already answered elsewhere is refused `409 gate_moved`. `GET /proc/gates` also lists a gate from a Slack-started run | [4](#scope), [6](#scope) | Shown live, one form gate and one other gate type |
 | **AC3** | ⬜ | In Slack, a button carries `gate_id`, and a click on a gate already answered gets the ephemeral "already answered" instead of a resume | [6](#scope) | Shown live, or unit tests if no double answer can be staged without a write to a real run (post-deploy checks are read-only) |
-| **AC4** | ⬜ | `GET /proc/pages` returns the seeded Home and the household's pages from `upsert-page.mjs`; no household page is in a system seed. `GET /proc/outputs` and `GET /sources/{source}/rows` return what a Home panel names, read-only | [3](#scope), [4](#scope) | Shown by curl |
+| **AC4** | 🟡 | `GET /proc/pages` returns the seeded Home and the household's pages from `upsert-page.mjs`; no household page is in a system seed. `GET /proc/outputs` and `GET /sources/{source}/rows` return what a Home panel names, read-only | [3](#scope), [4](#scope) | Shown by curl |
 | **AC5** | ⬜ | The `human_gate` contract carries `row`, `column` and `group`; L0 accepts a gridded form and rejects a malformed one | [5](#scope) | Unit tests, and `simulate` on a gridded form. The live vehicle, `manage_budget`, moves to Sprint 17 |
 | **AC6** | 🟡 | No id-taking endpoint trusts an id without checking it against the principal; the principal never comes from a body field | [7](#scope) | Review against §11, and a refusal test per endpoint |
 | **AC7** | 🟡 | Each new endpoint is in `openapi.yaml` before it is built, and its spec matches its code (sprint-15x retro) | all | Review at close |
@@ -61,11 +61,21 @@ state changes, not at close.**
   `display.run_label`; `GET`/`POST /proc/runs` (`runs.mjs`); Novia writes `display` through
   `register_workflow` and `propose_workflow_fix` (Javear: in item 2, so AC1 can show a label).
   Spec first. A web callback carries no `threadId` — the run is its thread.
-- **Deploy at the end of the sprint (Javear).** Order: the SSM parameter (Javear) → `createTable`
-  `PGC_UiMessage` → `addColumn` `PGC_WorkflowRun.label`, `PGC_Workflow.display` →
-  `modifyConstraint` `chk_triggered_by` → `upsert-schema-registry.mjs --check` →
-  `sam deploy --no-confirm-changeset` → `upsert-system-context.mjs` (tool schemas v18).
-  The schema first: once deployed, every Slack message writes the inbox.
+- **Item 3 — code and tests (2026-11-15), not yet deployed.** `PGC_Page` (template, registry seed,
+  bootstrap seeds the generic Home); `page-config.mjs` checks every panel against its kind and the
+  live registry; `GET /proc/pages`; `upsert-page.mjs [file] [--check]`. The household's pages live
+  in the committed `household/pages.json` (Javear), never the system seeds — Home, Money and
+  Inventory, passing `--check` against the live registry. Spec first (`63755fa`). `order` named
+  `position` (a reserved word otherwise); a records panel names `source` or `entity`.
+- **Deploy at the end of the sprint (Javear).** The schema first: once deployed, every Slack
+  message writes the inbox.
+  1. ✅ The SSM parameter `/evolving-mind-ai/household-principals` (Javear, 2026-11-15; v1, `String`).
+  2. `createTable` `PGC_UiMessage` and `PGC_Page`; `addColumn` `PGC_WorkflowRun.label` and
+     `PGC_Workflow.display`; `modifyConstraint` `chk_triggered_by` (`'web'`).
+  3. `upsert-schema-registry.mjs --check`, and `information_schema` read back.
+  4. `sam deploy --no-confirm-changeset`.
+  5. `upsert-system-context.mjs` (tool schemas v18); `upsert-page.mjs` (the Home seed);
+     `upsert-page.mjs household/pages.json`.
 - **Design v0.6 (2026-11-15, Javear):** a records panel names its source, not a widget; grid, list
   and document are views the viewer switches between. Mock-up republished at the same link.
 

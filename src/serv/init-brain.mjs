@@ -34,6 +34,7 @@ import PGC_Session         from './templates/pgc/PGC_Session.json'         with 
 import PGC_SessionEntry    from './templates/pgc/PGC_SessionEntry.json'    with { type: 'json' };
 import PGC_Memory          from './templates/pgc/PGC_Memory.json'          with { type: 'json' };
 import PGC_UiMessage       from './templates/pgc/PGC_UiMessage.json'       with { type: 'json' };
+import PGC_Page            from './templates/pgc/PGC_Page.json'            with { type: 'json' };
 import seedSchema        from './templates/pgc/seeds/seed_PGC_Schema.json'         with { type: 'json' };
 import seedTableMap      from './templates/pgc/seeds/seed_PGC_TableMap.json'       with { type: 'json' };
 import seedDomainHelp    from './templates/pgc/seeds/seed_PGC_DomainHelp.json'     with { type: 'json' };
@@ -43,6 +44,7 @@ import seedPrompt        from './templates/pgc/seeds/seed_PGC_Prompt.json'      
 import seedSystemContext from './templates/pgc/seeds/seed_PGC_SystemContext.json'  with { type: 'json' };
 import seedStepType      from './templates/pgc/seeds/seed_PGC_StepType.json'      with { type: 'json' };
 import seedCapability    from './templates/pgc/seeds/seed_PGC_Capability.json'   with { type: 'json' };
+import seedPage          from './templates/pgc/seeds/seed_PGC_Page.json'         with { type: 'json' };
 import { currentSandbox }   from './sandbox-context.mjs';
 
 const { Client } = pg;
@@ -88,6 +90,7 @@ const PGC_TEMPLATES = [
   PGC_SessionEntry,
   PGC_Memory,
   PGC_UiMessage,
+  PGC_Page,
 ];
 
 // ---------------------------------------------------------------------------
@@ -202,6 +205,9 @@ export async function bootstrap(req) {
 
     // Step 12 — seed PGC_Capability rows (external service registry)
     await seedPGCCapability(client);
+
+    // Step 13 — seed PGC_Page with the generic Home (the household's own pages are not seeds)
+    await seedPGCPage(client);
 
     const freshEnvironment = tableResults.some(r => r.status === 'created');
     const report = {
@@ -521,6 +527,18 @@ async function seedPGCTableMap(client) {
     );
   }
   console.info('init-brain: PGC_TableMap seeded');
+}
+
+async function seedPGCPage(client) {
+  for (const row of seedPage) {
+    await client.query(
+      `INSERT INTO "PGC_Page" (page_key, version, title, position, panels, created_by)
+       VALUES ($1, 1, $2, $3, $4, 'seed')
+       ON CONFLICT (page_key, version) DO NOTHING`,
+      [row.page_key, JSON.stringify(row.title), row.position, JSON.stringify(row.panels)]
+    );
+  }
+  console.info('init-brain: PGC_Page seeded');
 }
 
 async function seedPGCWorkflow(client) {

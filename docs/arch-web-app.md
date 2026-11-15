@@ -111,7 +111,7 @@ This is an Execution change in `run-workflow.mjs`, `step-executor.mjs`, `callbac
 One row per page version, as `PGC_Workflow` keeps its versions. An evolving artifact (§4.2): written
 by the user from *+ Add panel* or by Novia's gated `propose_page_change` (Phase 1). The system seed
 holds only a generic, empty Home. Until the page editor exists, the household's own pages are written
-by `dev_scripts/upsert-page.mjs` from a household file outside the system seeds, the way
+by `dev_scripts/upsert-page.mjs` from `household/pages.json` (committed, outside the system seeds), the way
 `upsert-workflow.mjs` pushes workflows — so a page naming the household's domains never enters
 system code or seed data.
 
@@ -121,8 +121,8 @@ system code or seed data.
 | page_key | text | Stable identity across versions; the `{pageId}` in `/p/{pageId}` |
 | version | integer | Unique with `page_key`; the latest is drawn |
 | title | jsonb | A string or a language map (§13) |
-| order | integer | Position in the *Pages* menu; Home is `0` |
-| panels | jsonb | Ordered `[{ id, kind, width, title?, config }]`; `kind` is `workflow`, `records`, `summary` or `novia` (§4.2). A records panel's `config` names its `source`, optionally the `view` it opens on, and the views' options; a summary panel's names its `source` (or `workflow`), its `widget` and that widget's options |
+| position | integer | Position in the *Pages* menu; Home is `0` |
+| panels | jsonb | Ordered `[{ id, kind, width, title?, config }]`; `kind` is `workflow`, `records`, `summary` or `novia` (§4.2). A records panel's `config` names its `source` (a table or view) or its `entity`, optionally the `view` it opens on, and the views' options; a summary panel's names its `source` (or `workflow`), its `widget` and that widget's options |
 | created_by | text | `seed`, `user` (the editor or `upsert-page.mjs`), `novia` |
 | created_at | timestamptz | |
 
@@ -313,7 +313,7 @@ which one.
 | Kind | About | Shows | Config | Phase |
 |---|---|---|---|---|
 | **Workflow** | One workflow, or every workflow of a domain | A *Start* button per workflow (its `display.label`); its runs by **run label** (§2.4), newest first; the active run stepped through in place (§4.3). With `show_output`, the latest output as a `report` widget above the runs | `workflow` or `domain`, `limit`, `show_output` | 0 |
-| **Records** | A table, view or entity of a domain | Its rows in one view at a time, with the **view switch** in the panel's header | `source`, `view` (the one it opens on), the views' options | 0, read-only |
+| **Records** | A table, view or entity of a domain | Its rows in one view at a time, with the **view switch** in the panel's header | `source` (a table or view) or `entity`, `view` (the one it opens on), the views' options | 0, read-only |
 | **Summary** | A table or view, or a workflow's latest output | Exactly one widget | `source` (or `workflow` for a report), `widget`, the widget's options | 0 |
 | **Novia** | A topic | Her sessions on that topic (§2.5), newest first; opening one continues it in the panel; *New* starts a session on the topic | `topic` | 1 |
 

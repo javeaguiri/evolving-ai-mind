@@ -1637,5 +1637,73 @@
       }
     ],
     "triggers": []
+  },
+  {
+    "table_name": "PGC_Page",
+    "target": "pgc",
+    "domain": null,
+    "description": "The household's pages for the web app, one row per page version; the latest version of each page_key is drawn. An evolving artifact: the system seed holds only a generic, empty Home; the household's pages are written by upsert-page.mjs from household/pages.json, later by the page editor and Novia. Each panel's config is checked against its kind on write (proc/page-config.mjs).",
+    "columns": [
+      {
+        "name": "id",
+        "type": "serial",
+        "primaryKey": true
+      },
+      {
+        "name": "page_key",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "version",
+        "type": "integer",
+        "nullable": false
+      },
+      {
+        "name": "title",
+        "type": "jsonb",
+        "nullable": false
+      },
+      {
+        "name": "position",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "panels",
+        "type": "jsonb",
+        "nullable": false,
+        "default": "'[]'::jsonb"
+      },
+      {
+        "name": "created_by",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      }
+    ],
+    "foreign_keys": [],
+    "constraints": [
+      {
+        "type": "unique",
+        "name": "uq_page_key_version",
+        "columns": [
+          "page_key",
+          "version"
+        ]
+      },
+      {
+        "type": "check",
+        "name": "chk_page_created_by",
+        "expression": "created_by IN ('seed', 'user', 'novia')"
+      }
+    ],
+    "triggers": []
   }
 ]

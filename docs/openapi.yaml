@@ -1901,6 +1901,7 @@ paths:
                               config: { type: object, description: "workflow: workflow | domain, limit?, show_output?. records: source (a table or view) | entity, view? (grid, list, document), columns?, filter?, order_by?, limit?, title_column?, detail_columns?, picker_column?. summary: widget (chart, metric, report) with source and its options, or workflow for a report. novia: topic." }
         '401': { description: principal_required }
         '403': { description: "household_required — pages belong to the household." }
+        '500': { description: "pages_truncated — SERV cut the PGC_Page read short, so a page could be missing; refused rather than served. Body carries totalMatching." }
 
   /api/v1/proc/ping-db:
     post:

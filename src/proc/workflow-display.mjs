@@ -22,6 +22,13 @@ const TOKEN    = /\{\{[^}]+\}\}/;
 
 const isText = v => typeof v === 'string' && v.trim() !== '';
 
+/** Text, or a language map such as { en: '…', es: '…' } — how every user-facing label is stored. */
+export function isLabel(v) {
+  if (isText(v)) return true;
+  const entries = v && typeof v === 'object' && !Array.isArray(v) ? Object.entries(v) : [];
+  return entries.length > 0 && entries.every(([lang, text]) => LANGUAGE.test(lang) && isText(text));
+}
+
 /**
  * Check a display object before it is written. Absent (undefined) and null are both valid:
  * absent leaves the stored display as it is, null clears it.
@@ -36,11 +43,8 @@ export function displayProblem(display) {
   if (unknown.length) return `display accepts ${DISPLAY_KEYS.join(', ')} — not ${unknown.join(', ')}`;
 
   const { label, menu, run_label: runLabel } = display;
-  if (label !== undefined && !isText(label)) {
-    const entries = label && typeof label === 'object' && !Array.isArray(label) ? Object.entries(label) : [];
-    if (!entries.length || entries.some(([lang, text]) => !LANGUAGE.test(lang) || !isText(text))) {
-      return 'display.label must be text, or a language map such as { "en": "…", "es": "…" }';
-    }
+  if (label !== undefined && !isLabel(label)) {
+    return 'display.label must be text, or a language map such as { "en": "…", "es": "…" }';
   }
   if (menu !== undefined && typeof menu !== 'boolean') return 'display.menu must be true or false';
   if (runLabel !== undefined && !isText(runLabel)) return 'display.run_label must be text — a {{…}} template over the run\'s state';

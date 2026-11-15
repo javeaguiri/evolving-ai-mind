@@ -1,0 +1,39 @@
+[
+  {
+    "page_key": "home",
+    "title": "Home",
+    "position": 0,
+    "panels": [
+      { "id": "budget-report", "kind": "summary",  "width": "1/2", "title": "Budget vs spending",
+        "config": { "widget": "report", "workflow": "budget_vs_expense_report" } },
+      { "id": "budget",        "kind": "workflow", "width": "1/2", "title": "Budget",
+        "config": { "workflow": "edit_budget" } },
+      { "id": "stock",         "kind": "records",  "width": "full", "title": "Stock",
+        "config": { "source": "PGD_Inventory", "view": "list" } }
+    ]
+  },
+  {
+    "page_key": "money",
+    "title": "Money",
+    "position": 10,
+    "panels": [
+      { "id": "expenses",       "kind": "records",  "width": "full", "title": "Expenses",
+        "config": { "source": "PGD_Expenses" } },
+      { "id": "expense-flows",  "kind": "workflow", "width": "1/2",  "title": "Expenses and budget",
+        "config": { "domain": "budgets_expenses" } },
+      { "id": "budget-summary", "kind": "records",  "width": "1/2",  "title": "Budget and spending by category",
+        "config": { "source": "PGD_BudgetExpenseSummary" } }
+    ]
+  },
+  {
+    "page_key": "inventory",
+    "title": "Inventory",
+    "position": 20,
+    "panels": [
+      { "id": "inventory-flows", "kind": "workflow", "width": "full", "title": "Inventory workflows",
+        "config": { "domain": "inventory" } },
+      { "id": "items",           "kind": "records",  "width": "full", "title": "Items",
+        "config": { "source": "PGD_Inventory" } }
+    ]
+  }
+]

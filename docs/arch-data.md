@@ -720,7 +720,7 @@ nothing; its gates reach the web's *Needs you* from `PGC_WorkflowRun`, not from 
 
 The household's pages (`arch-web-app.md` §2.3, §4.2): one row per page version, the latest drawn.
 An evolving artifact — written from *+ Add panel* or by Novia's gated `propose_page_change`
-(Phase 1), or until then by `dev_scripts/upsert-page.mjs` from a household file outside the system
+(Phase 1), or until then by `dev_scripts/upsert-page.mjs` from `household/pages.json`, outside the system
 seeds; seeded with a generic, empty Home only, never a domain-specific page.
 
 | Column | Type | Notes |
@@ -729,7 +729,7 @@ seeds; seeded with a generic, empty Home only, never a domain-specific page.
 | page_key | text | Stable across versions; `UNIQUE (page_key, version)` |
 | version | integer | |
 | title | jsonb | A string or a language map |
-| order | integer | Position in the web app's *Pages* menu; Home is `0` |
+| position | integer | Position in the web app's *Pages* menu; Home is `0` |
 | panels | jsonb | Ordered `[{ id, kind, width, title?, config }]` — `kind` is `workflow`, `records`, `summary` or `novia`; a records panel's `config` names its `source` and optionally the `view` it opens on (the viewer switches views without changing it), a summary panel's its `source` and `widget`. Each `config` is validated on write against its kind's schema — the fitting view types' options, or the widget type's |
 | created_by | text | `seed`, `user` (the page editor or `upsert-page.mjs`), `novia` |
 | created_at | timestamptz | |
