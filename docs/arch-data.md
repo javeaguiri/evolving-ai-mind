@@ -690,9 +690,9 @@ GROUP BY workflow_id;
 
 #### 4.3.7 PGC Experience Tables — the web app
 
-Designed for the web front end (`docs/arch-web-app.md`, Sprint 14). **Designed, not yet built:** no
-row below exists in the database until the phase that builds it, and each moves into its table's
-definition above when it does.
+Designed for the web front end (`docs/arch-web-app.md`, Sprint 14). **Phase 0 is built (Sprint 16):**
+`PGC_UiMessage`, `PGC_Page`, `PGC_WorkflowRun.label` and `PGC_Workflow.display` exist in the database,
+created from their templates. Everything marked Phase 1 below is designed and not yet built.
 
 ##### PGC_UiMessage — Phase 0
 
@@ -792,13 +792,13 @@ edits (`arch-home-brain.md` §4.8).
 | 14 | PGC_Memory | Sprint 3 — episodic/semantic/procedural memory store; GIN indexes on scope + tags; see §4.3.4 |
 | 15 | PGC_Session | v3.2 — `general_chat` and `llm_call_diagnostic` sessions; see `docs/arch-session.md`. Sprint 8 — `request_fingerprint`, `fingerprint_hash` (indexed), `response_source`, `replayed_from_session_id` added (replay corpus, `docs/arch-replay.md`) |
 | 16 | PGC_SessionEntry | v3.2 — per-turn messages array rows; `reasoning` column for diagnostic metadata |
-| 17 | PGC_UiMessage | Web app inbox — every message to a person, all providers; see §4.3.7. **Designed (Sprint 14, Phase 0), not yet built** |
+| 17 | PGC_UiMessage | Web app inbox — every message to a person, all providers; see §4.3.7. Built Sprint 16 |
 | 18 | PGC_RecordEdit | Audit of direct edits from the web app; see §4.3.7. **Designed (Phase 1), not yet built** |
-| 19 | PGC_Page | The household's pages of panels — the web app's navigation; see §4.3.7. **Designed (Sprint 14, Phase 0), not yet built** |
+| 19 | PGC_Page | The household's pages of panels — the web app's navigation; see §4.3.7. Built Sprint 16 |
 | — | PGC_WorkflowStats | SQL view — not a physical table |
 
-**Total: 16 physical PGC tables (14 bootstrapped + 2 session added in v3.2) + 1 view.** Three
-more are designed for the web app and not yet built (17–19).
+**Total: 18 physical PGC tables (14 bootstrapped + 2 session added in v3.2 + 2 web app added in
+Sprint 16) + 1 view.** One more is designed for the web app and not yet built (18, Phase 1).
 
 
 ---
