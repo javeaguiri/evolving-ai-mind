@@ -1639,7 +1639,14 @@ export function dialogToBlocks(dialog, workflowRunId, gateType) {
   const choiceAsDropdown =
     choiceButtons.length > collapseAbove && choiceButtons.length <= SELECT_OPTION_LIMIT;
 
+  let lastGroup;
   for (const field of (dialog?.fields ?? [])) {
+    // A form's group hint is drawn as a heading where it changes; row and column are the web's
+    // grid and Slack stacks the inputs as it always has (docs/arch-web-app.md §7.1).
+    if (field.type === 'input' && field.group && field.group !== lastGroup) {
+      blocks.push({ type: 'header', text: { type: 'plain_text', text: String(field.group).slice(0, 150) } });
+    }
+    if (field.type === 'input') lastGroup = field.group || undefined;
     switch (field.type) {
 
       case 'typography':

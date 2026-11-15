@@ -123,6 +123,7 @@ is validated at.
 |---|---|
 | `type` names a live row in `PGC_StepType` | `unknown_step_type` |
 | Every field the type's `input_contract` marks `required` is present and non-empty | `missing_required_field` |
+| An inline array whose contract entry declares `items.properties`: each declared property, when present, has one of its `type`s (text non-empty), and comes with the properties its `with` names — e.g. a form field's `row` with its `column` | `malformed_array_item` |
 
 Every assertion is **composed from `PGC_StepType.input_contract` and none is written
 in the engine**. The contract's `field` names already encode placement —

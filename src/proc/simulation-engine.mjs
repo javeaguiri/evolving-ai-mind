@@ -29,6 +29,27 @@ const ROUTING_TOKEN_RE = /^(next|end|cancel|step:.+|[a-zA-Z0-9][a-zA-Z0-9_]*)$/;
 // picks one record followed by a small form to edit it.
 const MAX_GATE_FIELDS = 40;
 
+/** Does a value have this contract type? Text must be non-empty; a number finite. */
+function valueHasType(value, type) {
+  if (type === 'string') return typeof value === 'string' && value.trim() !== '';
+  if (type === 'number') return typeof value === 'number' && Number.isFinite(value);
+  if (type === 'array')  return Array.isArray(value);
+  if (type === 'object') return value !== null && typeof value === 'object' && !Array.isArray(value);
+  return typeof value === type;
+}
+
+/** How many group headings a form draws: one wherever a field's group differs from the field before. */
+export function countGroupHeadings(fields) {
+  let headings = 0;
+  let last;
+  for (const f of fields ?? []) {
+    const group = f?.group;
+    if (group !== undefined && group !== null && group !== '' && String(group) !== last) headings += 1;
+    last = group === undefined || group === null || group === '' ? undefined : String(group);
+  }
+  return headings;
+}
+
 // WIDGET_OPTION_LIMIT — the most options each form field type can carry. These are
 // Slack's element ceilings, mirrored here the same way MAX_GATE_FIELDS mirrors a design
 // budget: past them Slack rejects the whole message, so the gate never posts and the run
@@ -208,6 +229,37 @@ export function runLevel0ShapeCheck(steps, { stepTypeContracts = null } = {}) {
     }
   };
 
+  // An array field may describe its items (`items.properties`): each declared property, when
+  // present, must have one of its types — text non-empty — and must come with the properties its
+  // `with` names. Composed from the contract like the required check, so a contract that describes
+  // its items is enforced with no edit here. A "{{template}}" array is built at run time and is not
+  // countable here, as the gate-size check below says too.
+  const checkItems = (step, stepKey) => {
+    const contract = contractByType.get(step?.type);
+    for (const field of contract?.input_contract ?? []) {
+      const props = field.items?.properties;
+      const value = props ? resolvePath(step, field.field) : undefined;
+      if (!Array.isArray(value)) continue;
+      value.forEach((item, i) => {
+        if (!item || typeof item !== 'object') return;
+        const where = `${step.type} step "${stepKey}" ${field.field}[${i}]${item.name ? ` ("${item.name}")` : ''}`;
+        for (const [name, rule] of Object.entries(props)) {
+          if (item[name] === undefined) continue;
+          const types = [].concat(rule.type ?? []);
+          if (types.length && !types.some(t => valueHasType(item[name], t))) {
+            issues.push({ check: 'malformed_array_item', step: stepKey, failure_class: 'malformed_array_item',
+              detail: `${where}: ${name} must be ${types.join(' or ')}. ${field.description ? 'See the contract for ' + field.field + '.' : ''}`.trim() });
+          }
+          const missing = (rule.with ?? []).filter(w => item[w] === undefined || item[w] === null || item[w] === '');
+          if (missing.length) {
+            issues.push({ check: 'malformed_array_item', step: stepKey, failure_class: 'malformed_array_item',
+              detail: `${where}: ${name} comes with ${missing.join(', ')}, which is missing.` });
+          }
+        }
+      });
+    }
+  };
+
   // The envelope every step carries regardless of type. `step` and `type` appear in no
   // input_contract — they are what the contract is selected BY — so composing assertions
   // from the contracts alone leaves the most load-bearing field in the format unchecked.
@@ -258,6 +310,7 @@ export function runLevel0ShapeCheck(steps, { stepTypeContracts = null } = {}) {
   for (const s of steps) {
     const stepKey = String(s?.step);
     checkOne(s, stepKey);
+    checkItems(s, stepKey);
     // An iterator's item_step is a step definition and is held to the same
     // contract. It carries no `step` key of its own, so it is reported against
     // its parent's.
@@ -726,12 +779,14 @@ export function runLevel1StaticAnalysis(steps) {
       // "{{template}}" reference is built by a preceding js_transform and its length
       // is unknown until then, so it is skipped rather than guessed at; L2's
       // data-flow trace is where a row-count estimate could come from.
-      if (Array.isArray(s.fields) && s.fields.length > MAX_GATE_FIELDS) {
+      // A group heading is drawn where a field's group changes, and costs what a field does.
+      const gateUnits = Array.isArray(s.fields) ? s.fields.length + countGroupHeadings(s.fields) : 0;
+      if (gateUnits > MAX_GATE_FIELDS) {
         issues.push({
           check:         'gate_too_many_fields',
           step:          stepKey,
           failure_class: 'gate_too_many_fields',
-          detail:        `human_gate step "${stepKey}" declares ${s.fields.length} fields; a single gate can present at most ${MAX_GATE_FIELDS}. Past that the gate cannot be rendered at all and the run stalls waiting for it. Redesign as a selection gate that picks ONE record, followed by a small form to edit that record — or drop fields the user did not ask for.`,
+          detail:        `human_gate step "${stepKey}" declares ${s.fields.length} fields${gateUnits > s.fields.length ? ` and ${gateUnits - s.fields.length} group headings` : ''}; a single gate can present at most ${MAX_GATE_FIELDS}. Past that the gate cannot be rendered at all and the run stalls waiting for it. Redesign as a selection gate that picks ONE record, followed by a small form to edit that record — or drop fields the user did not ask for.`,
         });
       }
 

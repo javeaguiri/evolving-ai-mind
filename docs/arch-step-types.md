@@ -388,6 +388,16 @@ letting a dropdown offer rows the workflow has already queried:
 
 → `local_state.budget_target = { period: "2026-07-01", category_id: "3", notes: null }`
 
+**Grid hints — `row`, `column`, `group`** (Sprint 16, `docs/arch-web-app.md` §7.1). Optional
+on any form field; structure a surface may draw and a workflow never branches on. A field with
+`row` and `column` is one cell of a grid — `row` names the record (unique within the gate),
+`column` what the cell holds — and the two come as a pair. `group` names a run of consecutive
+rows. `buildDialog` carries all three to the dialog as text; Slack ignores `row` and `column` and
+draws a `header` block where `group` changes; the web draws the grid. L0 refuses an unpaired or
+non-scalar hint (`malformed_array_item`, composed from the contract's `fields.items`), and L1's
+gate-size check counts each group heading as a field. The answer is the same `formValues` map by
+field `name` either way.
+
 **The rule this exists to enforce:** never collect a date, or a value from an
 enumerable set, as free text and then add an `llm_call` to parse it. A picker is
 deterministic; parsing prose costs a model call and can misread the user. `text_input`
