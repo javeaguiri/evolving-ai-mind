@@ -3,8 +3,8 @@
 <!-- Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). -->
 <!-- See LICENSE file in the project root for full license terms. -->
 
-Version: 0.8
-Status: **Approved — Sprint 14 AC0 (Javear, 2026-10-31); v0.6 on Javear's direction, 2026-11-15; v0.7 token storage decided at Sprint 17 scoping, v0.8 `GET /me` and domain labels in Phase 0 (Javear, 2026-11-15).**
+Version: 0.9
+Status: **Approved — Sprint 14 AC0 (Javear, 2026-10-31); v0.6 on Javear's direction, 2026-11-15; v0.7 token storage decided at Sprint 17 scoping, v0.8 `GET /me` and domain labels in Phase 0, v0.9 the infrastructure plan — `WebApiFunction` HTTP only, access token by scope, TOTP first (Javear, 2026-11-15).**
 The four platform choices in §1 were accepted tentatively (Javear, 2026-10-22: "go tentatively with
 the suggestions").
 Last updated: 2026-11-15 (v0.6 — a records panel names its source, not a widget: grid, list and document are views the viewer switches between without changing the panel's config; chart, metric and report stay widgets, on a summary panel. §2.3, §4.2, §4.4, §6.2, §6.3, §10)
@@ -29,8 +29,8 @@ This document takes `docs/arch-home-brain.md` §4 (product direction, v0.1) to b
 | Concern | Design (tentative) |
 |---|---|
 | **Hosting** | Static single-page app in a private S3 bucket behind **CloudFront** (origin access control). CloudFront has a second origin, the existing REST API, for the path `/api/v1/ui/web/*` — the site and its API share one origin, so the browser makes no cross-origin call and needs no CORS. All of it is declared in `template.yaml` |
-| **Reaching PROC** | A new Lambda, **`WebApiFunction`** (EXP), behind `/api/v1/ui/web/{proxy+}`. It is to the web what `SlackbotFunction` is to Slack: reads call PROC over HTTP with the internal API key; actions enqueue the same SQS messages Slack enqueues. **The browser never holds the internal key** |
-| **Sign-in** | An **Amazon Cognito user pool** with managed login: authorization code flow with PKCE, a public app client (no secret), self-sign-up off, users created by the administrator. A passkey or TOTP is the second factor. The web routes carry `ApiKeyRequired: false` and a **Cognito authorizer** on API Gateway; the user's identity is the token's `sub`, never a request field. The access token is held in memory and the refresh token in `localStorage`, behind the CloudFront Content Security Policy (§11) |
+| **Reaching PROC** | A new Lambda, **`WebApiFunction`** (EXP), behind `/api/v1/ui/web/{proxy+}`. It is to the web what `SlackbotFunction` is to Slack, and HTTP only: every route calls its PROC route with the internal API key and `x-principal-user` set to the token's `sub`. Starting a run and answering a gate enqueue their SQS messages inside PROC (`POST /proc/runs`, `POST /proc/gates/{runId}/responses`), so the function holds no queue. **The browser never holds the internal key** |
+| **Sign-in** | An **Amazon Cognito user pool** with managed login: authorization code flow with PKCE, a public app client (no secret), self-sign-up off, users created by the administrator, on the Essentials tier that managed login needs. TOTP is the second factor in Phase 0; passkeys join with Settings › Security (Phase 1). The web routes carry `ApiKeyRequired: false` and a **Cognito authorizer** on API Gateway that requires the scope `aws.cognito.signin.user.admin` — so only an access token passes, never an ID token — the same scope `GetUser` needs for `/me`'s name and email; the user's identity is the token's `sub`, never a request field. Refresh tokens rotate. The access token is held in memory and the refresh token in `localStorage`, behind the CloudFront Content Security Policy (§11) |
 | **Framework** | **React**, written as `.jsx` and bundled by **esbuild** — the bundler the Lambdas already use. Markdown from `/proc` is rendered by `react-markdown` with `remark-gfm` (tables). Every user-visible string goes through `react-i18next` message catalogs (ICU MessageFormat) from the first component (§13). No component library; the editable grid is built from native inputs |
 | **Result delivery** | **Polling** `GET /inbox?after=<cursor>`: a short interval while a run the user started or answered is in flight, a long one when idle, paused while the tab is hidden. A WebSocket is a Phase 1 option taken only if the delay is felt in use |
 
@@ -50,9 +50,10 @@ build-time configuration; they are not secrets.
           │
           ▼
         WebApiFunction  EXP ─── HTTP + internal key ──► ProcFunction  PROC ──► ServFunction ──► PostgreSQL
-          │                                                  │
-          └── SQS WorkflowQueue (CLASSIFY_INTENT,            └── every message to a person:
-              WORKFLOW_STEP resume_gate)                         PGC_UiMessage row (all providers)
+                                                             │
+                                                             ├── SQS WorkflowQueue (execute_top, resume_gate)
+                                                             └── every message to a person:
+                                                                 PGC_UiMessage row (all providers)
                                                                  + SlackResultsQueue (provider 'slack' only)
 ```
 
