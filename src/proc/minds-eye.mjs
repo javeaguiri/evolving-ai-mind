@@ -46,6 +46,10 @@ import { answerGate }                                     from './gates.mjs';
 import { displayProblem }                                 from './workflow-display.mjs';
 import { createReplayRun, applyBreakResolution, breakReport } from './replay.mjs';
 
+// The columns every read of one run takes — read_workflow_run and a test run's wake — so the two
+// cannot disagree about what she sees of a run.
+export const RUN_READ_COLUMNS = ['id', 'workflow_id', 'status', 'triggered_by', 'sandbox', 'label', 'stack', 'state', 'error', 'started_at', 'completed_at'];
+
 // Closes the round's instructions. Constant, so it rides in the cached prefix rather than
 // being re-sent with every turn.
 //
@@ -677,7 +681,7 @@ async function handleRunEvent({ session, entries, runEvent, callback, traceId, r
 
   const runId = waiting.runId;
   const run   = (await getRows('PGC_WorkflowRun', [{ column: 'id', op: 'eq', value: runId }], undefined, 1, undefined,
-    ['id', 'workflow_id', 'status', 'triggered_by', 'sandbox', 'stack', 'state', 'error', 'started_at', 'completed_at'])).rows?.[0];
+    RUN_READ_COLUMNS)).rows?.[0];
   if (!run) return;
   const [wfResp, stepResp] = await Promise.all([
     getRows('PGC_Workflow', [{ column: 'id', op: 'eq', value: run.workflow_id }], undefined, 1, undefined, ['name', 'version', 'steps']),
@@ -3658,6 +3662,8 @@ export function projectWorkflowRun({ run, workflow = null, stepRows = [], outlin
     run_id:              run.id,
     workflow:            workflow?.name ?? null,
     workflow_version:    workflow?.version ?? null,
+    // The run's label (docs/arch-web-app.md §2.4) — null until display.run_label can be filled.
+    label:               run.label ?? null,
     status:              run.status,
     triggered_by:        run.triggered_by ?? null,
     test_run:            run.sandbox != null,
@@ -3861,7 +3867,7 @@ async function executeReadTool(action, params, traceId, session) {
           'PGC_WorkflowRun',
           [{ column: 'id', op: 'eq', value: runId }],
           undefined, 1, undefined,
-          ['id', 'workflow_id', 'status', 'triggered_by', 'sandbox', 'stack', 'state', 'error', 'started_at', 'completed_at']
+          RUN_READ_COLUMNS
         );
         const run = runResp.rows?.[0];
         if (!run) return { error: `Workflow run ${runId} not found` };

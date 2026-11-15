@@ -11,7 +11,8 @@
 import { describe, it } from 'node:test';
 import assert           from 'node:assert/strict';
 
-import { projectWorkflowRun } from '../../src/proc/minds-eye.mjs';
+import { readFileSync }       from 'node:fs';
+import { projectWorkflowRun, RUN_READ_COLUMNS } from '../../src/proc/minds-eye.mjs';
 import { buildDialog }        from '../../src/proc/step-executor.mjs';
 
 const gateStep = {
@@ -110,5 +111,17 @@ describe('projectWorkflowRun — projections', () => {
   it('says whether the run is a test run', () => {
     assert.equal(projectWorkflowRun({ run: waiting, workflow, stepRows }).test_run, false);
     assert.equal(projectWorkflowRun({ run: { ...waiting, sandbox: 'sandbox_3' }, workflow, stepRows }).test_run, true);
+  });
+});
+
+describe('projectWorkflowRun — the run\'s label (Sprint 16)', () => {
+  it('reports the label, null until the workflow\'s run_label can be filled', () => {
+    assert.equal(projectWorkflowRun({ run: { ...waiting, label: 'Budget vs expenses — November 2026' } }).label, 'Budget vs expenses — November 2026');
+    assert.equal(projectWorkflowRun({ run: waiting }).label, null);
+  });
+
+  it('every read of one run asks for the label', () => {
+    assert.ok(RUN_READ_COLUMNS.includes('label'));
+    assert.ok(!readFileSync('src/proc/minds-eye.mjs', 'utf8').includes("'triggered_by', 'sandbox', 'stack'"), 'a run read with its own column list');
   });
 });
