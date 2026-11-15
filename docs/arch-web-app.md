@@ -3,8 +3,8 @@
 <!-- Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). -->
 <!-- See LICENSE file in the project root for full license terms. -->
 
-Version: 0.7
-Status: **Approved — Sprint 14 AC0 (Javear, 2026-10-31); v0.6 on Javear's direction, 2026-11-15; v0.7 token storage decided at Sprint 17 scoping (Javear, 2026-11-15).**
+Version: 0.8
+Status: **Approved — Sprint 14 AC0 (Javear, 2026-10-31); v0.6 on Javear's direction, 2026-11-15; v0.7 token storage decided at Sprint 17 scoping, v0.8 `GET /me` and domain labels in Phase 0 (Javear, 2026-11-15).**
 The four platform choices in §1 were accepted tentatively (Javear, 2026-10-22: "go tentatively with
 the suggestions").
 Last updated: 2026-11-15 (v0.6 — a records panel names its source, not a widget: grid, list and document are views the viewer switches between without changing the panel's config; chart, metric and report stay widgets, on a summary panel. §2.3, §4.2, §4.4, §6.2, §6.3, §10)
@@ -186,11 +186,11 @@ before implementation. Errors are `{ error: { code, message, fields? } }`.
 | `GET /inbox` | `?after=<id>&run=<id>&limit=` | `200 { messages: [...], cursor }` | `GET /proc/inbox`: the user's web messages, plus every message of runs the user answered from the web |
 | `POST /runs` | `{ workflow }` | `202 { runId }`; `403 household_required`; `404 workflow_not_found` | `POST /proc/runs`: starts the latest version of the named domain workflow — no intent classification; a system workflow (`domain` null) is not startable by name — with `triggered_by: 'web'` and `callback: { provider: 'web', channel: <sub> }`, `locale` joining it with the profile (§13). The run (§4.3) is its thread, so the callback carries no `threadId` |
 | `GET /runs` | `?workflow=&domain=&status=&limit=&before=` | `200 { runs: [{ runId, workflowName, label, status, startedAt }], cursor }`, newest first | `GET /proc/runs`: `PGC_WorkflowRun` with explicit `columns`; `label` per §2.4. Feeds workflow panels and the run list in 🔔 |
-| `GET /pages` | — | `200 { pages: [{ pageKey, version, title, order, panels }] }`, latest version of each, `title` resolved to the caller's locale | `GET /proc/pages`. Feeds the *Pages* menu and every household page |
+| `GET /pages` | — | `200 { pages: [{ pageKey, version, title, position, panels }] }`, latest version of each, `title` resolved to the caller's locale | `GET /proc/pages`. Feeds the *Pages* menu and every household page |
 | `GET /sources/{source}/rows` | `?filter=&order_by=&columns=&limit=` | `200 { columns: [{ name, type }], rows }` | A records or summary panel's read (§4.2): the PROC `records` read of a registered table or view, read-only in Phase 0 |
 | `GET /outputs/{workflow}` | — | `200 { runId, label, completedAt, payload }`; `404 no_output` before the first completed run | A `report` widget's read (§2.6): `GET /proc/outputs/{workflow}` |
-| `GET /workflows` | — | `200 { domains: [{ domain, label, workflows: [{ name, label, description }] }] }` | The *Domains* menu and each domain page's workflow panel in Phase 0 — the `workflows` part of §3.2's `GET /domains` |
-| `GET /me` | — | `200 { name, email, locale, timezone }` | The token's claims; `locale` and `timezone` from the user's profile, defaulting to the household's (§13) |
+| `GET /workflows` | — | `200 { domains: [{ domain, label, labelFallback?, workflows: [{ name, label, labelFallback?, description }] }] }` | `GET /proc/workflows`: the *Domains* menu and each domain page's workflow panel in Phase 0 — the `workflows` part of §3.2's `GET /domains`. Labels from `display.label` of `PGC_DomainHelp` and `PGC_Workflow`, resolved as §13 says |
+| `GET /me` | — | `200 { name, email, roles, locale, timezone }` | `GET /proc/me` — the principal's `roles`, and `locale` and `timezone` from the user's profile, defaulting to the household's (SSM `household-locale`, `household-timezone`; §13) — joined with `name` and `email` from Cognito (`GetUser` with the request's token). No profile is stored in Phase 0, so the household's apply |
 
 `WORKFLOW_ERROR` reaches the browser summarised by `WebApiFunction`, as `callback.mjs` summarises it
 for Slack; the summary function is shared, not copied.
@@ -794,7 +794,7 @@ for every message, Slack's included; that is how a Slack-started run also appear
 | | Phase 0 — prove the seam | Phase 1 — the console |
 |---|---|---|
 | **Infrastructure** | S3 + CloudFront, Cognito pool and one user, `WebApiFunction`, the web routes, `deploy-web.mjs` | WebSocket only if polling is felt |
-| **PROC** | `PGC_UiMessage` and `enqueueCallback` writing it; `gate_id`; run labels (§2.4); `PGC_Page` with the seeded Home, and `upsert-page.mjs` for the household's pages; `GET /proc/gates`, `GET /proc/inbox`, `GET /proc/pages`, `GET /proc/runs`, `GET /proc/outputs` (§2.6), the read-only `records` read behind `GET /sources/{source}/rows`, starting a named workflow | Navigate reads (§3.2), session topics (§2.5), the edit policy and `PGC_RecordEdit`, the `arch-home-brain.md` §3.2 Slack leaks removed |
+| **PROC** | `PGC_UiMessage` and `enqueueCallback` writing it; `gate_id`; run labels (§2.4); `PGC_Page` with the seeded Home, and `upsert-page.mjs` for the household's pages; `GET /proc/gates`, `GET /proc/inbox`, `GET /proc/pages`, `GET /proc/runs`, `GET /proc/outputs` (§2.6), `GET /proc/workflows`, `GET /proc/me`, `PGC_DomainHelp.display` (`label`), the read-only `records` read behind `GET /sources/{source}/rows`, starting a named workflow | Navigate reads (§3.2), session topics (§2.5), the edit policy and `PGC_RecordEdit`, the `arch-home-brain.md` §3.2 Slack leaks removed |
 | **Contract** | `row`, `column`, `group` on the `human_gate` contract | A gridded form's answer may carry a subset of rows (§5.4) |
 | **Pages** | Sign-in; the shell — 🏠, the *Pages* and *Domains* menus, 🔔, ⚙; the household's pages from `PGC_Page`, read-only — three to start: Home, Money, Inventory; workflow panels — *Start*, runs by label, the run stepped through in place; records panels with the view switch over the `grid` (read-only) and `list` views; summary panels with the `chart`, `metric` and `report` widgets; click-through and report Refresh; domain pages with their workflow panel; the run page and run drawer; Settings › Profile; every gate type of §5.2 | The page editor — *+ New page*, *Edit page*, *+ Add panel*, delete; the `document` view and the editable grid; Novia's region and Novia panels; 🧠 Help; Activity; the command bar; the rest of Settings; ⓘ on panels and terms; *Ask Novia about this*; Novia's `propose_page_change` |
 | **Slack** | `gate_id` on buttons; the ephemeral "already answered" | `GATE_RESOLVED` message update; the Slack pager and pick-one modal (§5.4), with L1's gate-size check narrowed |
