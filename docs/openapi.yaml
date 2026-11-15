@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: evolving-mind-ai
-  version: 3.7.0
+  version: 3.7.1
   description: >
     Self-evolving cognitive automation system.
     Slack → Lambda → PostgreSQL → LLM pipeline.
@@ -166,7 +166,9 @@ components:
       description: >
         Every web route's error body (docs/arch-web-app.md §3). WebApiFunction translates PROC's
         { error: <code>, …extras } into it: code is PROC's code, message is English text for
-        the catalog to fall back on, fields carries invalid_fields' list. A 401 from the Cognito
+        the catalog to fall back on, fields carries invalid_fields' list. WebApiFunction's own
+        codes: route_not_found (404) for a method or path it does not forward, invalid_body (400)
+        for a body that is not JSON, upstream_unavailable (502). A 401 from the Cognito
         authorizer is API Gateway's own body and never reaches WebApiFunction.
       required: [error]
       properties:
@@ -1678,7 +1680,9 @@ paths:
   # internal key and x-principal-user set to the token's sub — never a request field — and
   # returns PROC's body unchanged on success. Errors are WebError: PROC's code, an English
   # message, and fields where PROC sent them; a PROC or Cognito failure without a code is
-  # 502 upstream_unavailable.
+  # 502 upstream_unavailable. Only the operations below are forwarded: any other method or
+  # path under /api/v1/ui/web/, or a path parameter outside its pattern, is 404
+  # route_not_found and never reaches PROC.
 
   /api/v1/ui/web/me:
     get:
