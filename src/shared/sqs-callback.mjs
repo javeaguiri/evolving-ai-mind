@@ -13,8 +13,13 @@
 
 import { SQSClient, SendMessageCommand, DeleteMessageBatchCommand } from '@aws-sdk/client-sqs';
 import { randomUUID }                    from 'crypto';
+import { insertRow }                     from './serv-client.mjs';
 
 const sqs = new SQSClient({});
+
+// What reaches the inbox: the messages a person reads, for the providers a person reads them on.
+const INBOX_PROVIDERS = new Set(['slack', 'web']);
+const INBOX_TYPES     = new Set(['HUMAN_GATE', 'HUMAN_NOTIFICATION', 'WORKFLOW_ERROR']);
 
 /**
  * Enqueue a result to SYSSQSCallbackResults.
@@ -50,6 +55,23 @@ export async function enqueueCallback(callback, payload) {
 
   // Only a test run listens for completion; no person is sent one.
   if (payload.type === 'WORKFLOW_COMPLETED') return;
+
+  // Every message to a person is written to the inbox first, for every provider
+  // (docs/arch-web-app.md §2.1): for the web the row is the delivery, for Slack it is also
+  // enqueued below. A failed write throws, so Slack never shows a message the inbox lacks.
+  const provider = callback?.provider;
+  if (INBOX_PROVIDERS.has(provider) && INBOX_TYPES.has(payload.type)) {
+    const { callback: _callback, ...message } = payload;
+    await insertRow('PGC_UiMessage', {
+      provider,
+      channel:         callback.channel ?? null,
+      thread_id:       callback.threadId ?? null,
+      workflow_run_id: payload.workflowRunId ?? null,
+      message_type:    payload.type,
+      payload:         message,
+    });
+  }
+  if (provider === 'web') return;
 
   await sqs.send(new SendMessageCommand({
     QueueUrl:    process.env.SQS_SLACK_RESULTS_URL,
