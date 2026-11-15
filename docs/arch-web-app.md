@@ -174,8 +174,11 @@ the latest completed run's messages for every workflow a report names.
 
 ## 3. API surface
 
-All under `/api/v1/ui/web/`, JSON, `Authorization: Bearer`. Spec-first in `docs/openapi.yaml`
-before implementation. Errors are `{ error: { code, message, fields? } }`.
+All under `/api/v1/ui/web/`, JSON, `Authorization: Bearer`. Spec-first in `docs/openapi.yaml` before
+implementation. Errors are `{ error: { code, message, fields? } }`. A call to PROC, or to Cognito
+for `/me`, that fails without an error code — a timeout, a Lambda error, a bare 5xx — is `502
+upstream_unavailable`, the error behind §9's *Offline / API failure* banner; a 5xx PROC names, such
+as `pages_truncated`, keeps its own code.
 
 ### 3.1 Phase 0
 

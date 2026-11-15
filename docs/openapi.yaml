@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: evolving-mind-ai
-  version: 3.6.0
+  version: 3.7.0
   description: >
     Self-evolving cognitive automation system.
     Slack → Lambda → PostgreSQL → LLM pipeline.
@@ -24,8 +24,21 @@ components:
       bearerFormat: JWT
       description: >
         A Cognito user pool access token (docs/arch-web-app.md §1), verified by the API Gateway
-        Cognito authorizer before WebApiFunction runs. The user is the token's sub. The web routes
-        carry no API key; the browser never holds the internal key.
+        Cognito authorizer before WebApiFunction runs. The authorizer requires the scope
+        aws.cognito.signin.user.admin, which only an access token carries, so an ID token is
+        refused; it is the same scope GetUser needs for GET /me's name and email. The user is the
+        token's sub. The web routes carry no API key; the browser never holds the internal key.
+
+  responses:
+    WebUpstreamUnavailable:
+      description: >
+        upstream_unavailable — WebApiFunction got no answer it could pass on: PROC (or, for
+        GET /me, Cognito) failed, timed out, or returned a 5xx without an error code. The app
+        shows "Can't reach the home brain — retrying" and backs off (docs/arch-web-app.md §9).
+        A 5xx PROC names, such as pages_truncated, is passed on as its own code.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WebError' }
 
   parameters:
     CorrelationId:
@@ -1664,7 +1677,8 @@ paths:
   # key (docs/arch-web-app.md §1, §3.1). Each route calls its PROC route over HTTP with the
   # internal key and x-principal-user set to the token's sub — never a request field — and
   # returns PROC's body unchanged on success. Errors are WebError: PROC's code, an English
-  # message, and fields where PROC sent them.
+  # message, and fields where PROC sent them; a PROC or Cognito failure without a code is
+  # 502 upstream_unavailable.
 
   /api/v1/ui/web/me:
     get:
@@ -1691,6 +1705,7 @@ paths:
                   locale:   { type: string }
                   timezone: { type: string }
         '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
 
   /api/v1/ui/web/workflows:
     get:
@@ -1710,6 +1725,7 @@ paths:
                 properties:
                   domains: { type: array, items: { $ref: '#/components/schemas/DomainMenu' } }
         '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
         '403': { description: household_required, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '500': { description: workflows_truncated, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
 
@@ -1731,6 +1747,7 @@ paths:
                 properties:
                   pages: { type: array, items: { $ref: '#/components/schemas/Page' } }
         '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
         '403': { description: household_required, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '500': { description: pages_truncated, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
 
@@ -1751,6 +1768,7 @@ paths:
         '200': { description: "{ columns: [{ name, type }], rows, more, totalMatching? }" }
         '400': { description: invalid_query, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
         '403': { description: household_required, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '404': { description: source_not_found, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
 
@@ -1766,6 +1784,7 @@ paths:
       responses:
         '200': { description: "{ runId, label, completedAt, payload }" }
         '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
         '403': { description: household_required, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '404': { description: "workflow_not_found, or no_output", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
 
@@ -1796,6 +1815,7 @@ paths:
                   more:   { type: boolean }
         '400': { description: invalid_query, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
     post:
       summary: Start a domain workflow from the page — a panel's Start
       description: >
@@ -1817,6 +1837,7 @@ paths:
         '202': { description: "{ runId }" }
         '400': { description: workflow missing, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
         '403': { description: household_required, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '404': { description: workflow_not_found, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
 
@@ -1849,6 +1870,7 @@ paths:
                   more:     { type: boolean }
         '400': { description: invalid_query, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
         '403': { description: run_forbidden, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '404': { description: run_not_found, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
 
@@ -1871,6 +1893,7 @@ paths:
                   gates: { type: array, items: { $ref: '#/components/schemas/WaitingGate' } }
                   more:  { type: boolean }
         '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
 
   /api/v1/ui/web/gates/{runId}:
     get:
@@ -1888,6 +1911,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/WaitingGate' }
         '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
         '403': { description: run_forbidden, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '404': { description: "run_not_found, or gate_not_waiting", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
 
@@ -1921,6 +1945,7 @@ paths:
         '202': { description: "{ runId }" }
         '400': { description: gateId or action missing, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
         '403': { description: run_forbidden, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '404': { description: run_not_found, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '409': { description: "gate_not_waiting, or gate_moved", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
