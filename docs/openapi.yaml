@@ -57,6 +57,18 @@ components:
         belong to the household. Absent or empty → 401 principal_required.
 
   schemas:
+    WaitingGate:
+      type: object
+      required: [runId, gateId, workflowName, gate_type, dialog, waitingSince]
+      properties:
+        runId:        { type: integer }
+        gateId:       { type: string, description: "The gate_id an answer must name (POST /proc/gates/{runId}/responses)." }
+        workflowName: { type: string }
+        label:        { type: string, nullable: true, description: The run's label, once resolved. }
+        gate_type:    { type: string }
+        dialog:       { type: object, description: "The provider-neutral dialog, as buildDialog builds it for Slack, carrying gate_id." }
+        provider:     { type: string, nullable: true, description: "slack, web, or null for a scheduled run." }
+        waitingSince: { type: string, format: date-time }
     UiMessage:
       type: object
       description: >
@@ -1902,6 +1914,101 @@ paths:
         '401': { description: principal_required }
         '403': { description: "household_required — pages belong to the household." }
         '500': { description: "pages_truncated — SERV cut the PGC_Page read short, so a page could be missing; refused rather than served. Body carries totalMatching." }
+
+  /api/v1/proc/gates:
+    get:
+      summary: Every gate waiting for the principal, oldest first
+      description: >
+        Runs at awaiting_human_gate (docs/arch-web-app.md §3.1, 🔔 Needs you), whichever provider
+        started them — Slack, the web, a schedule — each top frame rebuilt into its dialog with
+        buildDialog, as Slack is sent it. Each run is checked against the principal (a web run
+        is its starter's, any other the household's). A Novia test run is left out: its gates
+        are hers to answer. Bounded: `more` is true when waiting runs past those read remain.
+      operationId: listGates
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: "{ gates, more }"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [gates, more]
+                properties:
+                  gates: { type: array, items: { $ref: '#/components/schemas/WaitingGate' } }
+                  more:  { type: boolean }
+        '401': { description: principal_required }
+
+  /api/v1/proc/gates/{runId}:
+    get:
+      summary: The gate one run is waiting at
+      operationId: getGate
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+        - { name: runId, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: The waiting gate.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WaitingGate' }
+        '401': { description: principal_required }
+        '403': { description: run_forbidden }
+        '404': { description: "run_not_found, or gate_not_waiting when the run is not at a gate" }
+
+  /api/v1/proc/outputs/{workflow}:
+    get:
+      summary: A workflow's latest output — what a report widget shows
+      description: >
+        The payload of the last HUMAN_NOTIFICATION of the workflow's latest completed run, read
+        from PGC_UiMessage whichever provider ran it (docs/arch-web-app.md §2.6), with the run's
+        label and completion time. Reports belong to the household: the principal needs the
+        'household' role.
+      operationId: getOutput
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+        - { name: workflow, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: "{ runId, label, completedAt, payload }"
+        '401': { description: principal_required }
+        '403': { description: household_required }
+        '404': { description: "workflow_not_found; no_output before its first completed run with a notification in the inbox" }
+
+  /api/v1/proc/sources/{source}/rows:
+    get:
+      summary: Read-only rows of a domain table, view or entity — what a records or summary panel reads
+      description: >
+        The PROC records read (docs/arch-web-app.md §3.1, §4.2). `source` is a registered PGD_
+        table or view, or an entity name (its root table is read); a PGC_ system table is never
+        a source. Read-only in Phase 0. Columns default to every non-vector column; a named
+        column, or one a filter names, must be registered. The page is bounded and says so:
+        `more` is true when SERV withheld rows past `limit`, with `totalMatching`. The household
+        role is required — domain data belongs to the household.
+      operationId: readSourceRows
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+        - { name: source,   in: path,  required: true,  schema: { type: string } }
+        - { name: columns,  in: query, required: false, schema: { type: string }, description: Comma-separated column names. }
+        - { name: filter,   in: query, required: false, schema: { type: string }, description: "JSON array of { column, op, value } — SERV's getRows filters." }
+        - { name: order_by, in: query, required: false, schema: { type: string }, description: "SQL ORDER BY terms, e.g. \"date DESC\"." }
+        - { name: limit,    in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+      responses:
+        '200':
+          description: "{ columns: [{ name, type }], rows, more, totalMatching? }"
+        '400': { description: "invalid_query — a malformed filter, an unregistered column, or limit out of range." }
+        '401': { description: principal_required }
+        '403': { description: household_required }
+        '404': { description: source_not_found }
 
   /api/v1/proc/ping-db:
     post:
