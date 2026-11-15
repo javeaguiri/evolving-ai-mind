@@ -1,10 +1,9 @@
 # Sprint 17 — The web app's front end
 
-**Status: PROPOSED 2026-11-15 (Wren), not started.** Scope, ACs and branch to be agreed with Javear at
-"start sprint". The second half of `docs/arch-web-app.md` (v0.6) §10 Phase 0; Sprint 16 built the
+**Status: ACTIVE — started 2026-11-15.** Scope and ACs agreed with Javear at "start sprint". The second half of `docs/arch-web-app.md` (v0.6) §10 Phase 0; Sprint 16 built the
 backend seam it sits on. The prior sprint's retro is `docs/sprints/sprint-16.md`.
 
-**Branch (proposed):** `sprint/17-web-front` — merged to main at close, as every sprint is.
+**Branch:** `sprint/17-web-front` — merged to main at close, as every sprint is.
 
 ---
 
@@ -16,14 +15,14 @@ answered in the browser; `edit_budget` edits a month in one grid.
 
 ---
 
-## Decide at scoping
+## Decided at scoping
 
-| Question | Options | Bears on |
-|---|---|---|
-| **Token storage** (§12.1) | Access token in memory + refresh token in `localStorage` behind a strict CSP (tentative) · a cookie session held by `WebApiFunction` | Item 1 |
-| **Inbox retention** (§12.2) | How long `PGC_UiMessage` keeps a row; the latest completed run of every workflow a report names is kept regardless (§2.6). Novia's sessions write many rows (sprint-16 retro) | A retention job or none yet |
+| Question | Decision |
+|---|---|
+| **Token storage** | Access token in memory, refresh token in `localStorage`, behind the CloudFront CSP; the Cognito authorizer on API Gateway validates the token (`arch-web-app.md` v0.7 §1) |
+| **Inbox retention** | None this sprint — `PGC_UiMessage` is unbounded until the web is in use (§12.1 stays open) |
 
-## Scope (proposed)
+## Scope
 
 | # | Item |
 |---|---|
@@ -34,7 +33,7 @@ answered in the browser; `edit_budget` edits a month in one grid.
 | **5** | ⬜ **Every gate type of §5.2** rendered and answered on the web, the grid from `row`/`column`/`group` |
 | **6** | ⬜ **First workflow:** `edit_budget` (357; the design names it `manage_budget`) — month pick, then one grid grouped by budget type, after Novia's four corrections |
 
-## Acceptance Criteria (proposed)
+## Acceptance Criteria
 
 | # | Status | Criterion | Scope | Threshold |
 |---|---|---|---|---|
@@ -59,3 +58,4 @@ answered in the browser; `edit_budget` edits a month in one grid.
 | `GATE_RESOLVED` — retiring Slack's stale buttons when a gate is answered on the web | §8, Phase 1 |
 | WebSocket | Polling first, until it's felt (§10) |
 | Tenancy | Deferred until the second household commits (`arch-home-brain.md`) |
+| Inbox retention | Decided at scoping: none until the web is in use (`arch-web-app.md` §12.1) |

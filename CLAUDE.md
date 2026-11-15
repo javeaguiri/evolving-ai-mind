@@ -251,9 +251,9 @@ Sprints 7–16: see `docs/sprints/sprint-07.md` through `docs/sprints/sprint-16.
 
 Read `docs/sprints/sprint-16.md` (outcome, retro) before scoping Sprint 17.
 
-### Open Work (Sprint 17 — proposed, not started)
+### Open Work (Sprint 17 — active)
 
-The web app's front end, the second half of `docs/arch-web-app.md` §10 Phase 0, proposed in `docs/sprints/CURRENT.md`; branch not created. Token storage (§12.1) and inbox retention (§12.2) are decided at scoping.
+The web app's front end, the second half of `docs/arch-web-app.md` §10 Phase 0, in `docs/sprints/CURRENT.md`, branch `sprint/17-web-front`, started 2026-11-15. Token storage decided (memory + `localStorage` behind the CSP, `arch-web-app.md` v0.7); inbox retention none this sprint.
 
 ### Deferred
 

@@ -3,8 +3,8 @@
 <!-- Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). -->
 <!-- See LICENSE file in the project root for full license terms. -->
 
-Version: 0.6
-Status: **Approved — Sprint 14 AC0 (Javear, 2026-10-31); v0.6 on Javear's direction, 2026-11-15.**
+Version: 0.7
+Status: **Approved — Sprint 14 AC0 (Javear, 2026-10-31); v0.6 on Javear's direction, 2026-11-15; v0.7 token storage decided at Sprint 17 scoping (Javear, 2026-11-15).**
 The four platform choices in §1 were accepted tentatively (Javear, 2026-10-22: "go tentatively with
 the suggestions").
 Last updated: 2026-11-15 (v0.6 — a records panel names its source, not a widget: grid, list and document are views the viewer switches between without changing the panel's config; chart, metric and report stay widgets, on a summary panel. §2.3, §4.2, §4.4, §6.2, §6.3, §10)
@@ -30,7 +30,7 @@ This document takes `docs/arch-home-brain.md` §4 (product direction, v0.1) to b
 |---|---|
 | **Hosting** | Static single-page app in a private S3 bucket behind **CloudFront** (origin access control). CloudFront has a second origin, the existing REST API, for the path `/api/v1/ui/web/*` — the site and its API share one origin, so the browser makes no cross-origin call and needs no CORS. All of it is declared in `template.yaml` |
 | **Reaching PROC** | A new Lambda, **`WebApiFunction`** (EXP), behind `/api/v1/ui/web/{proxy+}`. It is to the web what `SlackbotFunction` is to Slack: reads call PROC over HTTP with the internal API key; actions enqueue the same SQS messages Slack enqueues. **The browser never holds the internal key** |
-| **Sign-in** | An **Amazon Cognito user pool** with managed login: authorization code flow with PKCE, a public app client (no secret), self-sign-up off, users created by the administrator. A passkey or TOTP is the second factor. The web routes carry `ApiKeyRequired: false` and a **Cognito authorizer** on API Gateway; the user's identity is the token's `sub`, never a request field |
+| **Sign-in** | An **Amazon Cognito user pool** with managed login: authorization code flow with PKCE, a public app client (no secret), self-sign-up off, users created by the administrator. A passkey or TOTP is the second factor. The web routes carry `ApiKeyRequired: false` and a **Cognito authorizer** on API Gateway; the user's identity is the token's `sub`, never a request field. The access token is held in memory and the refresh token in `localStorage`, behind the CloudFront Content Security Policy (§11) |
 | **Framework** | **React**, written as `.jsx` and bundled by **esbuild** — the bundler the Lambdas already use. Markdown from `/proc` is rendered by `react-markdown` with `remark-gfm` (tables). Every user-visible string goes through `react-i18next` message catalogs (ICU MessageFormat) from the first component (§13). No component library; the editable grid is built from native inputs |
 | **Result delivery** | **Polling** `GET /inbox?after=<cursor>`: a short interval while a run the user started or answered is in flight, a long one when idle, paused while the tab is hidden. A WebSocket is a Phase 1 option taken only if the delay is felt in use |
 
@@ -824,13 +824,9 @@ The threat model is `docs/arch-security.md`; these are the site's own controls.
 
 ## 12. Open questions
 
-1. **Token storage.** Tentative: access token in memory, refresh token in `localStorage`, with a
-   strict Content Security Policy from CloudFront. The alternative is a cookie session held by
-   `WebApiFunction`, which keeps every token out of script reach at the cost of validating the JWT
-   in the function rather than in API Gateway.
-2. **Inbox retention** (`arch-home-brain.md` §6.5) — how long `PGC_UiMessage` keeps a row; the
+1. **Inbox retention** (`arch-home-brain.md` §6.5) — how long `PGC_UiMessage` keeps a row; the
    latest completed run of every workflow a report names is kept regardless (§2.6).
-3. **Custom domain** — the CloudFront default domain serves Phase 0; a household domain needs an
+2. **Custom domain** — the CloudFront default domain serves Phase 0; a household domain needs an
    ACM certificate in `us-east-1` and a DNS record.
 
 ---
