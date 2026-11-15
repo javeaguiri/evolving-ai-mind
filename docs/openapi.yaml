@@ -1855,6 +1855,53 @@ paths:
         '403': { description: "household_required — only a household principal starts the household's workflows." }
         '404': { description: "workflow_not_found — no domain workflow has this name." }
 
+  /api/v1/proc/pages:
+    get:
+      summary: The household's pages, latest version of each
+      description: >
+        Reads PGC_Page (docs/arch-web-app.md §2.3, §4.2): for each page_key its latest version,
+        ordered by position (Home is 0). Pages belong to the household, so the principal needs
+        the 'household' role. `title` is resolved to the caller's language — English until the
+        profile carries one — falling back to the first language the map holds. `panels` is
+        returned as stored: every panel's config was checked against its kind when written.
+      operationId: listPages
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: "{ pages }"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [pages]
+                properties:
+                  pages:
+                    type: array
+                    items:
+                      type: object
+                      required: [pageKey, version, title, position, panels]
+                      properties:
+                        pageKey:  { type: string }
+                        version:  { type: integer }
+                        title:    { type: string }
+                        position: { type: integer }
+                        panels:
+                          type: array
+                          items:
+                            type: object
+                            required: [id, kind, width, config]
+                            properties:
+                              id:     { type: string }
+                              kind:   { type: string, enum: [workflow, records, summary, novia] }
+                              width:  { type: string, enum: ['1/3', '1/2', '2/3', full] }
+                              title:  { description: A string or a language map. }
+                              config: { type: object, description: "workflow: workflow | domain, limit?, show_output?. records: source (a table or view) | entity, view? (grid, list, document), columns?, filter?, order_by?, limit?, title_column?, detail_columns?, picker_column?. summary: widget (chart, metric, report) with source and its options, or workflow for a report. novia: topic." }
+        '401': { description: principal_required }
+        '403': { description: "household_required — pages belong to the household." }
+
   /api/v1/proc/ping-db:
     post:
       summary: DB ping — proc → serv → RDS health check
