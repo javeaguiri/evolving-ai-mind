@@ -41,6 +41,7 @@ import { resolvePath }          from './template-resolver.mjs';
 import { resolveOutputWrites }  from './state-utils.mjs';
 import { extractTemplateRefs }  from './simulation-engine.mjs';
 import { shouldWriteEpisodicMemory } from './memory-writer.mjs';
+import { resolveRunLabel }      from './workflow-display.mjs';
 
 // ---------------------------------------------------------------------------
 // HTTP entry point
@@ -80,19 +81,19 @@ export async function handle(req) {
 // ---------------------------------------------------------------------------
 
 export async function dispatchSqs(message) {
-  const { action, workflowRunId, gateId, userResponse, responseData, message_ts, traceId, stepExecutionId } = message;
+  const { action, workflowRunId, gateId, slackUserId, userResponse, responseData, message_ts, traceId, stepExecutionId } = message;
   // A scope per message, so one run's sandbox can never reach the next message in the batch.
-  return sandboxScope(() => dispatch({ action, workflowRunId, gateId, userResponse, responseData, message_ts, traceId, source: 'sqs', stepExecutionId }));
+  return sandboxScope(() => dispatch({ action, workflowRunId, gateId, slackUserId, userResponse, responseData, message_ts, traceId, source: 'sqs', stepExecutionId }));
 }
 
 // ---------------------------------------------------------------------------
 // Core dispatch
 // ---------------------------------------------------------------------------
 
-async function dispatch({ action, workflowRunId, gateId, userResponse, responseData, message_ts, traceId, source, stepExecutionId }) {
+async function dispatch({ action, workflowRunId, gateId, slackUserId, userResponse, responseData, message_ts, traceId, source, stepExecutionId }) {
   switch (action) {
     case 'execute_top': return executeTop({ workflowRunId, traceId, source, stepExecutionId });
-    case 'resume_gate': return resumeGate({ workflowRunId, gateId, userResponse, responseData, message_ts, traceId, source });
+    case 'resume_gate': return resumeGate({ workflowRunId, gateId, slackUserId, userResponse, responseData, message_ts, traceId, source });
     case 'resume_llm':  return resumeLlm({ workflowRunId, traceId });
     case 'cancel':      return cancelRun({ workflowRunId, traceId });
     default:
@@ -463,6 +464,7 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
         status:     'awaiting_human_gate',
         stack:      run.stack,
         step_count: (run.step_count ?? 0) + 1,
+        ...labelUpdate(run),
       }
     );
 
@@ -516,6 +518,7 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
         stack:        [],
         state:        { local_state: frame.local_state },
         step_count:   (run.step_count ?? 0) + 1,
+        ...labelUpdate(run),
       }
     );
     console.info('run-workflow: workflow completed', { workflowRunId: run.id, traceId });
@@ -543,6 +546,7 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
     {
       stack:      run.stack,
       step_count: (run.step_count ?? 0) + 1,
+      ...labelUpdate(run),
     }
   );
 
@@ -557,23 +561,27 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
 // resume_gate
 // ---------------------------------------------------------------------------
 
-async function resumeGate({ workflowRunId, gateId, userResponse, responseData, message_ts, traceId, source }) {
+async function resumeGate({ workflowRunId, gateId, slackUserId, userResponse, responseData, message_ts, traceId, source }) {
 
   const run   = await loadRun(workflowRunId, traceId);
   const frame = topFrame(run);
+  const refuse = async reason => {
+    await noticeRefusedClick(run, { gateId, slackUserId, traceId });
+    return { skipped: true, reason };
+  };
 
   if (!frame || frame.type !== 'human_gate') {
     console.warn('run-workflow: resume_gate — no gate frame on top', {
       workflowRunId, topType: frame?.type, traceId,
     });
-    return { skipped: true, reason: 'no_gate_frame' };
+    return refuse('no_gate_frame');
   }
 
   if (run.status !== 'awaiting_human_gate') {
     console.warn('run-workflow: resume_gate — not awaiting (duplicate?)', {
       workflowRunId, status: run.status, traceId,
     });
-    return { skipped: true, reason: 'not_awaiting' };
+    return refuse('not_awaiting');
   }
 
   // An answer that names a gate is applied to that gate only. One that names none — a Slack
@@ -582,7 +590,7 @@ async function resumeGate({ workflowRunId, gateId, userResponse, responseData, m
     console.warn('run-workflow: resume_gate — answer is for another gate', {
       workflowRunId, gateId, waitingGateId: frame.gate_id ?? null, traceId,
     });
-    return { skipped: true, reason: 'gate_moved' };
+    return refuse('gate_moved');
   }
 
   const { gate_type: gateType, step_ref: stepRef, local_state: localState } = frame;
@@ -950,6 +958,7 @@ async function resumeGate({ workflowRunId, gateId, userResponse, responseData, m
       status:     'running',
       stack:      run.stack,
       step_count: (run.step_count ?? 0) + 1,
+      ...labelUpdate(run),
     }
   );
 
@@ -1677,7 +1686,7 @@ async function cancelRun({ workflowRunId, traceId }) {
 // replay_source_run_id + llm_break_policy MUST be here: the replay harness reads the
 // break policy off the run row at the seam (docs/arch-replay.md §7a). Omit them and they
 // arrive undefined — failing closed to `never` and silently billing a run meant to replay.
-export const LOAD_RUN_COLUMNS = ['id', 'workflow_id', 'status', 'input', 'stack', 'callback', 'step_count', 'error', 'replay_source_run_id', 'llm_break_policy', 'sandbox', 'created_at'];
+export const LOAD_RUN_COLUMNS = ['id', 'workflow_id', 'status', 'input', 'stack', 'callback', 'step_count', 'error', 'replay_source_run_id', 'llm_break_policy', 'sandbox', 'label', 'created_at'];
 
 async function loadRun(workflowRunId, traceId) {
   const resp = await getRows(
@@ -1710,7 +1719,8 @@ async function loadRun(workflowRunId, traceId) {
       [{ column: 'id', op: 'eq', value: run.workflow_id }],
       undefined, 1
     );
-    run.workflow_name = wfResp.rows?.[0]?.name ?? 'unknown';
+    run.workflow_name    = wfResp.rows?.[0]?.name ?? 'unknown';
+    run.workflow_display = wfResp.rows?.[0]?.display ?? null;
   }
 
   return run;
@@ -1733,11 +1743,40 @@ function findStep(steps, stepKey) {
 }
 
 /**
+ * A click on a gate the run has already moved past is not applied (resumeGate). The person who made
+ * it is told, privately, in the run's own thread — otherwise a refused click looks like one that
+ * worked. Only for a click that named its gate: a button posted before gates carried an id is
+ * answered as it always was. GATE_MOVED is not a message the inbox keeps.
+ */
+export function gateMovedNotice(run, { gateId, slackUserId, traceId }) {
+  if (!gateId || !slackUserId || run?.callback?.provider !== 'slack') return null;
+  return { type: 'GATE_MOVED', workflowRunId: run.id, gateId, slackUserId, traceId };
+}
+
+async function noticeRefusedClick(run, click) {
+  const notice = gateMovedNotice(run, click);
+  if (notice) await enqueueCallback(run.callback, notice);
+}
+
+/**
  * A HUMAN_GATE payload whose dialog carries the gate's id, so any surface that renders it
  * can answer by run and gate.
  */
 export function withGateId(gatePayload, gateId) {
   return { ...gatePayload, dialog: { ...gatePayload.dialog, gate_id: gateId } };
+}
+
+/**
+ * The run's label, the first time its workflow's display.run_label can be filled from the root
+ * frame's state (docs/arch-web-app.md §2.4). Spread into the update that persists the step, so a
+ * label costs no write of its own; once set it is never resolved again.
+ */
+export function labelUpdate(run) {
+  if (run.label != null) return {};
+  const label = resolveRunLabel(run.workflow_display?.run_label, run.stack?.[0]?.local_state);
+  if (!label) return {};
+  run.label = label;
+  return { label };
 }
 
 function topFrame(run) {

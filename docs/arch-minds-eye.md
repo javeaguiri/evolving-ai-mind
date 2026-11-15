@@ -210,6 +210,12 @@ approve). *Apply and test* approves the change and the plan together, and she st
 once (`withTestRequest`). *Apply* alone applies the change and she does not run the plan. A change
 goes live first and is tested after.
 
+**`display` on `register_workflow` and `propose_workflow_fix`** (Sprint 16) — how people see the
+workflow in menus and lists (`docs/arch-web-app.md` §2.4, §6.3): `label`, `menu` and `run_label`,
+checked by `workflow-display.mjs` `displayProblem` before the gate and again at the write. On a fix
+it replaces the stored display whole, may be sent on its own with `baseVersion`, and `null` clears
+it; the gate shows it as one line (`displayLine`), and `read_workflow` returns it.
+
 **`respond` with `questions`** (Sprint 15x) — `[{ id, text, options? }]`, the questions the user
 must answer, kept separate from `message`. The experience layer draws an answer box under each
 question (choices with room for a comment when `options` is given), plus one for anything else.

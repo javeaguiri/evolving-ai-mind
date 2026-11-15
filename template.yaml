@@ -694,6 +694,8 @@ Resources:
           SERV_API_URL:         'https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod'
           SLACK_BOT_TOKEN:      '{{resolve:ssm:/evolving-mind-ai/slack-bot-token}}'
           INTERNAL_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/internal-api-key:2}}'
+          # Comma-separated principals (web user subs) holding the household role — proc/principal.mjs
+          HOUSEHOLD_PRINCIPALS: '{{resolve:ssm:/evolving-mind-ai/household-principals:1}}'
       Events:
         ProcProxy:
           Type: Api

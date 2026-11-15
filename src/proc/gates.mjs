@@ -6,6 +6,12 @@
 // POST /api/v1/proc/gates/{runId}/responses — answer the gate a run is waiting at, from any
 // surface: the web app, and Novia's answer_gate. Slack answers through interactive.mjs, which
 // enqueues the same resume_gate message.
+// GET  /api/v1/proc/gates[/{runId}] — the gates waiting for the principal, every provider's,
+// each rebuilt into its dialog as Slack is sent it (docs/arch-web-app.md §3.1, 🔔 Needs you).
+//
+// Over HTTP every run is checked against the principal (principal.mjs), and a Novia test run is
+// hers alone: left out of the list, refused an answer. Novia's answer_gate calls answerGate in
+// process and is not routed here.
 //
 // A gate is answered by run AND gate (docs/arch-web-app.md §2.2): the answer names the
 // gate_id its frame received when it was pushed, and an answer for any other gate is refused
@@ -18,7 +24,57 @@ import { respond, err }                  from '../shared/lambda-utils.mjs';
 import { getRows }                       from '../shared/serv-client.mjs';
 import { enqueueWorkflow }               from '../shared/sqs-callback.mjs';
 import { numberRule, readNumber }        from '../shared/number-rule.mjs';
-import { resolveFormFields }             from './step-executor.mjs';
+import { resolveFormFields, buildDialog } from './step-executor.mjs';
+import { readPrincipal, canSeeRun }      from './principal.mjs';
+
+const GATE_RUN_COLUMNS = ['id', 'label', 'status', 'stack', 'callback'];
+const GATE_LIST_LIMIT  = 100;
+
+const isNoviaTestRun = run => run?.callback?.provider === 'novia';
+
+/**
+ * A waiting run's gate as a surface draws it: the top frame rebuilt into its dialog, carrying the
+ * gate_id an answer must name. Null when the run is not at a gate.
+ */
+export function toWaitingGate(run) {
+  const stack = Array.isArray(run?.stack) ? run.stack : [];
+  const frame = stack[stack.length - 1];
+  if (run?.status !== 'awaiting_human_gate' || frame?.type !== 'human_gate') return null;
+  return {
+    runId:        run.id,
+    gateId:       frame.gate_id ?? null,
+    workflowName: frame.workflow_name ?? null,
+    label:        run.label ?? null,
+    gate_type:    frame.gate_type,
+    dialog:       { ...buildDialog(frame.step_ref ?? {}, frame.local_state ?? {}), gate_id: frame.gate_id ?? null },
+    provider:     run.callback?.provider ?? null,
+    waitingSince: frame.pushed_at,
+  };
+}
+
+/**
+ * The gates a principal may see and answer, oldest first.
+ */
+export function waitingGatesFor(principal, runs) {
+  return runs
+    .filter(r => !isNoviaTestRun(r) && canSeeRun(principal, r))
+    .map(toWaitingGate)
+    .filter(Boolean)
+    .sort((a, b) => String(a.waitingSince).localeCompare(String(b.waitingSince)));
+}
+
+async function loadGateRun(runId) {
+  const resp = await getRows('PGC_WorkflowRun', [{ column: 'id', op: 'eq', value: runId }],
+    undefined, 1, undefined, GATE_RUN_COLUMNS);
+  return resp.rows?.[0] ?? null;
+}
+
+/** May this principal act on this run's gate over HTTP? Null when yes. */
+function runRefusal(principal, run) {
+  if (!run) return { status: 404, body: { error: 'run_not_found' } };
+  if (isNoviaTestRun(run) || !canSeeRun(principal, run)) return { status: 403, body: { error: 'run_forbidden' } };
+  return null;
+}
 
 const isEmpty = v => v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0);
 
@@ -99,11 +155,34 @@ export async function handle(req) {
   const traceId  = req.traceId ?? req.correlationId ?? randomUUID();
   const segments = (req.proxy || '').split('/').filter(Boolean);
   const runId    = Number(segments[1]);
+  const method   = req.method ?? 'POST';
+  const reply    = (status, body, okStatus) => respond(status, { success: status === okStatus, ...body }, req.correlationId);
 
-  if ((req.method ?? 'POST') !== 'POST' || segments.length !== 3 || segments[2] !== 'responses' || !Number.isInteger(runId)) {
+  const isList   = method === 'GET'  && segments.length === 1;
+  const isOne    = method === 'GET'  && segments.length === 2 && Number.isInteger(runId);
+  const isAnswer = method === 'POST' && segments.length === 3 && segments[2] === 'responses' && Number.isInteger(runId);
+  if (!isList && !isOne && !isAnswer) {
     return err(404, `gates route not found: ${req.method} /${req.proxy}`, req.correlationId);
   }
 
+  const principal = readPrincipal(req.headers);
+  if (!principal) return reply(401, { error: 'principal_required' }, 200);
+
+  if (isList) {
+    const resp = await getRows('PGC_WorkflowRun', [{ column: 'status', op: 'eq', value: 'awaiting_human_gate' }],
+      'id ASC', GATE_LIST_LIMIT, undefined, GATE_RUN_COLUMNS);
+    return reply(200, { gates: waitingGatesFor(principal, resp.rows ?? []), more: Boolean(resp.truncated) }, 200);
+  }
+
+  const run     = await loadGateRun(runId);
+  const refusal = runRefusal(principal, run);
+  if (refusal) return reply(refusal.status, refusal.body, 200);
+
+  if (isOne) {
+    const gate = toWaitingGate(run);
+    return gate ? reply(200, gate, 200) : reply(404, { error: 'gate_not_waiting', status: run.status }, 200);
+  }
+
   const { status, body } = await answerGate(runId, req.body ?? {}, traceId);
-  return respond(status, { success: status === 202, ...body }, req.correlationId);
+  return reply(status, body, 202);
 }

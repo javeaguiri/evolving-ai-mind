@@ -185,6 +185,7 @@ No linter or formatter is configured. Code review is done against `docs/code-rev
 | `node dev_scripts/upsert-prompt.mjs` | Push prompts to PGC_Prompt |
 | `node dev_scripts/upsert-step-type.mjs` | Push step type definitions |
 | `node dev_scripts/upsert-system-context.mjs` | Push system context |
+| `node dev_scripts/upsert-page.mjs [household/pages.json] [--check]` | Push web app pages to `PGC_Page`: no file = the generic Home seed (only created, never overwrites); a file = the household's pages, a new version when changed. Each panel checked against the live registry first; `--check` writes nothing |
 | `node dev_scripts/upsert-schema-registry.mjs [--check]` | Push PGC tables' `PGC_Schema` registry rows from `seed_PGC_Schema.json`; refuses any row the live database disagrees with |
 | `node dev_scripts/pull-prompt.mjs` | Pull prompts from DB to seed file |
 | `node dev_scripts/backfill-embeddings.mjs` | Embed PGC_DomainHelp rows |
@@ -244,15 +245,15 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 
 ## Current State
 
-Sprints 7–15x: see `docs/sprints/sprint-07.md` through `docs/sprints/sprint-15x.md` (outcome, validation, retro).
+Sprints 7–16: see `docs/sprints/sprint-07.md` through `docs/sprints/sprint-16.md` (outcome, validation, retro).
 
-**Sprint 15x closed 2026-11-07 → 2 sessions, branch `sprint/15x-novia-cost`. 1334 → 1483 unit tests. 13 ACs met, AC11/12/15 struck (not exercised live, unit tests met).** **Novia costs what the request needs:** earlier requests render as stubs (`renderToolOutput` / `renderCallItems`), run events fold iterator passes, writes don't echo vectors, `read_workflow_run` reads a path, and output tokens are logged. Session 1293 cost $0.076/call at a 287K peak; 1307, 1308 and 1320 cost $0.050, $0.041 and $0.040 at 75–93K. **The harness stopped misleading her:** an output-ceiling cut-off raises `isTruncated` (not "invalid JSON"), and a parallel turn rebuilds in loop order. **Fewer stops:** `propose_schema_fix { operations }` is one approval, `testPlan` rides on the gate so *Apply and test* approves both (a change goes live first, then is tested; Javear's preference), a replay answers gates `asSourceRun`, and `fromSandbox` commits a tested copy. **Answering in place:** `respond { questions }` draws an answer box per question in Slack (`noviaQuestionBlocks`, `collectNoviaAnswers`). **Engine:** column defaults on existing tables (`validateColumnDefault`, `addColumn` `column.default`, `modifyColumn` `default` / `dropDefault`), and a Novia gate click is acted on only while its gate is current (`staleGateRefusal`, `atSeq`). Before, an Approve could re-run an approved write.
+**Sprint 16 closed 2026-11-15 → 1 session, branch `sprint/16-web-seam`. 1487 → 1571 unit tests. All 7 ACs met, three of them live (runs 1030, 1031, 1032).** **`/proc` drives a second provider** — the web app's backend seam, Phase 0's first half. `enqueueCallback` writes every message to a person to `PGC_UiMessage` (the web's only delivery; Slack's too, then queued). The principal comes from `x-principal-user` with a household role from SSM `household-principals`; every id-taking route checks it. Runs carry a label from their workflow's `display.run_label`, which Novia writes (session 1355). `PGC_Page` and its panel contract (records panels switch views, `arch-web-app.md` v0.6) with the household's pages in the committed `household/`. Reads: inbox, runs (and starting one), pages, gates, outputs, sources. `row`/`column`/`group` on a form field, checked by an L0 item check composed from the contract. Slack buttons carry `gate_id`; a click on a gate answered elsewhere is refused and told (`GATE_MOVED`). Deployed from templates and seeds, no drift.
 
-Read `docs/sprints/sprint-15x.md` (outcome, retro) before scoping Sprint 16.
+Read `docs/sprints/sprint-16.md` (outcome, retro) before scoping Sprint 17.
 
-### Open Work (Sprint 16 — proposed, not started)
+### Open Work (Sprint 17 — proposed, not started)
 
-The web app's Phase 0 build, from `docs/arch-web-app.md` §10 (approved v0.5), proposed in `docs/sprints/CURRENT.md`; branch not created. `gate_id` and the provider-neutral gate responses endpoint it needs are already built.
+The web app's front end, the second half of `docs/arch-web-app.md` §10 Phase 0, proposed in `docs/sprints/CURRENT.md`; branch not created. Token storage (§12.1) and inbox retention (§12.2) are decided at scoping.
 
 ### Deferred
 

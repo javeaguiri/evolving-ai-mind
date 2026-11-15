@@ -39,6 +39,7 @@ export function parseEvent(event) {
     // Last path segment — used for sub-route switching inside a layer handler
     route:         (event.pathParameters?.proxy || '').split('/').filter(Boolean).pop() || '',
     headers:       event.headers || {},
+    query:         event.queryStringParameters || {},
     body,
     source:        'http',
     correlationId: event.headers?.['x-correlation-id']

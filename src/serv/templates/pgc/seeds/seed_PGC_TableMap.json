@@ -147,5 +147,23 @@
     "allow_update": true,
     "allow_delete": true,
     "views": []
+  },
+  {
+    "table_name": "PGC_UiMessage",
+    "target": "pgc",
+    "domain": null,
+    "allow_insert": true,
+    "allow_update": true,
+    "allow_delete": false,
+    "views": []
+  },
+  {
+    "table_name": "PGC_Page",
+    "target": "pgc",
+    "domain": null,
+    "allow_insert": true,
+    "allow_update": true,
+    "allow_delete": false,
+    "views": []
   }
 ]

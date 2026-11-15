@@ -583,6 +583,11 @@ export function buildDialog(step, localState) {
           // multi_select can still open on an array.
           ...(field.default !== undefined ? { initial: resolveInput(field.default, localState) } : {}),
           ...(options ? { options } : {}),
+          // Grid hints (docs/arch-web-app.md §7.1): structure a surface may draw — the web as a
+          // grid, Slack as a heading per group — and a workflow never branches on.
+          ...Object.fromEntries(['row', 'column', 'group']
+            .filter(k => field[k] !== undefined && field[k] !== null && field[k] !== '')
+            .map(k => [k, String(field[k])])),
           ...(field.type === 'number'
             ? {
                 decimal: field.decimal !== false,

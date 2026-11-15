@@ -690,9 +690,9 @@ GROUP BY workflow_id;
 
 #### 4.3.7 PGC Experience Tables — the web app
 
-Designed for the web front end (`docs/arch-web-app.md`, Sprint 14). **Designed, not yet built:** no
-row below exists in the database until the phase that builds it, and each moves into its table's
-definition above when it does.
+Designed for the web front end (`docs/arch-web-app.md`, Sprint 14). **Phase 0 is built (Sprint 16):**
+`PGC_UiMessage`, `PGC_Page`, `PGC_WorkflowRun.label` and `PGC_Workflow.display` exist in the database,
+created from their templates. Everything marked Phase 1 below is designed and not yet built.
 
 ##### PGC_UiMessage — Phase 0
 
@@ -705,7 +705,7 @@ the browser through `GET /inbox?after=<id>` (`arch-web-app.md` §2.1, §7.2).
 | id | bigserial PK | The inbox cursor — `GET /inbox?after=<id>` returns rows past it |
 | provider | text | `slack`, `web` |
 | channel | text | Slack channel, or the web user's Cognito `sub` |
-| thread_id | text | Slack thread ts, or for the web the run's id |
+| thread_id | text | Slack thread ts. Null for a web run's message: the run is its own thread, named by `workflow_run_id` |
 | workflow_run_id | integer | Nullable, **no FK** — runs are purged independently of the inbox |
 | message_type | text | `HUMAN_GATE`, `HUMAN_NOTIFICATION`, `WORKFLOW_ERROR` |
 | payload | jsonb | The message exactly as enqueued — markdown text, or `gate_type` + `dialog` |
@@ -720,7 +720,7 @@ nothing; its gates reach the web's *Needs you* from `PGC_WorkflowRun`, not from 
 
 The household's pages (`arch-web-app.md` §2.3, §4.2): one row per page version, the latest drawn.
 An evolving artifact — written from *+ Add panel* or by Novia's gated `propose_page_change`
-(Phase 1), or until then by `dev_scripts/upsert-page.mjs` from a household file outside the system
+(Phase 1), or until then by `dev_scripts/upsert-page.mjs` from `household/pages.json`, outside the system
 seeds; seeded with a generic, empty Home only, never a domain-specific page.
 
 | Column | Type | Notes |
@@ -729,8 +729,8 @@ seeds; seeded with a generic, empty Home only, never a domain-specific page.
 | page_key | text | Stable across versions; `UNIQUE (page_key, version)` |
 | version | integer | |
 | title | jsonb | A string or a language map |
-| order | integer | Position in the web app's *Pages* menu; Home is `0` |
-| panels | jsonb | Ordered `[{ id, kind, width, title?, config }]` — `kind` is `workflow`, `data` or `novia`; a data panel's `config` names its `source` and `widget`. Each `config` is validated against its kind's and widget type's schema on write |
+| position | integer | Position in the web app's *Pages* menu; Home is `0` |
+| panels | jsonb | Ordered `[{ id, kind, width, title?, config }]` — `kind` is `workflow`, `records`, `summary` or `novia`; a records panel's `config` names its `source` and optionally the `view` it opens on (the viewer switches views without changing it), a summary panel's its `source` and `widget`. Each `config` is validated on write against its kind's schema — the fitting view types' options, or the widget type's |
 | created_by | text | `seed`, `user` (the page editor or `upsert-page.mjs`), `novia` |
 | created_at | timestamptz | |
 
@@ -792,13 +792,13 @@ edits (`arch-home-brain.md` §4.8).
 | 14 | PGC_Memory | Sprint 3 — episodic/semantic/procedural memory store; GIN indexes on scope + tags; see §4.3.4 |
 | 15 | PGC_Session | v3.2 — `general_chat` and `llm_call_diagnostic` sessions; see `docs/arch-session.md`. Sprint 8 — `request_fingerprint`, `fingerprint_hash` (indexed), `response_source`, `replayed_from_session_id` added (replay corpus, `docs/arch-replay.md`) |
 | 16 | PGC_SessionEntry | v3.2 — per-turn messages array rows; `reasoning` column for diagnostic metadata |
-| 17 | PGC_UiMessage | Web app inbox — every message to a person, all providers; see §4.3.7. **Designed (Sprint 14, Phase 0), not yet built** |
+| 17 | PGC_UiMessage | Web app inbox — every message to a person, all providers; see §4.3.7. Built Sprint 16 |
 | 18 | PGC_RecordEdit | Audit of direct edits from the web app; see §4.3.7. **Designed (Phase 1), not yet built** |
-| 19 | PGC_Page | The household's pages of panels — the web app's navigation; see §4.3.7. **Designed (Sprint 14, Phase 0), not yet built** |
+| 19 | PGC_Page | The household's pages of panels — the web app's navigation; see §4.3.7. Built Sprint 16 |
 | — | PGC_WorkflowStats | SQL view — not a physical table |
 
-**Total: 16 physical PGC tables (14 bootstrapped + 2 session added in v3.2) + 1 view.** Three
-more are designed for the web app and not yet built (17–19).
+**Total: 18 physical PGC tables (14 bootstrapped + 2 session added in v3.2 + 2 web app added in
+Sprint 16) + 1 view.** One more is designed for the web app and not yet built (18, Phase 1).
 
 
 ---

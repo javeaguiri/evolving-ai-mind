@@ -401,7 +401,7 @@ aws sts get-caller-identity  # verify
 
 evolving-mind does **not** use `.env` files at runtime. All secrets are stored in SSM and resolved by CloudFormation at deploy time.
 
-**Six parameters, and every one is `String` — not `SecureString`.** That is an architectural decision, and it is load-bearing at this step rather than merely a preference: `template.yaml` reads these with `{{resolve:ssm:...}}`, which resolves `String` and `StringList` only. A `SecureString` needs `{{resolve:ssm-secure:...}}`, which CloudFormation does not support for Lambda environment variables — so storing these encrypted does not weaken the deploy, it prevents it. IAM reach is the control on these values; `docs/ops-key-rotation.md` §0 sets out the consequence in full.
+**Seven parameters, and every one is `String` — not `SecureString`.** That is an architectural decision, and it is load-bearing at this step rather than merely a preference: `template.yaml` reads these with `{{resolve:ssm:...}}`, which resolves `String` and `StringList` only. A `SecureString` needs `{{resolve:ssm-secure:...}}`, which CloudFormation does not support for Lambda environment variables — so storing these encrypted does not weaken the deploy, it prevents it. IAM reach is the control on these values; `docs/ops-key-rotation.md` §0 sets out the consequence in full.
 
 ```cmd
 aws ssm put-parameter --name "/evolving-mind-ai/slack-bot-token" --value "xoxb-..." --type String --region us-east-2
@@ -410,13 +410,16 @@ aws ssm put-parameter --name "/evolving-mind-ai/llm-api-key" --value "..." --typ
 aws ssm put-parameter --name "/evolving-mind-ai/internal-api-key" --value "..." --type String --region us-east-2
 aws ssm put-parameter --name "/evolving-mind-ai/pgc-database-url" --value "postgresql://..." --type String --region us-east-2
 aws ssm put-parameter --name "/evolving-mind-ai/pgd-database-url" --value "postgresql://..." --type String --region us-east-2
+aws ssm put-parameter --name "/evolving-mind-ai/household-principals" --value "<user-id>[,<user-id>]" --type String --region us-east-2
 ```
 
 **`internal-api-key` is generated here, not obtained from anywhere.** It is the PROC↔SERV shared secret *and* the API Gateway key value, so it must be 20–128 characters with no whitespace — `openssl rand -hex 32` satisfies that by construction. Do not invent a passphrase: one containing a space or symbol is accepted by SSM and then rejected at deploy, failing the stack update partway through. The PowerShell equivalent is in `docs/ops-key-rotation.md` §2.2, along with the reason the value should never be typed inline.
 
+**`household-principals` lists who the household is, not a secret.** The ids of the people who may see the household's runs, gates, pages and records on the web, comma-separated (`docs/arch-security.md` S5). It holds ids only — signing in is the web app's, and each id is the one sent as `x-principal-user`; once Cognito signs people in, it is each person's Cognito `sub`.
+
 **The two database URLs hold the identical value.** PGC and PGD are one database separated by table prefix, not by credentials — same user, same host, same database. Write both from the same variable in the same session. If they drift, one Lambda authenticates and the other does not, which presents as an intermittent fault rather than a clean failure.
 
-> **Reset the version pins before Step 4.** `template.yaml` pins every SSM reference to an explicit version — `{{resolve:ssm:/evolving-mind-ai/llm-api-key:5}}` — so that a rotation cannot silently fail to deploy (`docs/ops-key-rotation.md` §2.1). Those numbers are *this* installation's rotation history, not defaults. **On a fresh install every parameter is at version `1`, and the committed pins will not resolve.** Change the trailing `:N` on all eight pinned references to `:1`, or to whatever version each `put-parameter` returned: `grep -n 'resolve:ssm:[^}]*:[0-9]' template.yaml` lists them. The two Slack parameters are unpinned and need no edit.
+> **Reset the version pins before Step 4.** `template.yaml` pins every SSM reference to an explicit version — `{{resolve:ssm:/evolving-mind-ai/llm-api-key:5}}` — so that a rotation cannot silently fail to deploy (`docs/ops-key-rotation.md` §2.1). Those numbers are *this* installation's rotation history, not defaults. **On a fresh install every parameter is at version `1`, and the committed pins will not resolve.** Change the trailing `:N` on all nine pinned references to `:1`, or to whatever version each `put-parameter` returned: `grep -n 'resolve:ssm:[^}]*:[0-9]' template.yaml` lists them. The two Slack parameters are unpinned and need no edit.
 
 > **Windows note:** Use `cmd.exe` for AWS CLI commands, not PowerShell. For local scripts use `set VAR=value && node script.mjs` — `--env-file` has CRLF issues on Windows.
 

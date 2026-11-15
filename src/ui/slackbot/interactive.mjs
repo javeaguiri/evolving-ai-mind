@@ -157,7 +157,8 @@ export async function handle(req) {
     return handleLlmBreakResolution(buttonValue, payload, req.correlationId);
   }
 
-  const { workflowRunId, action: userResponse, responseData, label: buttonLabel } = buttonValue;
+  // gateId names the gate the button was drawn for; resumeGate refuses it once the run has moved on.
+  const { workflowRunId, gateId, action: userResponse, responseData, label: buttonLabel } = buttonValue;
   if (!workflowRunId || userResponse === undefined || userResponse === null) {
     console.warn('interactive: button value missing workflowRunId or action', { buttonValue });
     return err(400, 'Button value must contain workflowRunId and action', req.correlationId);
@@ -187,7 +188,7 @@ export async function handle(req) {
             callback_id:      'text_input_gate',
             notify_on_close:  true,
             private_metadata: buildPrivateMetadata(
-              { workflowRunId, userResponse, traceId, modalTitle: modal.title, callback: { provider: 'slack', channel, threadId } },
+              { workflowRunId, gateId, userResponse, traceId, slackUserId: payload.user?.id, modalTitle: modal.title, callback: { provider: 'slack', channel, threadId } },
               preservedContentBlocks(payload.message?.blocks),
             ),
             title:   { type: 'plain_text', text: modal.title ?? 'Input' },
@@ -340,6 +341,7 @@ export async function handle(req) {
         type:          'WORKFLOW_STEP',
         action:        'resume_gate',
         workflowRunId,
+        ...(gateId && { gateId }),
         userResponse,
         ...(mergedResponseData && { responseData: mergedResponseData }),
         // message_ts is the ts of the gate message being interacted with.
@@ -995,7 +997,7 @@ async function handleViewSubmission(payload, correlationId) {
     return err(400, 'Invalid private_metadata', correlationId);
   }
 
-  const { workflowRunId, userResponse: modalUserResponse, traceId: metaTraceId, modalTitle, callback, contentBlocks } = meta;
+  const { workflowRunId, gateId, slackUserId, userResponse: modalUserResponse, traceId: metaTraceId, modalTitle, callback, contentBlocks } = meta;
   if (!workflowRunId || !callback) {
     console.warn('interactive: view_submission missing workflowRunId or callback', { meta, traceId });
     return err(400, 'view_submission private_metadata must contain workflowRunId and callback', correlationId);
@@ -1025,6 +1027,8 @@ async function handleViewSubmission(payload, correlationId) {
         type:          'WORKFLOW_STEP',
         action:        'resume_gate',
         workflowRunId,
+        ...(gateId && { gateId }),
+        ...(slackUserId && { slackUserId }),
         userResponse:  modalUserResponse ?? 'confirm',
         responseData:  { inputValue: inputValue ?? '' },
         callback,
