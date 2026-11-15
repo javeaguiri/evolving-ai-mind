@@ -730,7 +730,7 @@ seeds; seeded with a generic, empty Home only, never a domain-specific page.
 | version | integer | |
 | title | jsonb | A string or a language map |
 | order | integer | Position in the web app's *Pages* menu; Home is `0` |
-| panels | jsonb | Ordered `[{ id, kind, width, title?, config }]` — `kind` is `workflow`, `data` or `novia`; a data panel's `config` names its `source` and `widget`. Each `config` is validated against its kind's and widget type's schema on write |
+| panels | jsonb | Ordered `[{ id, kind, width, title?, config }]` — `kind` is `workflow`, `records`, `summary` or `novia`; a records panel's `config` names its `source` and optionally the `view` it opens on (the viewer switches views without changing it), a summary panel's its `source` and `widget`. Each `config` is validated on write against its kind's schema — the fitting view types' options, or the widget type's |
 | created_by | text | `seed`, `user` (the page editor or `upsert-page.mjs`), `novia` |
 | created_at | timestamptz | |
 
