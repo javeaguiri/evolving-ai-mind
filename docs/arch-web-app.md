@@ -766,7 +766,7 @@ for every message, Slack's included; that is how a Slack-started run also appear
 
 | Case | Behaviour |
 |---|---|
-| **Slack-started run, gate answered on the web** | The response is enqueued with the run's own callback (Slack). The next gate and the results post to the Slack thread as always, and through the inbox they also appear in 🔔 and in the run on the web. The Slack message's buttons stay live; a click there is refused by `gate_id` (§2.2) and `interactive.mjs` answers *"Already answered elsewhere."* ephemerally |
+| **Slack-started run, gate answered on the web** | The response is enqueued with the run's own callback (Slack). The next gate and the results post to the Slack thread as always, and through the inbox they also appear in 🔔 and in the run on the web. The Slack message's buttons stay live; each carries its `gate_id`, a click there is refused by `resumeGate` (§2.2), and the clicker alone is told *"Already answered — your click was not applied."* in the run's thread — a `GATE_MOVED` callback the listener posts ephemerally |
 | **Web-started run** | No Slack message exists, so it can only be answered on the web |
 | **Phase 1** | A `GATE_RESOLVED` callback updates the Slack message to show it was answered on the web, so the stale buttons disappear rather than refuse |
 

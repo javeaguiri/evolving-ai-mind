@@ -117,7 +117,7 @@ describe('gate_id is given when a gate frame is pushed', () => {
   });
 
   it('resumeGate refuses an answer that names another gate, and accepts one that names none', () => {
-    assert.match(src, /if \(gateId && gateId !== frame\.gate_id\) \{[\s\S]{0,300}reason: 'gate_moved'/);
+    assert.match(src, /if \(gateId && gateId !== frame\.gate_id\) \{[\s\S]{0,300}refuse\('gate_moved'\)/);
   });
 
   it('withGateId puts the id on the dialog and leaves the payload otherwise as it was', () => {

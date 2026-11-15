@@ -153,6 +153,10 @@ async function processRecord(record) {
         await postExplainStepSelect(message);
         break;
 
+      case 'GATE_MOVED':
+        await postGateMoved(message);
+        break;
+
       default:
         console.warn('callback: unknown message type', message.type);
     }
@@ -625,6 +629,21 @@ async function postHumanNotification(message) {
 // because PROC emits raw technical error strings that may exceed Slack's block limit.
 // Full detail is always in CloudWatch and PGC_Prompt.error_log.
 // ---------------------------------------------------------------------------
+
+// A click on a gate the run had already moved past — answered elsewhere, or clicked twice — is
+// refused by resumeGate. Only the person who clicked is told, privately, in the run's thread.
+export const GATE_MOVED_TEXT = 'Already answered — your click was not applied.';
+
+async function postGateMoved(message) {
+  const { callback, slackUserId, workflowRunId, traceId } = message;
+  await slack.chat.postEphemeral({
+    channel:   callback.channel,
+    user:      slackUserId,
+    text:      GATE_MOVED_TEXT,
+    ...(callback.threadId ? { thread_ts: callback.threadId } : {}),
+  });
+  console.info('callback: GATE_MOVED posted', { channel: callback.channel, workflowRunId, traceId });
+}
 
 async function postWorkflowError(message) {
   const { callback, step, message: errMessage, traceId, workflowRunId } = message;
@@ -1616,6 +1635,9 @@ function buildObjectArrayTable(items) {
 }
 
 export function dialogToBlocks(dialog, workflowRunId, gateType) {
+  // Every button names the gate it answers (docs/arch-web-app.md §2.2), so a click on a gate the
+  // run has moved past is refused by resumeGate instead of being applied to the gate after it.
+  const gateRef = dialog?.gate_id ? { gateId: dialog.gate_id } : {};
   const blocks = [];
 
   // Every reveal on this gate shares one table-character budget — Slack applies the 10,000
@@ -1710,6 +1732,7 @@ export function dialogToBlocks(dialog, workflowRunId, gateType) {
               action_id: `list_select_${selectable.secondaryAction.action}`,
               value:     JSON.stringify({
                 workflowRunId,
+                ...gateRef,
                 action:       selectable.secondaryAction.action,
                 label:        selectable.secondaryAction.label,
                 responseData: { listGroup: section.table ?? '' },
@@ -1879,13 +1902,13 @@ export function dialogToBlocks(dialog, workflowRunId, gateType) {
                 action_id: 'workflow_choice_submit',
                 // Carries no option value of its own — the chosen option arrives in
                 // state.values, and resumeGate resolves it back to the option.
-                value:     JSON.stringify({ workflowRunId, action: 'confirm', label: 'Select' }),
+                value:     JSON.stringify({ workflowRunId, ...gateRef, action: 'confirm', label: 'Select' }),
               },
               ...allButtons.filter(b => b.action === 'cancel').map((btn, i) => ({
                 type:      'button',
                 text:      { type: 'plain_text', text: btn.label },
                 action_id: `workflow_action_${btn.action || i}_${i}`,
-                value:     JSON.stringify({ workflowRunId, action: btn.action, label: btn.label }),
+                value:     JSON.stringify({ workflowRunId, ...gateRef, action: btn.action, label: btn.label }),
               })),
             ],
           });
@@ -1903,6 +1926,7 @@ export function dialogToBlocks(dialog, workflowRunId, gateType) {
           action_id: `workflow_action_${btn.action || i}_${i}`,
           value:     JSON.stringify({
             workflowRunId,
+            ...gateRef,
             action: btn.action,
             label:  btn.label,
             ...(btn.modal ? { modal: btn.modal } : {}),

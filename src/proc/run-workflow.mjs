@@ -81,19 +81,19 @@ export async function handle(req) {
 // ---------------------------------------------------------------------------
 
 export async function dispatchSqs(message) {
-  const { action, workflowRunId, gateId, userResponse, responseData, message_ts, traceId, stepExecutionId } = message;
+  const { action, workflowRunId, gateId, slackUserId, userResponse, responseData, message_ts, traceId, stepExecutionId } = message;
   // A scope per message, so one run's sandbox can never reach the next message in the batch.
-  return sandboxScope(() => dispatch({ action, workflowRunId, gateId, userResponse, responseData, message_ts, traceId, source: 'sqs', stepExecutionId }));
+  return sandboxScope(() => dispatch({ action, workflowRunId, gateId, slackUserId, userResponse, responseData, message_ts, traceId, source: 'sqs', stepExecutionId }));
 }
 
 // ---------------------------------------------------------------------------
 // Core dispatch
 // ---------------------------------------------------------------------------
 
-async function dispatch({ action, workflowRunId, gateId, userResponse, responseData, message_ts, traceId, source, stepExecutionId }) {
+async function dispatch({ action, workflowRunId, gateId, slackUserId, userResponse, responseData, message_ts, traceId, source, stepExecutionId }) {
   switch (action) {
     case 'execute_top': return executeTop({ workflowRunId, traceId, source, stepExecutionId });
-    case 'resume_gate': return resumeGate({ workflowRunId, gateId, userResponse, responseData, message_ts, traceId, source });
+    case 'resume_gate': return resumeGate({ workflowRunId, gateId, slackUserId, userResponse, responseData, message_ts, traceId, source });
     case 'resume_llm':  return resumeLlm({ workflowRunId, traceId });
     case 'cancel':      return cancelRun({ workflowRunId, traceId });
     default:
@@ -561,23 +561,27 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
 // resume_gate
 // ---------------------------------------------------------------------------
 
-async function resumeGate({ workflowRunId, gateId, userResponse, responseData, message_ts, traceId, source }) {
+async function resumeGate({ workflowRunId, gateId, slackUserId, userResponse, responseData, message_ts, traceId, source }) {
 
   const run   = await loadRun(workflowRunId, traceId);
   const frame = topFrame(run);
+  const refuse = async reason => {
+    await noticeRefusedClick(run, { gateId, slackUserId, traceId });
+    return { skipped: true, reason };
+  };
 
   if (!frame || frame.type !== 'human_gate') {
     console.warn('run-workflow: resume_gate — no gate frame on top', {
       workflowRunId, topType: frame?.type, traceId,
     });
-    return { skipped: true, reason: 'no_gate_frame' };
+    return refuse('no_gate_frame');
   }
 
   if (run.status !== 'awaiting_human_gate') {
     console.warn('run-workflow: resume_gate — not awaiting (duplicate?)', {
       workflowRunId, status: run.status, traceId,
     });
-    return { skipped: true, reason: 'not_awaiting' };
+    return refuse('not_awaiting');
   }
 
   // An answer that names a gate is applied to that gate only. One that names none — a Slack
@@ -586,7 +590,7 @@ async function resumeGate({ workflowRunId, gateId, userResponse, responseData, m
     console.warn('run-workflow: resume_gate — answer is for another gate', {
       workflowRunId, gateId, waitingGateId: frame.gate_id ?? null, traceId,
     });
-    return { skipped: true, reason: 'gate_moved' };
+    return refuse('gate_moved');
   }
 
   const { gate_type: gateType, step_ref: stepRef, local_state: localState } = frame;
@@ -1736,6 +1740,22 @@ async function loadSteps(workflowName, traceId) {
 
 function findStep(steps, stepKey) {
   return steps.find(s => String(s.step) === String(stepKey)) ?? null;
+}
+
+/**
+ * A click on a gate the run has already moved past is not applied (resumeGate). The person who made
+ * it is told, privately, in the run's own thread — otherwise a refused click looks like one that
+ * worked. Only for a click that named its gate: a button posted before gates carried an id is
+ * answered as it always was. GATE_MOVED is not a message the inbox keeps.
+ */
+export function gateMovedNotice(run, { gateId, slackUserId, traceId }) {
+  if (!gateId || !slackUserId || run?.callback?.provider !== 'slack') return null;
+  return { type: 'GATE_MOVED', workflowRunId: run.id, gateId, slackUserId, traceId };
+}
+
+async function noticeRefusedClick(run, click) {
+  const notice = gateMovedNotice(run, click);
+  if (notice) await enqueueCallback(run.callback, notice);
 }
 
 /**
