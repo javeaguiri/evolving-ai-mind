@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: evolving-mind-ai
-  version: 3.7.1
+  version: 3.7.2
   description: >
     Self-evolving cognitive automation system.
     Slack → Lambda → PostgreSQL → LLM pipeline.
@@ -1839,7 +1839,7 @@ paths:
                 workflow: { type: string }
       responses:
         '202': { description: "{ runId }" }
-        '400': { description: workflow missing, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '400': { description: missing_fields — workflow missing, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '401': { description: The Cognito authorizer refused the token. }
         '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
         '403': { description: household_required, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
@@ -1947,7 +1947,7 @@ paths:
                 selectedValue: { type: string }
       responses:
         '202': { description: "{ runId }" }
-        '400': { description: gateId or action missing, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '400': { description: missing_fields — gateId or action missing, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '401': { description: The Cognito authorizer refused the token. }
         '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
         '403': { description: run_forbidden, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
@@ -2128,7 +2128,7 @@ paths:
               form:    { value: { gateId: 3f0c9a2e-5b1d-4a7e-9c3f-2d8e6b1a4c70, action: confirm, formValues: { amount: "12,50" } } }
       responses:
         '202': { description: "Accepted; resume_gate enqueued. Body: { runId }" }
-        '400': { description: gateId or action missing }
+        '400': { description: "missing_fields — gateId or action missing; message names them." }
         '401': { description: principal_required }
         '403': { description: "run_forbidden — another user's web run, a run outside the principal's household, or a Novia test run." }
         '404': { description: "run_not_found" }
@@ -2240,7 +2240,7 @@ paths:
                 workflow: { type: string, description: The workflow's name. }
       responses:
         '202': { description: "Accepted; execute_top enqueued. Body: { runId }" }
-        '400': { description: workflow missing }
+        '400': { description: "missing_fields — workflow missing; message names it." }
         '401': { description: principal_required }
         '403': { description: "household_required — only a household principal starts the household's workflows." }
         '404': { description: "workflow_not_found — no domain workflow has this name." }
