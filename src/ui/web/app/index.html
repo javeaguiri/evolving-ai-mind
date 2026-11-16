@@ -1,0 +1,17 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Javea Guiri. All rights reserved. -->
+<!-- Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). -->
+<!-- See LICENSE file in the project root for full license terms. -->
+<!-- The web app's only page (docs/arch-web-app.md §1). dev_scripts/deploy-web.mjs fills in the
+     hashed script and stylesheet; nothing runs inline, as the CSP requires (§11). -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="{{style}}">
+  <script type="module" src="{{script}}"></script>
+</head>
+<body>
+  <div id="root"></div>
+</body>
+</html>

@@ -864,6 +864,9 @@ Any high/critical CVE blocks the addition unless a patch is available and pinned
 | `@slack/web-api` | ^7 | ~1M | MIT | Slack API — chat.postMessage, chat.update, Block Kit | bootstrap |
 | `ajv` | ^8 | ~100M | MIT | JSON Schema validation — right-brain output validation loop | v3.2-design-domain-foundation |
 | `acorn` | ^8 | ~50M | MIT | AST parser for `js_transform` sandbox gate — see Section 6.5.1 | Session 19 |
+| `react`, `react-dom` | 19.3.1 (dev) | ~250M | MIT | The web app's components (`docs/arch-web-app.md` §1) — bundled into the site by `deploy-web.mjs`, imported by no Lambda; `react-dom` brings `scheduler` | Sprint 17 |
+| `i18next`, `react-i18next` | 27.1.3, 18.0.2 (dev) | ~35M, ~26M | MIT | The web app's catalogs (§13); `react-i18next` brings `html-parse-stringify` | Sprint 17 |
+| `i18next-icu`, `intl-messageformat` | 2.7.0, 12.1.5 (dev) | ~1.4M, ~31M | MIT, BSD-3-Clause | ICU MessageFormat — plurals and parameters in the catalogs; brings three `@formatjs` parsers | Sprint 17 |
 
 ### Candidates approved for future addition
 
