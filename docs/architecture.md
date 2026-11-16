@@ -177,7 +177,7 @@ limit is 100. One field is one block, so a data-driven form is bounded by *field
 
 ---
 
-## 3. Lambda Architecture — Four Functions
+## 3. Lambda Architecture — Five Functions
 
 | Function | Name | Triggers | Tier | Owns |
 |---|---|---|---|---|
@@ -185,6 +185,7 @@ limit is 100. One field is one block, so a data-driven form is bounded by *field
 | ProcFunction | `evolving-mind-ai-proc` | API Gateway + SQS WorkflowQueue | Process | `/api/v1/proc/{proxy+}` — business logic, LLM, intent, workflow execution |
 | ServFunction | `evolving-mind-ai-serv` | API Gateway | Service | `/api/v1/serv/{proxy+}` — DB CRUD, DDL, data access |
 | SlackCallbackListenerFunction | `evolving-mind-ai-slack-callback-listener` | SQS CallbackResults | Experience | Posts threaded Slack replies |
+| WebApiFunction | `evolving-mind-ai-web-api` | API Gateway, Cognito authorizer (no API key), through CloudFront | Experience | `/api/v1/ui/web/{proxy+}` — the web app's routes, each called on PROC as the token's `sub` (`docs/arch-web-app.md` §1, §3.1) |
 
 **Note:** `ProcStepOrchestrator` (`SYSLMBOrchestrator`) is eliminated as a separate Lambda.
 `ProcFunction` handles both HTTP requests (API Gateway) and async workflow messages (SQS WorkflowQueue)
