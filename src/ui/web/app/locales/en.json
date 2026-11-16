@@ -1,5 +1,17 @@
 {
   "app": {
     "name": "Home Brain"
+  },
+  "shell": {
+    "loading": "Loading…",
+    "signedInAs": "Signed in as {name}",
+    "signOut": "Sign out"
+  },
+  "signIn": {
+    "problem": "The sign-in didn't complete.",
+    "again": "Sign in again"
+  },
+  "errors": {
+    "unreachable": "Can't reach the home brain."
   }
 }
