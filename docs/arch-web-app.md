@@ -60,8 +60,8 @@ build-time configuration; they are not secrets.
 | Code | Location |
 |---|---|
 | SPA source | `src/ui/web/app/` (`.jsx`), built to `dist/web/` by an esbuild script |
-| `WebApiFunction` | `src/ui/web/api/handler.mjs` and one module per resource |
-| Shared experience-layer rules | `src/ui/shared/` — the `number` field rule and the `EMPTY_OPTION_VALUE` convention move here from `src/ui/slackbot/form-fields.mjs`, so Slack and the web validate a form identically |
+| `WebApiFunction` | `src/ui/web/api/` — `handler.mjs`; `routes.mjs`, the allow-list of §3.1's operations; `proc-client.mjs`, every call upstream; `me.mjs`, PROC joined with Cognito; `inbox.mjs`, the `WORKFLOW_ERROR` summary |
+| Shared experience-layer rules | The `number` field rule in `src/shared/number-rule.mjs`, which PROC applies too; the `WORKFLOW_ERROR` summary in `src/ui/shared/workflow-error.mjs`; the `EMPTY_OPTION_VALUE` convention moves to `src/ui/shared/` from `src/ui/slackbot/form-fields.mjs` with the web's first `select`. Slack and the web validate a form and summarise a failure identically |
 | PROC read endpoints | `src/proc/gates.mjs`, `src/proc/inbox.mjs` |
 | Site deploy | `dev_scripts/deploy-web.mjs` — build, `aws s3 sync`, CloudFront invalidation. `sam deploy` does not ship the site |
 
@@ -661,7 +661,7 @@ renderer.** Nothing is copied.
 |---|---|
 | Workflows, `buildDialog`, `run-workflow`, Novia (`minds-eye.mjs`) | **Shared.** Workflows never learn which provider serves them. Phase 1 removes the `arch-home-brain.md` §3.2 leaks |
 | The `dialog` contract | **Shared** — a JSON Schema in `docs/openapi.yaml` both renderers are tested against |
-| Experience-layer rules — the `number` rule, `EMPTY_OPTION_VALUE`, the error summariser | **Shared** from `src/ui/shared/` |
+| Experience-layer rules — the `number` rule, `EMPTY_OPTION_VALUE`, the error summariser | **Shared** — §1.1 |
 | The renderer | **Per provider** — `callback.mjs` emits Block Kit, React components render the web. A copied renderer drifts |
 | Domain views (§6) | **Web only** — Slack keeps `list_entity` and the CRUD workflows |
 
@@ -740,27 +740,29 @@ src/ui/
 │   └── form-fields.mjs                form values ↔ Block Kit block_ids
 │
 ├── web/                               Web
-│   ├── api/                           WebApiFunction (Lambda)
+│   ├── api/                           WebApiFunction (Lambda), HTTP only
 │   │   ├── handler.mjs                IN   browser → /api/v1/ui/web/*, Cognito token
-│   │   ├── gates.mjs                  IN   POST /gates/{runId}/responses → resume_gate SQS
-│   │   └── inbox.mjs                  OUT  GET /inbox → PGC_UiMessage, through PROC
+│   │   ├── routes.mjs                      the §3.1 operations, and nothing else, each to its PROC route
+│   │   ├── proc-client.mjs                 PROC as the token's sub, with the internal key; Cognito
+│   │   ├── me.mjs                          GET /me → PROC /me + Cognito GetUser
+│   │   └── inbox.mjs                  OUT  GET /inbox → PGC_UiMessage through PROC, errors summarised
 │   └── app/                           React SPA — runs in the browser, shipped from S3
 │       ├── Gate.jsx, Form.jsx         dialog → components: the web's dialogToBlocks
 │       └── Grid.jsx                   the editable grid
 │
 └── shared/                            both providers
-    └── form-rules.mjs                 the number rule, EMPTY_OPTION_VALUE
+    └── workflow-error.mjs             a WORKFLOW_ERROR's summary
 ```
 
 | Slack | Web | Why they differ |
 |---|---|---|
-| `handler.mjs` + `interactive.mjs` | `web/api/` | Same job — authenticate, enqueue the same SQS messages. Slack's proof is a request signature, the web's a Cognito token |
+| `handler.mjs` + `interactive.mjs` | `web/api/` | Same job — authenticate, then start or resume a run. Slack's proof is a request signature, the web's a Cognito token; Slack's handlers enqueue, the web's call PROC (`POST /proc/runs`, `POST /proc/gates/{runId}/responses`), which enqueues |
 | `callback.mjs`, a Lambda that pushes | No Lambda: PROC writes a `PGC_UiMessage` row and the browser polls `GET /inbox` | A browser cannot be posted into without a WebSocket (§1, Phase 1 option) |
 | `dialogToBlocks`, inside that Lambda | React components, in the browser | Rendering moves to the client |
 | `form-fields.mjs` | Read from the inputs by name | Block Kit carries a field's name in its `block_id`; an HTML input has a `name` |
 
-`src/ui/shared/` holds the rules both must apply identically — what a valid `number` is, how "none"
-travels — so a value typed in Slack and on the web means the same thing. `PGC_UiMessage` is written
+The shared rules (§1.1) are those both must apply identically — what a valid `number` is, how
+"none" travels, what a failure says — so a value typed in Slack and on the web means the same thing. `PGC_UiMessage` is written
 for every message, Slack's included; that is how a Slack-started run also appears on the site
 (§8).
 
