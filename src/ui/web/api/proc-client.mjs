@@ -20,6 +20,7 @@ const MESSAGES = {
   principal_required:   'You are not signed in.',
   household_required:   'This is for the household only.',
   invalid_query:        'The request asked for something the home brain cannot read.',
+  missing_fields:       'The request left out something it needs.',
   run_not_found:        'That run does not exist.',
   run_forbidden:        'That run is not yours to see.',
   gate_not_waiting:     'That run is not waiting for an answer.',

@@ -185,6 +185,13 @@ describe('errors — PROC\'s code kept, a codeless failure is 502', () => {
     assert.deepEqual(parse(res), { error: { code: 'invalid_query', message: 'limit must be between 1 and 100' } });
   });
 
+  it('a 400 missing_fields keeps its code and PROC\'s message', async () => {
+    answers.push(() => json(400, { success: false, error: 'missing_fields', message: 'workflow is required' }));
+    const res = await handler(event('POST', 'runs', { body: '{}' }));
+    assert.equal(res.statusCode, 400);
+    assert.deepEqual(parse(res), { error: { code: 'missing_fields', message: 'workflow is required' } });
+  });
+
   it('a 5xx PROC names keeps its code', async () => {
     answers.push(() => json(500, { success: false, error: 'pages_truncated', totalMatching: 900 }));
     const res = await handler(event('GET', 'pages'));

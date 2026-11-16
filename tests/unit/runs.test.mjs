@@ -134,6 +134,16 @@ describe('/proc/runs — the principal, and starting a run', () => {
     assert.equal(calls.length, 0);
   });
 
+  it('400 missing_fields when no workflow is named, before any read', async () => {
+    process.env.HOUSEHOLD_PRINCIPALS = 'sub-a';
+    const calls = stubServ(() => ({ rows: [] }));
+    for (const body of [{}, { workflow: '' }, { workflow: 7 }]) {
+      const [status, resp] = out(await handle(req('POST', { 'x-principal-user': 'sub-a' }, { body })));
+      assert.deepEqual([status, resp.error, resp.message], [400, 'missing_fields', 'workflow is required']);
+    }
+    assert.equal(calls.length, 0);
+  });
+
   it('404 for a system workflow (domain null) and for an unknown name', async () => {
     process.env.HOUSEHOLD_PRINCIPALS = 'sub-a';
     for (const rows of [[{ id: 1, domain: null }], []]) {

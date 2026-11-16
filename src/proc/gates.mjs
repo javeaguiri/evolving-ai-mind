@@ -88,7 +88,7 @@ const isEmpty = v => v === null || v === undefined || v === '' || (Array.isArray
 export function checkGateResponse(run, body = {}) {
   const { gateId, action, formValues, inputValue, listGroup, selectedValue } = body;
   if (!gateId || !action) {
-    return { status: 400, body: { error: 'gateId and action are required' } };
+    return { status: 400, body: { error: 'missing_fields', message: 'gateId and action are required' } };
   }
   if (!run) return { status: 404, body: { error: 'run_not_found' } };
 

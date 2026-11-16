@@ -88,7 +88,7 @@ async function listRuns(principal, { workflow, domain, status, limit, before }) 
 export async function startRun(principal, body = {}, traceId = randomUUID()) {
   if (!principal.roles.includes('household')) return { status: 403, body: { error: 'household_required' } };
   const { workflow } = body;
-  if (!workflow || typeof workflow !== 'string') return { status: 400, body: { error: 'workflow is required' } };
+  if (!workflow || typeof workflow !== 'string') return { status: 400, body: { error: 'missing_fields', message: 'workflow is required' } };
 
   const wfResp = await getRows('PGC_Workflow', [{ column: 'name', op: 'eq', value: workflow }],
     { column: 'version', direction: 'desc' }, 1, undefined, ['id', 'domain']);
