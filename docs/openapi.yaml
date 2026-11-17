@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: evolving-mind-ai
-  version: 3.8.0
+  version: 3.8.1
   description: >
     Self-evolving cognitive automation system.
     Slack → Lambda → PostgreSQL → LLM pipeline.
@@ -2207,7 +2207,9 @@ paths:
       description: >
         Lists PGC_WorkflowRun rows (docs/arch-web-app.md §2.4, §3.1) with explicit columns — never
         the stack. Each run is checked against the principal: a web-started run must be the
-        principal's own, any other needs the 'household' role. Up to `limit` runs are examined
+        principal's own, any other needs the 'household' role. Novia's test runs (callback
+        provider `novia`) are never listed — they ran against the sandbox and their messages
+        went to her session, as GET /gates leaves them out. Up to `limit` runs are examined
         and those the principal may not see are dropped, so a page can hold fewer than `limit`;
         `cursor` is the id of the last run examined, and `more` is true when runs past it remain.
         `label` is the run's own label (its workflow's display.run_label, resolved once every token
@@ -2327,7 +2329,8 @@ paths:
         The same entry GET /proc/runs lists, for one run (docs/arch-web-app.md §4.3): the run
         drawer and the run page are headed by it, and its status tells a thread when to stop
         asking for messages. Checked against the principal as every id-taking route is — a
-        web-started run is its starter's, any other the household's (arch-security.md S5).
+        web-started run is its starter's, any other the household's (arch-security.md S5); a
+        Novia test run is refused (run_forbidden), as GET /proc/gates/{runId} refuses it.
       operationId: getRun
       tags: [PROC]
       parameters:
@@ -2341,7 +2344,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/RunSummary' }
         '401': { description: principal_required }
-        '403': { description: run_forbidden }
+        '403': { description: "run_forbidden — not the principal's, or a Novia test run" }
         '404': { description: run_not_found }
 
   /api/v1/proc/gates/{runId}:
