@@ -73,3 +73,23 @@ export function threadDelay(failures, status) {
 export function latestGateId(messages) {
   return messages.findLast(m => m.messageType === 'HUMAN_GATE')?.payload?.dialog?.gate_id ?? null;
 }
+
+/**
+ * Where a thread's open part begins (§9): after the last question answered — what arrived since
+ * the person last answered stays open, with the question the run waits at; everything before folds
+ * away. When nothing has arrived since, the answered question itself stays open, so the thread is
+ * never only a folded line.
+ *
+ * @param {object[]} messages      In order
+ * @param {string|null} liveGateId The question the run waits at, if any
+ * @returns {number}               The index of the first message shown; 0 folds nothing
+ */
+export function foldPoint(messages, liveGateId) {
+  let last = -1;
+  messages.forEach((m, i) => {
+    if (m.messageType === 'HUMAN_GATE' && m.payload?.dialog?.gate_id !== liveGateId) last = i;
+  });
+  if (last < 0) return 0;
+  const arrivedSince = messages.slice(last + 1).some(m => m.payload?.dialog?.gate_id !== liveGateId);
+  return arrivedSince || liveGateId ? last + 1 : last;
+}

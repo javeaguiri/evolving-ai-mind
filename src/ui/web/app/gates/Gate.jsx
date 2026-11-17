@@ -189,7 +189,11 @@ export function Gate({ gate, context, onAnswered, onMoved }) {
             }
             return <Input key={i} field={f} value={values[f.name]} problem={problemOf(f.name)} onChange={v => setValue(f.name, v)} onCheck={p => setCheck(f.name, p)} disabled={sending} />;
           case 'actions': {
-            const buttons = f.buttons.filter(b => !choiceValues.has(b.action));
+            // followup_prompt: Slack draws one button of its own, whatever the dialog's buttons —
+            // Ask follow-up, a text box whose text answers the gate (callback.mjs). So does the web.
+            const buttons = gate.gate_type === 'followup_prompt'
+              ? [{ action: 'confirm', label: t('gate.askFollowup'), style: 'primary', modal: { input_label: t('gate.followupLabel'), multiline: true } }]
+              : f.buttons.filter(b => !choiceValues.has(b.action));
             return (
               <div key={i} className="gateactions">
                 {modal && (

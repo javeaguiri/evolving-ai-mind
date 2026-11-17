@@ -510,7 +510,7 @@ Block Kit. **No domain vocabulary, no Slack ceilings**: a gate is as long as its
 | `confirm` | Message and buttons | `{ action }` |
 | `text_input` | Text area, then the gate's buttons | `{ action, inputValue }` |
 | `review_object` | Key/value table, then buttons | `{ action }` |
-| `followup_prompt` | Message; *Ask a follow-up* is Phase 1 (it opens a Novia or `/chat` turn) | — |
+| `followup_prompt` | Message, and *Ask follow-up* — a text box whose text answers the gate, as Slack's button does; the dialog's own buttons are not drawn, as Slack draws none | `{ action: 'confirm', inputValue }` — written to the step's `output_key` |
 
 **The grid.** A field may carry three optional, generic layout properties on the `human_gate`
 `PGC_StepType` contract:

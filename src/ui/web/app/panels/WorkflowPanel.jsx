@@ -65,7 +65,7 @@ export function WorkflowList({ workflows, runs, where, onStart, onOpen, problem,
               <button type="button" onClick={() => onOpen(r.runId)}>
                 <span className="lbl">{runName(r, where)}</span>
                 <StatusTag status={r.status} />
-                <span className="when"><time dateTime={r.startedAt}>{relativeAge(r.startedAt, where.now, where.locale)}</time></span>
+                <span className="when"><time dateTime={r.startedAt}>{relativeAge(r.startedAt, where.now, where.locale)}</time> · #{r.runId}</span>
               </button>
             </li>
           ))}

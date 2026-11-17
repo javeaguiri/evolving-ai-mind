@@ -4,7 +4,9 @@
   },
   "shell": {
     "loading": "Loading…",
-    "close": "Close"
+    "close": "Close",
+    "newBuild": "A new version is available.",
+    "reload": "Reload"
   },
   "nav": {
     "home": "Home",
@@ -48,7 +50,9 @@
       "running": "Running",
       "failed": "Failed",
       "cancelled": "Cancelled"
-    }
+    },
+    "meta": "{workflow} · Run {runId}",
+    "earlier": "{count, plural, one {Show # earlier message} other {Show # earlier messages}}"
   },
   "gate": {
     "continue": "Continue",
@@ -63,7 +67,9 @@
     "youChose": "You chose {label}",
     "moved": "This was answered elsewhere.",
     "fixFields": "Nothing was sent — correct the marked fields.",
-    "failed": "That didn’t send — try again in a moment."
+    "failed": "That didn’t send — try again in a moment.",
+    "askFollowup": "Ask follow-up",
+    "followupLabel": "Type your follow-up question"
   },
   "needsYou": {
     "title": "Needs you",

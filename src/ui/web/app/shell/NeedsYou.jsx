@@ -71,6 +71,7 @@ export function WaitingList({ gates, path, now, onPick }) {
               <span className="sub">
                 {[workflow, g.label].filter(Boolean).join(' · ')}
                 {g.waitingSince && <> · <time dateTime={g.waitingSince}>{relativeAge(g.waitingSince, now, i18n.language)}</time></>}
+                {' · '}#{g.runId}
               </span>
               {g.provider === 'slack' && <span className="pill slack">{t('needsYou.slack')}</span>}
             </Link>

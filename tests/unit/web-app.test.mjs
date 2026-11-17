@@ -22,7 +22,8 @@ import { matchPath, matchLocation }  from '../../src/ui/web/app/router.mjs';
 import { formatValue, isNumericColumn }   from '../../src/ui/web/app/records/format.mjs';
 import { rowsRequest, mergeColumns, listFields, initialView, viewKey } from '../../src/ui/web/app/records/query.mjs';
 import { inputsOf, initialValues, isChanged, fieldProblems, formValues, answerFor, gridOf, moveCell, listColumns } from '../../src/ui/web/app/gates/gate.mjs';
-import { runName, panelWorkflows, addMessages, threadDelay, isActive, isWorking, THREAD_POLL_MS, THREAD_POLL_MAX_MS } from '../../src/ui/web/app/runs/runs.mjs';
+import { liveScript, isNewBuild } from '../../src/ui/web/app/shell/version.mjs';
+import { runName, panelWorkflows, foldPoint, addMessages, threadDelay, isActive, isWorking, THREAD_POLL_MS, THREAD_POLL_MAX_MS } from '../../src/ui/web/app/runs/runs.mjs';
 import { pageItems, domainItems, sectionOf, currentItem, gateHeadline, relativeAge, pollDelay, POLL_MS, POLL_MAX_MS } from '../../src/ui/web/app/shell/nav.mjs';
 
 const APP_DIR = new URL('../../src/ui/web/app/', import.meta.url).pathname;
@@ -407,6 +408,26 @@ describe('runs — names, workflows, the thread\'s messages and pace (§2.4, §4
     assert.deepEqual(panelWorkflows({ workflow: 'hidden' }, domains), [{ name: 'hidden', label: 'hidden' }]);
   });
 
+  it('foldPoint: open from after the last question answered; a just-answered question stays open while nothing follows it', () => {
+    const n = id => ({ id, messageType: 'HUMAN_NOTIFICATION', payload: {} });
+    const g = (id, gid) => ({ id, messageType: 'HUMAN_GATE', payload: { dialog: { gate_id: gid } } });
+    assert.equal(foldPoint([n(1), g(2, 'a'), n(3), g(4, 'b')], 'b'), 2, 'waiting: since the last answer, and the question');
+    assert.equal(foldPoint([g(1, 'a'), g(2, 'b')], 'b'), 1);
+    assert.equal(foldPoint([g(1, 'a'), n(2)], null), 1, 'finished: the report after the last answer');
+    assert.equal(foldPoint([n(1), g(2, 'a')], null), 1, 'just answered: the answered question stays open');
+    assert.equal(foldPoint([n(1), n(2)], null), 0, 'no questions: nothing folds');
+    assert.equal(foldPoint([g(1, 'b')], 'b'), 0);
+  });
+
+  it('a newer build is live when index.html names another script than this tab runs', () => {
+    const html = '<script type="module" src="/assets/app-ABC123.js"></script>';
+    assert.equal(liveScript(html), '/assets/app-ABC123.js');
+    assert.equal(isNewBuild(html, '/assets/app-OLD999.js'), true);
+    assert.equal(isNewBuild(html, '/assets/app-ABC123.js'), false);
+    assert.equal(isNewBuild('<html>maintenance</html>', '/assets/app-OLD999.js'), false, 'a page that names no build says nothing');
+    assert.equal(isNewBuild(html, 'data:text/javascript;base64,xx'), false, 'a tab that cannot name its own build says nothing');
+  });
+
   it('addMessages: each once, in the order sent', () => {
     assert.deepEqual(addMessages([{ id: 1 }, { id: 3 }], [{ id: 3 }, { id: 2 }, { id: 4 }]).map(m => m.id), [1, 2, 3, 4]);
   });
@@ -628,8 +649,8 @@ describe('components and catalog', () => {
     const html = ui.renderToString(ui.createElement(ui.WaitingList, {
       gates, path: '/p/money', now: Date.parse('2026-11-17T12:00:00Z'), onPick() {},
     }));
-    assert.match(html, /<a href="\/p\/money\?run=12"><span class="q">Keep the lamp\?<\/span><span class="sub">Tidy up · Spare room(<!-- -->)? · <time dateTime="2026-11-17T09:00:00Z">3 hours ago<\/time><\/span><span class="pill slack">Slack<\/span><\/a>/);
-    assert.match(html, /<a href="\/p\/money\?run=13"><span class="q">Unlisted flow<\/span><span class="sub">Unlisted flow(<!-- -->)? · <time[^>]*>yesterday<\/time><\/span><\/a>/);
+    assert.match(html.replace(/<!-- -->/g, ''), /<a href="\/p\/money\?run=12"><span class="q">Keep the lamp\?<\/span><span class="sub">Tidy up · Spare room · <time dateTime="2026-11-17T09:00:00Z">3 hours ago<\/time> · #12<\/span><span class="pill slack">Slack<\/span><\/a>/);
+    assert.match(html.replace(/<!-- -->/g, ''), /<a href="\/p\/money\?run=13"><span class="q">Unlisted flow<\/span><span class="sub">Unlisted flow · <time[^>]*>yesterday<\/time> · #13<\/span><\/a>/);
   });
 
   it('the waiting list, empty', () => {
@@ -669,7 +690,7 @@ describe('components and catalog', () => {
       workflows: [{ name: 'edit_budget', label: 'Edit budget' }], runs, where: WHERE, onStart() {}, onOpen() {}, problem: null, starting: false,
     })).replace(/<!-- -->/g, '');
     assert.match(html, /<button type="button" class="btn primary">Edit budget<\/button>/);
-    assert.match(html, /<span class="lbl">November<\/span><span class="pill wait">Needs you<\/span><span class="when"><time dateTime="2026-11-17T10:00:00Z">2 hours ago<\/time>/);
+    assert.match(html, /<span class="lbl">November<\/span><span class="pill wait">Needs you<\/span><span class="when"><time dateTime="2026-11-17T10:00:00Z">2 hours ago<\/time> · #9<\/span>/);
     assert.match(html, /<span class="lbl">Edit budget · Nov 1<\/span><span class="pill bad">Failed<\/span>/);
     assert.match(html, /<span class="lbl">October<\/span><span class="when">/, 'a finished run says nothing of its state');
   });
@@ -697,9 +718,10 @@ describe('components and catalog', () => {
   });
 
   it('the thread: the question the run waits at is marked; Working… while it works', () => {
-    const gate = id => message(id, 'HUMAN_GATE', { dialog: { title: 'internal step note', fields: [{ type: 'typography', value: `Question ${id}` }, { type: 'button', value: 'x' }] } });
+    const gate = id => message(id, 'HUMAN_GATE', { dialog: { gate_id: `g-${id}`, title: 'internal step note', fields: [{ type: 'typography', value: `Question ${id}` }, { type: 'button', value: 'x' }] } });
     const waiting = thread({ run: { status: 'awaiting_human_gate' }, messages: [gate(1), gate(2)] });
-    assert.match(waiting, /<div class="msg gate"><div class="md"><p>Question 1<\/p><\/div><\/div><\/div><div><div class="msg gate waiting"><div class="md"><p>Question 2<\/p><\/div><p class="hint">Waiting for your answer\.<\/p>/);
+    assert.match(waiting, /<div class="thread"><button type="button" class="fold">Show 1 earlier message<\/button><div><div class="msg gate waiting"><div class="md"><p>Question 2<\/p><\/div><p class="hint">Waiting for your answer\.<\/p>/);
+    assert.doesNotMatch(waiting, /Question 1/, 'the answered question folds away');
     assert.doesNotMatch(waiting, /internal step note/);
     assert.match(thread({ run: { status: 'running' }, messages: [gate(1)] }), /<div class="msg gate">.*<p class="working" role="status">Working…<\/p>/);
     assert.doesNotMatch(thread({ run: { status: 'completed' }, messages: [gate(1)] }), /waiting|Working/);
@@ -877,6 +899,23 @@ describe('components and catalog', () => {
       assert.match(html, /<button type="button" class="btn ">Revise<\/button>/);
     });
 
+    it('followup_prompt: its message and Ask follow-up — the dialog\'s own buttons are not drawn, as Slack draws none', () => {
+      const html = draw(gateOf('followup_prompt', [actions({ action: 'confirm', label: 'Confirm' })]));
+      assert.match(html, /<button type="button" class="btn primary">Ask follow-up<\/button><\/div>/);
+      assert.doesNotMatch(html, />Confirm</);
+    });
+
+    it('the thread names the run\'s workflow and its id', () => {
+      const html = ui.renderToString(ui.createElement(ui.ThreadView, {
+        run: { runId: 958, workflowName: 'ping_core', workflowLabel: null, status: 'completed' }, messages: [], problem: null,
+      })).replace(/<!-- -->/g, '');
+      assert.match(html, /<p class="runmeta">ping_core · Run 958<\/p>/);
+      const labelled = ui.renderToString(ui.createElement(ui.ThreadView, {
+        run: { runId: 1041, workflowName: 'x', workflowLabel: { en: 'Edit budget' }, status: 'completed' }, messages: [], problem: null,
+      })).replace(/<!-- -->/g, '');
+      assert.match(labelled, /Edit budget · Run 1041/);
+    });
+
     it('an answer given here is one line', () => {
       const html = ui.renderToString(ui.createElement(ui.AnsweredRecord, { record: { label: 'Save', changes: 3 } })).replace(/<!-- -->/g, '');
       assert.equal(html, '<p class="answered">You chose Save · 3 changes</p>');
@@ -889,8 +928,12 @@ describe('components and catalog', () => {
         run: { status: 'awaiting_human_gate' }, messages: [sent(1, 'g-0', 'First'), sent(2, 'g-1', 'Second (as sent)')], gate: live,
         answered: { 'g-0': { label: 'Yes', changes: 0 } }, problem: null, context: CONTEXT, onAnswered() {}, onMoved() {},
       })).replace(/<!-- -->/g, '');
-      assert.match(html, /<p>First<\/p><\/div><\/div><p class="answered">You chose Yes<\/p>/);
-      assert.doesNotMatch(html, /Second \(as sent\)/);
+      assert.match(html, /^<div class="thread"><button type="button" class="fold">Show 1 earlier message<\/button><div><div class="msg gate waiting"/);
+      assert.doesNotMatch(html, /First|Second \(as sent\)/);
+      const after = ui.renderToString(ui.createElement(ui.ThreadView, {
+        run: { status: 'running' }, messages: [sent(1, 'g-0', 'First')], answered: { 'g-0': { label: 'Yes', changes: 0 } }, problem: null, context: CONTEXT,
+      })).replace(/<!-- -->/g, '');
+      assert.match(after, /<p>First<\/p><\/div><\/div><p class="answered">You chose Yes<\/p><\/div><p class="working" role="status">Working…<\/p>/, 'just answered, nothing since: the answer stays open');
       assert.match(html, /<div class="msg gate waiting" aria-busy="false"><div class="md"><p><strong>Pick<\/strong> one<\/p>.*>OK<\/button>/);
     });
 
@@ -898,7 +941,7 @@ describe('components and catalog', () => {
       const html = ui.renderToString(ui.createElement(ui.ThreadView, {
         run: { status: 'awaiting_human_gate' }, messages: [], gate: gateOf('confirm', [actions({ action: 'ok', label: 'OK' })]), problem: null, context: CONTEXT, onAnswered() {}, onMoved() {},
       }));
-      assert.match(html, /^<div class="thread"><div class="msg gate waiting"/);
+      assert.match(html, /^<div class="thread"><div><div class="msg gate waiting"/);
       assert.doesNotMatch(html, /No messages were kept/);
     });
   });

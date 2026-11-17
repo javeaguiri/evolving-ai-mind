@@ -19,6 +19,7 @@ import { TopBar, PhoneTabs }   from './shell/TopBar.jsx';
 import { MenuList }            from './shell/Menu.jsx';
 import { Drawer }              from './shell/Drawer.jsx';
 import { NeedsYou }            from './shell/NeedsYou.jsx';
+import { NewBuild }            from './shell/NewBuild.jsx';
 import { GearIcon }            from './shell/icons.jsx';
 import { Settings, SETTINGS_ENTRIES } from './pages/Settings.jsx';
 import { PageBody }            from './panels/PageBody.jsx';
@@ -140,6 +141,7 @@ export function Shell({ route, me, pages, domains, problem, api, onSignInRequire
         </Link>
       </TopBar>
       {problem && <div className="banner" role="alert">{t('errors.retrying')}</div>}
+      <NewBuild />
       <main className="main">
         {title === null && <p className="muted">{t('shell.loading')}</p>}
         {title !== null && (

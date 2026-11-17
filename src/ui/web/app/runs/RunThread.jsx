@@ -8,7 +8,9 @@
 // question the run waits at answered in place. That question is read from GET /gates/{runId},
 // rebuilt from the run with the gateId an answer names, whichever surface started the run; the
 // copies in the inbox are what was sent. A question answered here becomes a one-line record for as
-// long as the page holds it. Read from GET /runs/{runId} and GET /inbox?run= while the run is going
+// long as the page holds it. What came before the person's last answer folds into one line, and a
+// new question is brought into view. The run's id is shown, for talking about it. Read from
+// GET /runs/{runId} and GET /inbox?run= while the run is going
 // and the tab visible: often while it works, less while it waits on a person, less still after
 // failures; at once after an answer. *Working…* while the run works; a finished run read once.
 
@@ -17,7 +19,8 @@ import { useTranslation }      from 'react-i18next';
 import { SignInRequired }      from '../auth/session.mjs';
 import { Markdown }            from '../Markdown.jsx';
 import { Gate, Reveal, AnsweredRecord } from '../gates/Gate.jsx';
-import { addMessages, isActive, isWorking, threadDelay, latestGateId } from './runs.mjs';
+import { resolveLanguageMap }  from '../../../../shared/language-map.mjs';
+import { addMessages, isActive, isWorking, threadDelay, latestGateId, foldPoint } from './runs.mjs';
 
 /** The run, its messages and the question it waits at, read again while it is going. */
 export function useRunThread(api, runId, onSignInRequired) {
@@ -111,7 +114,17 @@ export function Message({ message, waiting }) {
  * @param {() => void} [props.onMoved]
  */
 export function ThreadView({ run, messages, gate = null, answered = {}, problem, context, onAnswered, onMoved }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const [unfolded, setUnfolded] = useState(false);
+  const liveRef = useRef(null);
+  const liveId  = run?.status === 'awaiting_human_gate' ? gate?.gateId ?? null : null;
+
+  useEffect(() => {
+    if (!liveId || !liveRef.current) return;
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    liveRef.current.scrollIntoView({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' });
+  }, [liveId]);
+
   if (problem === 'gone') return <p className="muted">{t('run.gone')}</p>;
   if (!run) return problem ? <p className="muted">{t('run.unreachable')}</p> : <p className="muted">{t('shell.loading')}</p>;
 
@@ -122,13 +135,21 @@ export function ThreadView({ run, messages, gate = null, answered = {}, problem,
     ? <Gate key={live.gateId} gate={live} context={context} onAnswered={record => onAnswered(live.gateId, record)} onMoved={onMoved} />
     : null;
   const waitingAt = run.status === 'awaiting_human_gate' && !live ? messages.findLast(m => m.messageType === 'HUMAN_GATE') : null;
+  // While the run waits, the newest question is the one waited at, read from /gates or not yet.
+  const waitedAt  = run.status === 'awaiting_human_gate' ? liveId ?? latestGateId(messages) : null;
+  const from      = unfolded ? 0 : foldPoint(messages, waitedAt);
+  const workflow  = run.workflowLabel ? resolveLanguageMap(run.workflowLabel, i18n.language) : run.workflowName;
 
   return (
     <div className="thread">
-      {messages.map(m => {
+      {run.runId && <p className="runmeta">{t('run.meta', { workflow: workflow ?? '', runId: run.runId })}</p>}
+      {from > 0 && (
+        <button type="button" className="fold" onClick={() => setUnfolded(true)}>{t('run.earlier', { count: from })}</button>
+      )}
+      {messages.slice(from).map(m => {
         const gid = m.messageType === 'HUMAN_GATE' ? m.payload?.dialog?.gate_id : null;
         const last = gid && lastOf.get(gid) === m.id;
-        if (last && live && gid === live.gateId && answer) return <div key={m.id}>{answer}</div>;
+        if (last && live && gid === live.gateId && answer) return <div key={m.id} ref={liveRef}>{answer}</div>;
         return (
           <div key={m.id}>
             <Message message={m} waiting={m === waitingAt} />
@@ -136,7 +157,7 @@ export function ThreadView({ run, messages, gate = null, answered = {}, problem,
           </div>
         );
       })}
-      {live && !liveSent && answer}
+      {live && !liveSent && answer && <div ref={liveRef}>{answer}</div>}
       {messages.length === 0 && !live && !isActive(run.status) && <p className="muted">{t('run.noMessages')}</p>}
       {isWorking(run.status) && <p className="working" role="status">{t('run.working')}</p>}
       {problem === 'unreachable' && <p className="muted">{t('run.unreachable')}</p>}
