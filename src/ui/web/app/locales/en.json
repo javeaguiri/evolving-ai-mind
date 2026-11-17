@@ -31,6 +31,14 @@
     "missing": "“{source}” can’t be found.",
     "failed": "This panel couldn’t be read."
   },
+  "report": {
+    "refresh": "↻ Refresh",
+    "refreshing": "Refreshing…",
+    "refreshLabel": "Refresh by running the workflow again",
+    "updated": "Updated {when}",
+    "notRun": "Not run yet",
+    "missing": "“{workflow}” can’t be found."
+  },
   "workflow": {
     "domainPanel": "Workflows",
     "emptyOne": "You don’t have any {workflow} runs yet — they will be shown here.",

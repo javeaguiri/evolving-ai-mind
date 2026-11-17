@@ -530,6 +530,7 @@ describe('components and catalog', () => {
                    export { WorkflowList } from './panels/WorkflowPanel.jsx';
                    export { ThreadView } from './runs/RunThread.jsx';
                    export { Gate, AnsweredRecord } from './gates/Gate.jsx';
+                   export { ReportBody } from './panels/ReportPanel.jsx';
                    export { initI18n } from './i18n.mjs';
                    export { createElement } from 'react';`,
         resolveDir: APP_DIR, loader: 'jsx',
@@ -664,11 +665,13 @@ describe('components and catalog', () => {
       { id: 'r', kind: 'records', width: 'full', title: { en: 'Things', es: 'Cosas' }, config: { source: 'PGD_Things' } },
       { id: 'w', kind: 'workflow', width: '1/2', title: 'Flows', config: { domain: 'pantry' } },
       { id: 's', kind: 'summary', width: '1/3', title: 'Report', config: { widget: 'report', workflow: 'restock' } },
+      { id: 'c', kind: 'summary', width: '1/3', title: 'Chart', config: { widget: 'chart', source: 'PGD_Things', category_column: 'a', value_columns: ['b'] } },
     ] }];
     const html = draw('/', { pages, domains });
     assert.match(html, /<div class="panels"><section class="panel w-full" aria-label="Things"><div class="phead"><h2>Things<\/h2><\/div><div class="skeleton" aria-busy="true"/);
     assert.match(html, /<section class="panel w-half" aria-label="Flows"><div class="phead"><h2>Flows<\/h2><\/div><div class="btnrow"><button type="button" class="btn">Restock<\/button><button type="button" class="btn">Count up<\/button><\/div><div class="skeleton"/);
-    assert.match(html, /<section class="panel w-third" aria-label="Report"><div class="phead"><h2>Report<\/h2><\/div><\/section>/);
+    assert.match(html, /<section class="panel w-third" aria-label="Report"><div class="phead"><h2>Report<\/h2><button type="button" class="btn sm" aria-label="Refresh by running the workflow again">↻ Refresh<\/button><\/div><div class="skeleton"/);
+    assert.match(html, /<section class="panel w-third" aria-label="Chart"><div class="phead"><h2>Chart<\/h2><\/div><\/section>/, 'a chart is Phase 1: its frame');
   });
 
   it('a domain page draws its workflow panel; a run page its thread', () => {
@@ -732,6 +735,18 @@ describe('components and catalog', () => {
     assert.match(thread({ problem: 'gone' }), /This run can(’|&#x27;)t be shown\./);
     assert.match(thread({ run: { status: 'completed' } }), /No messages were kept for this run\./);
     assert.match(thread({ run: { status: 'running' }, problem: 'unreachable' }), /Working….*Can(’|&#x27;)t reach the home brain — retrying/);
+  });
+
+  it('a report: the latest output as markdown, when and from which run; or not run yet, or gone', () => {
+    const where  = { locale: 'en', timeZone: 'Europe/Madrid' };
+    const report = output => ui.renderToString(ui.createElement(ui.ReportBody, { output, where })).replace(/<!-- -->/g, '');
+    const html = report({ status: 'ready', body: { runId: 1041, label: 'November 2026', completedAt: '2026-11-17T10:44:20Z',
+      payload: { format: 'markdown', message: '## Budget\n\n| Category | Actual |\n|---|--:|\n| Rent | €900 |' } } });
+    assert.match(html, /<div class="pbody report"><div class="md"><h4>Budget<\/h4><div class="mdtable">/);
+    assert.match(html.replace(/\s/g, ' '), /<p class="pfoot">Updated Nov 17, 2026, 11:44 AM · November 2026 · #1041<\/p>/);
+    assert.match(report({ status: 'ready', body: { runId: 7, label: null, completedAt: null, payload: { message: 'Plain *text*' } } }), /<p class="plain">Plain \*text\*<\/p><\/div><p class="pfoot">#7<\/p>/);
+    assert.match(report({ status: 'none' }), /Not run yet/);
+    assert.match(report({ status: 'missing', workflow: 'gone_flow' }), /“gone_flow” can(’|&#x27;)t be found\./);
   });
 
   it('a Home with no panels says how to go on', () => {
