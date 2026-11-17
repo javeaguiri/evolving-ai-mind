@@ -24,7 +24,11 @@ export function humanise(identifier) {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-function labelOf(display, identifier, locale) {
+/**
+ * What a person reads for a domain or workflow: its display.label in the locale, else its
+ * humanised identifier, marked labelFallback. One rule for the Domains menu and the gates.
+ */
+export function labelOf(display, identifier, locale) {
   return isLabel(display?.label)
     ? { label: resolveLanguageMap(display.label, locale), labelFallback: false }
     : { label: humanise(identifier), labelFallback: true };

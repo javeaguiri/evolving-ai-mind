@@ -26,22 +26,27 @@ import { enqueueWorkflow }               from '../shared/sqs-callback.mjs';
 import { numberRule, readNumber }        from '../shared/number-rule.mjs';
 import { resolveFormFields, buildDialog } from './step-executor.mjs';
 import { readPrincipal, canSeeRun, isNoviaTestRun } from './principal.mjs';
+import { labelOf }                         from './workflows.mjs';
 
-const GATE_RUN_COLUMNS = ['id', 'label', 'status', 'stack', 'callback'];
+const GATE_RUN_COLUMNS = ['id', 'workflow_id', 'label', 'status', 'stack', 'callback'];
 const GATE_LIST_LIMIT  = 100;
 
 /**
  * A waiting run's gate as a surface draws it: the top frame rebuilt into its dialog, carrying the
  * gate_id an answer must name. Null when the run is not at a gate.
  */
-export function toWaitingGate(run) {
+export function toWaitingGate(run, workflowDisplay = null, locale = process.env.HOUSEHOLD_LOCALE) {
   const stack = Array.isArray(run?.stack) ? run.stack : [];
   const frame = stack[stack.length - 1];
   if (run?.status !== 'awaiting_human_gate' || frame?.type !== 'human_gate') return null;
+  const name    = frame.workflow_name ?? null;
+  const named   = name ? labelOf(workflowDisplay, name, locale) : { label: null, labelFallback: true };
   return {
-    runId:        run.id,
-    gateId:       frame.gate_id ?? null,
-    workflowName: frame.workflow_name ?? null,
+    runId:         run.id,
+    gateId:        frame.gate_id ?? null,
+    workflowName:  name,
+    workflowLabel: named.label,
+    labelFallback: named.labelFallback,
     label:        run.label ?? null,
     gate_type:    frame.gate_type,
     dialog:       { ...buildDialog(frame.step_ref ?? {}, frame.local_state ?? {}), gate_id: frame.gate_id ?? null },
@@ -52,13 +57,23 @@ export function toWaitingGate(run) {
 
 /**
  * The gates a principal may see and answer, oldest first.
+ *
+ * @param {Map<number, object|null>} [displays]  Each run's workflow's display, by workflow id
  */
-export function waitingGatesFor(principal, runs) {
+export function waitingGatesFor(principal, runs, displays = new Map()) {
   return runs
     .filter(r => !isNoviaTestRun(r) && canSeeRun(principal, r))
-    .map(toWaitingGate)
+    .map(r => toWaitingGate(r, displays.get(r.workflow_id)))
     .filter(Boolean)
     .sort((a, b) => String(a.waitingSince).localeCompare(String(b.waitingSince)));
+}
+
+/** Each workflow's display, by id — what its gates are named by. */
+async function workflowDisplays(ids) {
+  const wanted = [...new Set(ids.filter(id => id != null))];
+  if (!wanted.length) return new Map();
+  const resp = await getRows('PGC_Workflow', [{ column: 'id', op: 'in', value: wanted }], undefined, undefined, undefined, ['id', 'display']);
+  return new Map((resp.rows ?? []).map(w => [w.id, w.display ?? null]));
 }
 
 async function loadGateRun(runId) {
@@ -169,7 +184,9 @@ export async function handle(req) {
   if (isList) {
     const resp = await getRows('PGC_WorkflowRun', [{ column: 'status', op: 'eq', value: 'awaiting_human_gate' }],
       'id ASC', GATE_LIST_LIMIT, undefined, GATE_RUN_COLUMNS);
-    return reply(200, { gates: waitingGatesFor(principal, resp.rows ?? []), more: Boolean(resp.truncated) }, 200);
+    const rows = resp.rows ?? [];
+    const displays = await workflowDisplays(rows.map(r => r.workflow_id));
+    return reply(200, { gates: waitingGatesFor(principal, rows, displays), more: Boolean(resp.truncated) }, 200);
   }
 
   const run     = await loadGateRun(runId);
@@ -177,7 +194,7 @@ export async function handle(req) {
   if (refusal) return reply(refusal.status, refusal.body, 200);
 
   if (isOne) {
-    const gate = toWaitingGate(run);
+    const gate = toWaitingGate(run, (await workflowDisplays([run.workflow_id])).get(run.workflow_id));
     return gate ? reply(200, gate, 200) : reply(404, { error: 'gate_not_waiting', status: run.status }, 200);
   }
 

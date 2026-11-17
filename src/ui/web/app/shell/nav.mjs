@@ -61,16 +61,6 @@ export function currentItem(route) {
 }
 
 /**
- * Each workflow's label by name, from `GET /workflows`.
- *
- * @param {{ workflows: { name: string, label: string }[] }[]} domains
- * @returns {Map<string, string>}
- */
-export function workflowLabels(domains) {
-  return new Map(domains.flatMap(d => d.workflows.map(w => [w.name, w.label])));
-}
-
-/**
  * A waiting gate's question in one line: the first line of its message, without markdown's marks.
  * The whole question is drawn inside its run; this is a list entry naming it.
  *

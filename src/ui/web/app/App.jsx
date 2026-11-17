@@ -25,7 +25,7 @@ import { PageBody }            from './panels/PageBody.jsx';
 import { WorkflowPanel }       from './panels/WorkflowPanel.jsx';
 import { RunThread }           from './runs/RunThread.jsx';
 import { runName }             from './runs/runs.mjs';
-import { domainItems, workflowLabels, pollDelay, HOME_PAGE_KEY } from './shell/nav.mjs';
+import { domainItems, pollDelay, HOME_PAGE_KEY } from './shell/nav.mjs';
 
 /**
  * The three reads the shell needs, with retries. `me` may already be in hand — main.jsx reads it
@@ -119,7 +119,6 @@ export function Shell({ route, me, pages, domains, problem, api, onSignInRequire
   const page     = settings ? { ...matchLocation(under), location: under } : route;
   const path     = page.location.split('?')[0];
   const title    = usePageTitle(page, pages, domains);
-  const labels   = useMemo(() => workflowLabels(domains ?? []), [domains]);
   const pageKey  = page.page === 'home' ? HOME_PAGE_KEY : page.page === 'householdPage' ? page.params.pageKey : null;
   const shown    = pageKey && pages?.find(p => p.pageKey === pageKey);
   const context  = useMemo(() => ({ api, domains, locale: me?.locale ?? i18n.language, timeZone: me?.timezone, onSignInRequired }),
@@ -135,7 +134,7 @@ export function Shell({ route, me, pages, domains, problem, api, onSignInRequire
   return (
     <div className="app">
       <TopBar route={page} title={title} pages={pages} domains={domains}>
-        <NeedsYou api={api} labels={labels} path={path} onSignInRequired={onSignInRequired} />
+        <NeedsYou api={api} path={path} onSignInRequired={onSignInRequired} />
         <Link to="/settings/profile" state={{ from: under }} className="ib" aria-label={t('settings.title')} title={t('settings.title')}>
           <GearIcon />
         </Link>

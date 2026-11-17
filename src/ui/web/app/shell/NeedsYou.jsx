@@ -52,19 +52,18 @@ function useWaitingGates(api, onSignInRequired) {
  * The list itself, drawn from the gates — what the drawer holds, and what the tests draw.
  *
  * @param {object} props
- * @param {object[]} props.gates            GET /gates's `gates`
- * @param {Map<string, string>} props.labels Workflow labels by name
+ * @param {object[]} props.gates            GET /gates's `gates`, each naming its workflow for a person
  * @param {string} props.path               The current path — a run opens over it
  * @param {number} props.now
  * @param {() => void} props.onPick
  */
-export function WaitingList({ gates, labels, path, now, onPick }) {
+export function WaitingList({ gates, path, now, onPick }) {
   const { t, i18n } = useTranslation();
   if (gates.length === 0) return <p className="muted">{t('needsYou.empty')}</p>;
   return (
     <ul className="waiting">
       {gates.map(g => {
-        const workflow = labels.get(g.workflowName) ?? g.workflowName;
+        const workflow = g.workflowLabel ?? g.workflowName;
         return (
           <li key={g.runId}>
             <Link to={`${path}?run=${g.runId}`} onNavigate={onPick}>
@@ -85,11 +84,10 @@ export function WaitingList({ gates, labels, path, now, onPick }) {
 /**
  * @param {object} props
  * @param {{ get: (path: string) => Promise<any> }} props.api
- * @param {Map<string, string>} props.labels
  * @param {string} props.path
  * @param {() => void} props.onSignInRequired
  */
-export function NeedsYou({ api, labels, path, onSignInRequired }) {
+export function NeedsYou({ api, path, onSignInRequired }) {
   const { t }           = useTranslation();
   const gates           = useWaitingGates(api, onSignInRequired);
   const [open, setOpen] = useState(false);
@@ -104,7 +102,7 @@ export function NeedsYou({ api, labels, path, onSignInRequired }) {
         <Drawer title={t('needsYou.title')} onClose={() => setOpen(false)}>
           {gates === null
             ? <p className="muted">{t('shell.loading')}</p>
-            : <WaitingList gates={gates} labels={labels} path={path} now={Date.now()} onPick={() => setOpen(false)} />}
+            : <WaitingList gates={gates} path={path} now={Date.now()} onPick={() => setOpen(false)} />}
         </Drawer>
       )}
     </>

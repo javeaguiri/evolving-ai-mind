@@ -22,7 +22,7 @@ import { matchPath, matchLocation }  from '../../src/ui/web/app/router.mjs';
 import { formatValue, isNumericColumn }   from '../../src/ui/web/app/records/format.mjs';
 import { rowsRequest, mergeColumns, listFields, initialView, viewKey } from '../../src/ui/web/app/records/query.mjs';
 import { runName, panelWorkflows, addMessages, threadDelay, isActive, isWorking, THREAD_POLL_MS, THREAD_POLL_MAX_MS } from '../../src/ui/web/app/runs/runs.mjs';
-import { pageItems, domainItems, sectionOf, currentItem, workflowLabels, gateHeadline, relativeAge, pollDelay, POLL_MS, POLL_MAX_MS } from '../../src/ui/web/app/shell/nav.mjs';
+import { pageItems, domainItems, sectionOf, currentItem, gateHeadline, relativeAge, pollDelay, POLL_MS, POLL_MAX_MS } from '../../src/ui/web/app/shell/nav.mjs';
 
 const APP_DIR = new URL('../../src/ui/web/app/', import.meta.url).pathname;
 const CONFIG  = { userPoolId: 'us-east-2_pool', clientId: 'client123', authDomain: 'https://auth.example', siteUrl: 'https://site.example', region: 'us-east-2' };
@@ -266,13 +266,6 @@ describe('nav — the shell\'s decisions', () => {
     assert.equal(currentItem(at('/p/money')), 'money');
     assert.equal(currentItem(at('/d/x')), 'x');
     assert.equal(currentItem(at('/d')), null);
-  });
-
-  it('workflowLabels: every domain\'s workflows by name', () => {
-    const labels = workflowLabels([{ workflows: [{ name: 'w1', label: 'One' }] }, { workflows: [{ name: 'w2', label: 'Two' }] }]);
-    assert.equal(labels.get('w1'), 'One');
-    assert.equal(labels.get('w2'), 'Two');
-    assert.equal(labels.get('w3'), undefined);
   });
 
   it('gateHeadline: the message\'s first line, without markdown\'s marks', () => {
@@ -554,19 +547,19 @@ describe('components and catalog', () => {
 
   it('the waiting list: question, workflow and run, age, Slack, each opening its run over this page', () => {
     const gates = [
-      { runId: 12, workflowName: 'tidy_up', label: 'Spare room', provider: 'slack', waitingSince: '2026-11-17T09:00:00Z',
+      { runId: 12, workflowName: 'tidy_up', workflowLabel: 'Tidy up', label: 'Spare room', provider: 'slack', waitingSince: '2026-11-17T09:00:00Z',
         dialog: { fields: [{ type: 'typography', value: '**Keep** the lamp?\nIt has not moved in a year.' }] } },
-      { runId: 13, workflowName: 'unlisted_flow', label: null, provider: 'web', waitingSince: '2026-11-16T10:00:00Z', dialog: { fields: [] } },
+      { runId: 13, workflowName: 'unlisted_flow', workflowLabel: 'Unlisted flow', labelFallback: true, label: null, provider: 'web', waitingSince: '2026-11-16T10:00:00Z', dialog: { fields: [] } },
     ];
     const html = ui.renderToString(ui.createElement(ui.WaitingList, {
-      gates, labels: new Map([['tidy_up', 'Tidy up']]), path: '/p/money', now: Date.parse('2026-11-17T12:00:00Z'), onPick() {},
+      gates, path: '/p/money', now: Date.parse('2026-11-17T12:00:00Z'), onPick() {},
     }));
     assert.match(html, /<a href="\/p\/money\?run=12"><span class="q">Keep the lamp\?<\/span><span class="sub">Tidy up · Spare room(<!-- -->)? · <time dateTime="2026-11-17T09:00:00Z">3 hours ago<\/time><\/span><span class="pill slack">Slack<\/span><\/a>/);
-    assert.match(html, /<a href="\/p\/money\?run=13"><span class="q">unlisted_flow<\/span><span class="sub">unlisted_flow(<!-- -->)? · <time[^>]*>yesterday<\/time><\/span><\/a>/);
+    assert.match(html, /<a href="\/p\/money\?run=13"><span class="q">Unlisted flow<\/span><span class="sub">Unlisted flow(<!-- -->)? · <time[^>]*>yesterday<\/time><\/span><\/a>/);
   });
 
   it('the waiting list, empty', () => {
-    const html = ui.renderToString(ui.createElement(ui.WaitingList, { gates: [], labels: new Map(), path: '/', now: 0, onPick() {} }));
+    const html = ui.renderToString(ui.createElement(ui.WaitingList, { gates: [], path: '/', now: 0, onPick() {} }));
     assert.match(html, /Nothing is waiting for you\./);
   });
 

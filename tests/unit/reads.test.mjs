@@ -34,10 +34,12 @@ const body = r => JSON.parse(r.body);
 const gateStep = { step: '3', type: 'human_gate', gate_type: 'confirm', message_template: 'Save {{month}}?',
   options: [{ action: 'confirm', label: 'Save' }, { action: 'cancel', label: 'Cancel' }] };
 const atGate = (id, callback, pushedAt) => ({
-  id, label: null, status: 'awaiting_human_gate', callback,
+  id, workflow_id: 5, label: null, status: 'awaiting_human_gate', callback,
   stack: [{ type: 'workflow', local_state: { month: 'May' } },
           { type: 'human_gate', gate_id: `g-${id}`, gate_type: 'confirm', step_ref: gateStep, workflow_name: 'w', local_state: { month: 'May' }, pushed_at: pushedAt }],
 });
+
+const pick = g => [g.workflowLabel, g.labelFallback];
 
 describe('toWaitingGate — the dialog Slack is sent, rebuilt from the frame', () => {
   it('carries the gate_id an answer must name, and the resolved message', () => {
@@ -46,6 +48,14 @@ describe('toWaitingGate — the dialog Slack is sent, rebuilt from the frame', (
     assert.equal(gate.dialog.gate_id, 'g-9');
     assert.equal(gate.dialog.fields[0].value, 'Save May?');
     assert.deepEqual([gate.runId, gate.workflowName, gate.gate_type, gate.provider], [9, 'w', 'confirm', 'slack']);
+  });
+
+  it('names its workflow for a person: the stored label in the household\'s language, else the humanised name', () => {
+    const run = atGate(9, { provider: 'slack', channel: 'C1' }, 't');
+    assert.deepEqual(pick(toWaitingGate(run, { label: { en: 'Do it', es: 'Hazlo' } }, 'es')), ['Hazlo', false]);
+    assert.deepEqual(pick(toWaitingGate(run, null, 'en')), ['W', true]);
+    run.stack[1].workflow_name = 'ping_core';
+    assert.deepEqual(pick(toWaitingGate(run, { run_label: 'x' }, 'en')), ['Ping core', true]);
   });
 
   it('is null for a run that is not at a gate', () => {
@@ -90,9 +100,22 @@ describe('/proc/gates over HTTP — every id checked against the principal', () 
     stubServ(() => ({ rows: [atGate(9, { provider: 'slack', channel: 'C1' }, 't')] }));
     const r = await gates(req('gates/9', 'GET', member));
     assert.deepEqual([r.statusCode, body(r).gateId], [200, 'g-9']);
+    assert.equal(body(r).workflowLabel, 'W');
     stubServ(() => ({ rows: [{ id: 9, status: 'completed', stack: [], callback: { provider: 'slack' } }] }));
     const done = await gates(req('gates/9', 'GET', member));
     assert.deepEqual([done.statusCode, body(done).error], [404, 'gate_not_waiting']);
+  });
+
+  it('the list reads each waiting run\'s workflow display once, by id', async () => {
+    process.env.HOUSEHOLD_PRINCIPALS = 'sub-a';
+    process.env.HOUSEHOLD_LOCALE = 'en';
+    const calls = stubServ((b, n) => (n === 1
+      ? { rows: [atGate(1, { provider: 'slack' }, 'a'), atGate(2, { provider: 'slack' }, 'b')] }
+      : { rows: [{ id: 5, display: { label: 'Do it' } }] }));
+    const r = await gates(req('gates', 'GET', member));
+    assert.deepEqual(body(r).gates.map(pick), [['Do it', false], ['Do it', false]]);
+    assert.deepEqual(calls[1].filters, [{ column: 'id', op: 'in', value: [5] }]);
+    delete process.env.HOUSEHOLD_LOCALE;
   });
 
   it('the list says when waiting runs past those read remain', async () => {
