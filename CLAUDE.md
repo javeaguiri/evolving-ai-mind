@@ -185,6 +185,7 @@ No linter or formatter is configured. Code review is done against `docs/code-rev
 | `node dev_scripts/upsert-prompt.mjs` | Push prompts to PGC_Prompt |
 | `node dev_scripts/upsert-step-type.mjs` | Push step type definitions |
 | `node dev_scripts/upsert-system-context.mjs` | Push system context |
+| `node dev_scripts/deploy-web.mjs [--check]` | Ship the web app (`sam deploy` does not): `npm audit` gate, esbuild into `dist/web/`, upload what changed, refresh CloudFront's `/index.html`; `--check` uploads nothing. A rerun prints "no changes — already current" |
 | `node dev_scripts/upsert-page.mjs [household/pages.json] [--check]` | Push web app pages to `PGC_Page`: no file = the generic Home seed (only created, never overwrites); a file = the household's pages, a new version when changed. Each panel checked against the live registry first; `--check` writes nothing |
 | `node dev_scripts/upsert-domain-display.mjs [household/domains.json] [--check]` | Push `PGC_DomainHelp.display` (a domain's label and menu visibility): no file = the seed's rows, a file = the household's domains. Existing domains only; compared by value, so a rerun prints "no changes" |
 | `node dev_scripts/upsert-schema-registry.mjs [--check]` | Push PGC tables' `PGC_Schema` registry rows from `seed_PGC_Schema.json`; refuses any row the live database disagrees with |
@@ -246,15 +247,17 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 
 ## Current State
 
-Sprints 7–16: see `docs/sprints/sprint-07.md` through `docs/sprints/sprint-16.md` (outcome, validation, retro).
+Sprints 7–17: see `docs/sprints/sprint-07.md` through `docs/sprints/sprint-17.md` (outcome, validation, retro).
+
+**Sprint 17 closed 2026-11-17 → 3 days, branch `sprint/17-web-front`. 1571 → 1774 unit tests. All 5 ACs met, live or by review.** **The household uses the brain from a web page** — Phase 0's front end. A React SPA on S3 + CloudFront (`dxghnv4qmxz62.cloudfront.net`), Cognito sign-in with TOTP, `WebApiFunction` an allow-list calling PROC as the token's `sub`; shipped by `dev_scripts/deploy-web.mjs`, not `sam deploy`. Home, Money and Inventory from `PGC_Page`: records panels (grid/list, column `label`/`format`), workflow panels, report panels with ↻ Refresh. A run's thread from the inbox, folded when long; every gate type answered in the browser, whichever surface started the run; a form with `row`/`column` drawn as a grid, a table per `group`. `edit_budget` v9 (Novia, session 1362) edits a month as three grids. `chart`/`metric` panels moved to Phase 1.
 
 **Sprint 16 closed 2026-11-15 → 1 session, branch `sprint/16-web-seam`. 1487 → 1571 unit tests. All 7 ACs met, three of them live (runs 1030, 1031, 1032).** **`/proc` drives a second provider** — the web app's backend seam, Phase 0's first half. `enqueueCallback` writes every message to a person to `PGC_UiMessage` (the web's only delivery; Slack's too, then queued). The principal comes from `x-principal-user` with a household role from SSM `household-principals`; every id-taking route checks it. Runs carry a label from their workflow's `display.run_label`, which Novia writes (session 1355). `PGC_Page` and its panel contract (records panels switch views, `arch-web-app.md` v0.6) with the household's pages in the committed `household/`. Reads: inbox, runs (and starting one), pages, gates, outputs, sources. `row`/`column`/`group` on a form field, checked by an L0 item check composed from the contract. Slack buttons carry `gate_id`; a click on a gate answered elsewhere is refused and told (`GATE_MOVED`). Deployed from templates and seeds, no drift.
 
-Read `docs/sprints/sprint-16.md` (outcome, retro) before scoping Sprint 17.
+Read `docs/sprints/sprint-17.md` (outcome, retro) before scoping Sprint 18.
 
-### Open Work (Sprint 17 — active)
+### Open Work
 
-The web app's front end, the second half of `docs/arch-web-app.md` §10 Phase 0, in `docs/sprints/CURRENT.md`, branch `sprint/17-web-front`, started 2026-11-15. Token storage decided (memory + `localStorage` behind the CSP, `arch-web-app.md` v0.7); inbox retention none this sprint.
+None — Sprint 18 not yet scoped. Candidates: `arch-web-app.md` §10 Phase 1 (Novia in the browser, the page editor, `chart`/`metric` panels, `GATE_RESOLVED`), and the backlog's web items (custom domain, a thread that keeps its answers).
 
 ### Deferred
 
@@ -289,7 +292,7 @@ The web app's front end, the second half of `docs/arch-web-app.md` §10 Phase 0,
 | `docs/arch-minds-eye.md` | Minds-eye agent — tool catalog, use cases, agentic loop, implementation sequence (Sprint 5) |
 | `docs/arch-home-brain.md` | Home Brain — proposed single-page app: navigation and domain drill-down over REST, workflow execution pushed by the backend as for Slack (console layout, panels, `provider: 'web'` flows, REST resources, phasing) and the multi-tenant flexible-records direction. buildable detail in `arch-web-app.md`; tenancy deferred |
 | `docs/arch-sandbox.md` | The test sandbox — policy, what a sandbox holds, `x-sandbox` routing, Novia's test tools, the uncommitted test copy |
-| `docs/arch-web-app.md` | Web app design, **approved v0.5** — platform, `PGC_UiMessage` inbox, `gate_id`, `PGC_Page`, API surface, the shell (top-bar menus, Novia left, pages of panels and widgets), gate rendering incl. the editable grid, renderer-owned ceilings, domain views, phases, security, languages |
+| `docs/arch-web-app.md` | Web app design, **approved, v0.10; Phase 0 built (Sprint 17)** — platform, `PGC_UiMessage` inbox, `gate_id`, `PGC_Page`, API surface, the shell (top-bar menus, Novia left, pages of panels and widgets), gate rendering incl. the editable grid, renderer-owned ceilings, domain views, phases, security, languages |
 
 ### Process and reference
 

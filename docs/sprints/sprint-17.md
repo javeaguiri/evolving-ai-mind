@@ -1,6 +1,6 @@
 # Sprint 17 — The web app's front end
 
-**Status: ACTIVE — started 2026-11-15.** Scope and ACs agreed with Javear at "start sprint". The second half of `docs/arch-web-app.md` (v0.6) §10 Phase 0; Sprint 16 built the
+**Status: CLOSED 2026-11-17 — started 2026-11-15. All five ACs met, every one live or by review.** Scope and ACs agreed with Javear at "start sprint". The second half of `docs/arch-web-app.md` (v0.6) §10 Phase 0; Sprint 16 built the
 backend seam it sits on. The prior sprint's retro is `docs/sprints/sprint-16.md`.
 
 **Branch:** `sprint/17-web-front` — merged to main at close, as every sprint is.
@@ -61,3 +61,69 @@ answered in the browser; `edit_budget` edits a month in one grid.
 | WebSocket | Polling first, until it's felt (§10) |
 | Tenancy | Deferred until the second household commits (`arch-home-brain.md`) |
 | Inbox retention | Decided at scoping: none until the web is in use (`arch-web-app.md` §12.1) |
+
+## Outcome — closed 2026-11-17
+
+**The household signs in to a web page and uses the brain there.** Home, Money and Inventory draw
+from `PGC_Page`; a workflow started on a page, or in Slack, is stepped through in the browser, and
+every gate type is answered there; `edit_budget` edits a month as three grids, one per budget type,
+with one Save that writes only what changed.
+
+**Built:** the site on S3 + CloudFront with Cognito sign-in (TOTP) and `WebApiFunction`'s
+allow-list; the shell — menus from `/pages` and `/workflows`, 🔔, Settings › Profile, the run drawer
+and run page, a *Reload* notice when a newer build is live; records panels (grid/list, column
+`label` and `format`, a record's detail beside the list), workflow panels, the report panel; a
+run's thread with folding and the waiting question in view; every §5.2 gate type, the grid split at
+each `group` (decision K). PROC: `GET /proc/workflows`, `/proc/me`, `/proc/runs/{runId}`; a waiting
+gate and a run name their workflow; Novia's test runs neither listed nor read. Spec 3.7.3 → 3.10.0.
+Unit tests 1571 → 1774.
+
+**Novia, session 1362:** `edit_budget` v9 from a four-point brief — `number` fields with grid
+hints, only changed rows written, the rows' currency instead of a hardcoded USD, amounts formatted
+in it — tested in the sandbox (run 1048) and checked against the definition.
+
+**Moved out:** `chart` and `metric` panels to Phase 1 (decision N). **To the backlog:** the custom
+domain; a thread that keeps the answers given (decision L).
+
+## Retro
+
+**What went right.**
+
+*Every design went to Javear before it was built, as lettered decisions.* A to N, then K: each
+was answered in one line, and none was reworked after it shipped.
+
+*A live check per item found what tests could not, and each finding was fixed the same day.* The
+list's alignment on a wide screen, a drawer that blocked the next click, long threads, a missing
+run id, a report table squeezed on a phone. None of them was a logic error, so no unit test would
+have caught them.
+
+*The procedure/experience split decided K in a minute.* "Three grids" sounded like a workflow
+change. `group` already says what the sections are, so only the renderer changed, and Novia's
+brief stayed as it was.
+
+*A written brief made Novia's correction a one-session job.* She read the workflow, simulated the
+change, tested it in the sandbox against the brief's own expected values, and reported what she
+had not tested. Reviewing her work against the live definition found nothing to fix.
+
+**What went wrong, and what it says.**
+
+*A stale tab looked like a bug.* The `ping_core` drawer was empty because the browser was still
+running the previous build. **A single-page app has to say when it is out of date; and before
+diagnosing a web defect, confirm which build the tab is running.** The *Reload* notice now does
+the first part.
+
+*A design doc deferred something Slack already does.* §5.2 put `followup_prompt`'s button in
+Phase 1, so it was not built, and the missing button was found live. **Parity with Slack is the
+baseline: a deferral in the web design is checked against what Slack draws today.**
+
+*Test runs leaked into a person's lists.* Novia's sandbox runs showed up in `/runs` as empty
+threads. **Every read a person sees excludes test runs, decided once and applied to every sibling
+read in the same change** (it was then applied to `/gates` too).
+
+*Spreading a helper's result overwrote a field.* `labelOf` returns `{ label, … }`, and spreading
+it into a gate replaced the run's own `label`. **Map a helper's result to named fields; don't
+spread an object whose keys you don't own.**
+
+*A full disk emptied a doc mid-write.* `docs/backlog.md` was truncated to nothing; it was
+recovered from git. **When a write fails strangely, check `df` before anything else.**
+

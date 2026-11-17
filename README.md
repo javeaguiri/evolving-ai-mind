@@ -137,14 +137,14 @@ The execution stack lives in `PGC_WorkflowRun.stack`. A sequential iterator **ne
 | Runtime | Node.js 22.x ESM, arm64 Graviton2 |
 | Bundler | esbuild (ESM-native, CJS shim banner) |
 | Infrastructure | AWS SAM + CloudFormation |
-| Compute | AWS Lambda (4 functions) |
+| Compute | AWS Lambda (5 functions) |
 | Queuing | AWS SQS (WorkflowQueue + SlackResultsQueue) |
 | Database | PostgreSQL 16 on RDS (PGC + PGD databases), encrypted at rest (`aws/rds`) |
-| Primary UI | Slack Bot |
+| UI | Slack Bot, and a web app (React, S3 + CloudFront, Cognito sign-in with TOTP) — `docs/arch-web-app.md` |
 | LLM | Pluggable — currently Perplexity; model selection is coded logic |
 | Region | us-east-2 |
 
-### Four Lambda Functions
+### Five Lambda Functions
 
 | Function | Trigger | Tier | Purpose |
 |---|---|---|---|
@@ -152,6 +152,7 @@ The execution stack lives in `PGC_WorkflowRun.stack`. A sequential iterator **ne
 | `evolving-mind-ai-proc` | API Gateway + SQS WorkflowQueue | Process | Step Processor, intent pipeline, workflow orchestration |
 | `evolving-mind-ai-serv` | API Gateway | Service | DDL executor, table CRUD, PGC bootstrap |
 | `evolving-mind-ai-slack-callback-listener` | SQS SlackResultsQueue | Experience | Posts threaded Slack replies, renders Block Kit dialogs |
+| `evolving-mind-ai-web-api` | API Gateway, Cognito authorizer | Experience | The web app's routes — an allow-list, each called on PROC as the signed-in person |
 
 `evolving-mind-ai-proc` has a dual trigger — HTTP for direct API calls and SQS for async workflow execution. The same endpoint modules handle both transports identically. `req.source` (`'http'` or `'sqs'`) determines the response path only.
 
@@ -229,6 +230,9 @@ evolving-mind-ai/
 │   │   └── serv-client.mjs           # servPost, getRows, insertRow, updateRows
 │   │
 │   ├── ui/
+│   │   ├── web/api/                  # Experience tier — WebApiFunction: the web app's routes, on PROC as the signed-in person
+│   │   ├── web/app/                  # The web app — React, built by dev_scripts/deploy-web.mjs, runs in the browser
+│   │   ├── shared/                   # Rules both providers apply alike (a failure's summary)
 │   │   └── slackbot/                 # Experience tier — Slack only
 │   │       ├── handler.mjs           # Route dispatcher — HTTP only, Slack signature verification
 │   │       ├── ping.mjs              # /ping-api
@@ -401,7 +405,7 @@ aws sts get-caller-identity  # verify
 
 evolving-mind does **not** use `.env` files at runtime. All secrets are stored in SSM and resolved by CloudFormation at deploy time.
 
-**Seven parameters, and every one is `String` — not `SecureString`.** That is an architectural decision, and it is load-bearing at this step rather than merely a preference: `template.yaml` reads these with `{{resolve:ssm:...}}`, which resolves `String` and `StringList` only. A `SecureString` needs `{{resolve:ssm-secure:...}}`, which CloudFormation does not support for Lambda environment variables — so storing these encrypted does not weaken the deploy, it prevents it. IAM reach is the control on these values; `docs/ops-key-rotation.md` §0 sets out the consequence in full.
+**Nine parameters, and every one is `String` — not `SecureString`.** That is an architectural decision, and it is load-bearing at this step rather than merely a preference: `template.yaml` reads these with `{{resolve:ssm:...}}`, which resolves `String` and `StringList` only. A `SecureString` needs `{{resolve:ssm-secure:...}}`, which CloudFormation does not support for Lambda environment variables — so storing these encrypted does not weaken the deploy, it prevents it. IAM reach is the control on these values; `docs/ops-key-rotation.md` §0 sets out the consequence in full.
 
 ```cmd
 aws ssm put-parameter --name "/evolving-mind-ai/slack-bot-token" --value "xoxb-..." --type String --region us-east-2
@@ -411,11 +415,15 @@ aws ssm put-parameter --name "/evolving-mind-ai/internal-api-key" --value "..." 
 aws ssm put-parameter --name "/evolving-mind-ai/pgc-database-url" --value "postgresql://..." --type String --region us-east-2
 aws ssm put-parameter --name "/evolving-mind-ai/pgd-database-url" --value "postgresql://..." --type String --region us-east-2
 aws ssm put-parameter --name "/evolving-mind-ai/household-principals" --value "<user-id>[,<user-id>]" --type String --region us-east-2
+aws ssm put-parameter --name "/evolving-mind-ai/household-locale" --value "en" --type String --region us-east-2
+aws ssm put-parameter --name "/evolving-mind-ai/household-timezone" --value "Europe/Madrid" --type String --region us-east-2
 ```
 
 **`internal-api-key` is generated here, not obtained from anywhere.** It is the PROC↔SERV shared secret *and* the API Gateway key value, so it must be 20–128 characters with no whitespace — `openssl rand -hex 32` satisfies that by construction. Do not invent a passphrase: one containing a space or symbol is accepted by SSM and then rejected at deploy, failing the stack update partway through. The PowerShell equivalent is in `docs/ops-key-rotation.md` §2.2, along with the reason the value should never be typed inline.
 
 **`household-principals` lists who the household is, not a secret.** The ids of the people who may see the household's runs, gates, pages and records on the web, comma-separated (`docs/arch-security.md` S5). It holds ids only — signing in is the web app's, and each id is the one sent as `x-principal-user`; once Cognito signs people in, it is each person's Cognito `sub`.
+
+**`household-locale` and `household-timezone` are the household's formats** — a BCP 47 language tag and an IANA timezone. The web app formats dates, numbers and money with them until people have profiles of their own.
 
 **The two database URLs hold the identical value.** PGC and PGD are one database separated by table prefix, not by credentials — same user, same host, same database. Write both from the same variable in the same session. If they drift, one Lambda authenticates and the other does not, which presents as an intermittent fault rather than a clean failure.
 
@@ -512,6 +520,19 @@ In the [Slack API dashboard](https://api.slack.com/apps):
 
 ---
 
+### Step 8 — Publish the Web App
+
+`sam deploy` creates the site's bucket, its CloudFront distribution and the Cognito user pool, but does not ship the app itself:
+
+```bash
+node dev_scripts/deploy-web.mjs           # audit, build, upload what changed, refresh CloudFront
+node dev_scripts/deploy-web.mjs --check   # the same, uploading nothing
+```
+
+The site's address is the stack output `WebSiteUrl`. The pool admits only people an administrator creates (`aws cognito-idp admin-create-user --user-pool-id <WebUserPoolId> …`), and each sets up a TOTP authenticator at first sign-in. Then add each person's Cognito `sub` to `household-principals` and redeploy, so the web shows them the household's runs and pages. The pages themselves are data: `node dev_scripts/upsert-page.mjs household/pages.json` and `node dev_scripts/upsert-domain-display.mjs household/domains.json`.
+
+---
+
 ## Current Status
 
 | Milestone | Tag | Status |
@@ -547,7 +568,7 @@ The evolving mind is designed so the **UI layer is fully abstracted**. Slack is 
 
 We are actively looking for collaborators on:
 
-- **Web UI** — a browser-based chat interface and domain management dashboard
+- **Web UI** — the web app's Phase 0 is live (pages of panels, runs and every gate type, `docs/arch-web-app.md`); Novia in the browser, charts and domain views are next
 - **Domain visualisation** — displaying generated schemas, active workflow runs, and execution history
 - **Workflow builder** — a drag-and-drop or conversational interface for designing workflows
 - **Mobile interface** — push notifications and native chat UI

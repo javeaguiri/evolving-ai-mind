@@ -3,11 +3,12 @@
 <!-- Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). -->
 <!-- See LICENSE file in the project root for full license terms. -->
 
-Version: 0.9
+Version: 0.10
 Status: **Approved — Sprint 14 AC0 (Javear, 2026-10-31); v0.6 on Javear's direction, 2026-11-15; v0.7 token storage decided at Sprint 17 scoping, v0.8 `GET /me` and domain labels in Phase 0, v0.9 the infrastructure plan — `WebApiFunction` HTTP only, access token by scope, TOTP first (Javear, 2026-11-15).**
 The four platform choices in §1 were accepted tentatively (Javear, 2026-10-22: "go tentatively with
 the suggestions").
-Last updated: 2026-11-15 (v0.6 — a records panel names its source, not a widget: grid, list and document are views the viewer switches between without changing the panel's config; chart, metric and report stay widgets, on a summary panel. §2.3, §4.2, §4.4, §6.2, §6.3, §10)
+Last updated: 2026-11-17 (v0.10 — Phase 0 built, Sprint 17: a grid split at each `group`, a subheading over its own table (§5.2, decision K); `followup_prompt` drawn as Slack draws it (§5.2); a records column's `label` and `format` (§4.2); menus from data (§13); §7.2's code layout as built)
+Previously: 2026-11-15 (v0.6 — a records panel names its source, not a widget: grid, list and document are views the viewer switches between without changing the panel's config; chart, metric and report stay widgets, on a summary panel. §2.3, §4.2, §4.4, §6.2, §6.3, §10)
 Previously: 2026-10-31 (v0.5, on Javear's review of v0.4 — the navigator becomes Pages, Domains and Activity menus across the top bar; Novia moves to the left; 🏠 always goes Home; Phase 0 draws the household's own pages read-only, with every widget but `form`; a session's topic is set only from its panel)
 Previously: 2026-10-31 (v0.4 — console layout, pages of panels, widgets as data views, renderer-owned ceilings)
 Previously: 2026-10-30 (v0.3 — ☰ menu, labelled runs, Novia separate; §2.4 run labels)
@@ -750,9 +751,20 @@ src/ui/
 │   │   ├── proc-client.mjs                 PROC as the token's sub, with the internal key; Cognito
 │   │   ├── me.mjs                          GET /me → PROC /me + Cognito GetUser
 │   │   └── inbox.mjs                  OUT  GET /inbox → PGC_UiMessage through PROC, errors summarised
-│   └── app/                           React SPA — runs in the browser, shipped from S3
-│       ├── Gate.jsx, Form.jsx         dialog → components: the web's dialogToBlocks
-│       └── Grid.jsx                   the editable grid
+│   └── app/                           React SPA — runs in the browser, shipped from S3 by deploy-web.mjs
+│       ├── main.jsx, App.jsx          entry; the shell's data, the settings overlay, run drawer and run page
+│       ├── router.mjs, Link.jsx       history routing
+│       ├── auth/, api/client.mjs      Cognito sign-in (PKCE), tokens; the one fetch to /api/v1/ui/web
+│       ├── shell/                     top bar, menus (nav.mjs), 🔔, drawer, the Reload notice
+│       ├── pages/Settings.jsx         Settings › Profile
+│       ├── panels/, records/          a page's panels: records, workflow, report
+│       ├── runs/                      a run's thread, polled from GET /inbox
+│       ├── Markdown.jsx               marked's tokens → React elements
+│       ├── gates/                     dialog → components: the web's dialogToBlocks
+│       │   ├── Gate.jsx, Input.jsx    every gate type, every input
+│       │   ├── Grid.jsx               the editable grid, a table per group
+│       │   └── gate.mjs               pure: values, checks, the answer, the grid's layout
+│       └── locales/en.json            the catalog (§13)
 │
 └── shared/                            both providers
     └── workflow-error.mjs             a WORKFLOW_ERROR's summary
