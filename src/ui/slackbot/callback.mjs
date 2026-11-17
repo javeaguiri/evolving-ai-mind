@@ -23,6 +23,7 @@ import { randomUUID }        from 'node:crypto';
 import { WebClient }         from '@slack/web-api';
 import { FORM_BLOCK_PREFIX, EMPTY_OPTION_VALUE, listIdBlockId, numberActionId, NOVIA_ANSWER_PREFIX, NOVIA_COMMENT_PREFIX, NOVIA_NOTE_BLOCK } from './form-fields.mjs';
 import { summariseWorkflowError } from '../shared/workflow-error.mjs';
+import { formatColumnHeader }    from '../shared/column-header.mjs';
 
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
@@ -1272,22 +1273,6 @@ export function buildRevealBlock(field, budget = makeTableBudget()) {
 // escapeCell — shared markdown-table cell escaping (pipe/newline), used by
 // both buildListSections and buildObjectArrayTable.
 const escapeCell = v => String(v ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
-
-// formatColumnHeader — pure presentation, no domain knowledge: title-cases a
-// snake_case field name (ease_factor -> Ease Factor, front -> Front). A key
-// ending in _id whose values no longer look like raw ids (the workflow already
-// resolved the FK to its label, keeping the original column name) drops the
-// _id suffix and reads as "<Prefix> Name" (deck_id -> Deck Name) instead —
-// judged from the data itself, so an _id column still holding raw numeric ids
-// (never resolved) is left as a plain title-cased "Deck Id".
-function formatColumnHeader(key, values) {
-  if (key === 'ID') return 'ID';
-  const isFkColumn    = /_id$/i.test(key);
-  const looksResolved = isFkColumn && values.some(v => v !== undefined && v !== null && v !== '' && Number.isNaN(Number(v)));
-  const base  = looksResolved ? key.slice(0, -3) : key;
-  const words = base.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1));
-  return looksResolved ? `${words.join(' ')} Name` : words.join(' ');
-}
 
 // formatTableName — pure presentation, no domain knowledge: strips the PGD_
 // prefix and splits PascalCase into words (PGD_RecipeSteps -> Recipe Steps).

@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import { oversizedGateMessage, isPermanentRenderFailure, toSlackMrkdwn, dialogToBlocks,
          buildRevealBlock, makeTableBudget, buildListSections, markdownToBlocks } from '../../src/ui/slackbot/callback.mjs';
 import { listIdBlockId } from '../../src/ui/slackbot/form-fields.mjs';
+import { formatColumnHeader } from '../../src/ui/shared/column-header.mjs';
 
 // toSlackMrkdwn — the REAL exported function (not a copy). Normalizes standard
 // **bold** / __bold__ to Slack mrkdwn *bold* and GFM ~~strike~~ to ~strike~ for
@@ -199,17 +200,6 @@ function groupBlocksForSlack(blocks, maxBlocksPerGroup) {
 // ── Faithful copy of escapeCell from callback.mjs ────────────────────────────
 // Keep in sync with src/ui/slackbot/callback.mjs:escapeCell
 const escapeCell = v => String(v ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
-
-// ── Faithful copy of formatColumnHeader from callback.mjs ───────────────────
-// Keep in sync with src/ui/slackbot/callback.mjs:formatColumnHeader
-function formatColumnHeader(key, values) {
-  if (key === 'ID') return 'ID';
-  const isFkColumn    = /_id$/i.test(key);
-  const looksResolved = isFkColumn && values.some(v => v !== undefined && v !== null && v !== '' && Number.isNaN(Number(v)));
-  const base  = looksResolved ? key.slice(0, -3) : key;
-  const words = base.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1));
-  return looksResolved ? `${words.join(' ')} Name` : words.join(' ');
-}
 
 // ── Faithful copy of formatTableName from callback.mjs ──────────────────────
 // Keep in sync with src/ui/slackbot/callback.mjs:formatTableName
