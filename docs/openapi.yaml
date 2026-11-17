@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: evolving-mind-ai
-  version: 3.7.3
+  version: 3.8.0
   description: >
     Self-evolving cognitive automation system.
     Slack → Lambda → PostgreSQL → LLM pipeline.
@@ -1845,6 +1845,26 @@ paths:
         '403': { description: household_required, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '404': { description: workflow_not_found, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
 
+  /api/v1/ui/web/runs/{runId}:
+    get:
+      summary: One run — what the run drawer and the run page are headed by, and its status
+      description: GET /proc/runs/{runId}.
+      operationId: webGetRun
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      parameters:
+        - { name: runId, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: The run.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunSummary' }
+        '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
+        '403': { description: run_forbidden, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '404': { description: run_not_found, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+
   /api/v1/ui/web/inbox:
     get:
       summary: The user's messages after a cursor — what the app polls
@@ -2299,6 +2319,30 @@ paths:
                   gates: { type: array, items: { $ref: '#/components/schemas/WaitingGate' } }
                   more:  { type: boolean }
         '401': { description: principal_required }
+
+  /api/v1/proc/runs/{runId}:
+    get:
+      summary: One run the principal may see — its workflow, label and status
+      description: >
+        The same entry GET /proc/runs lists, for one run (docs/arch-web-app.md §4.3): the run
+        drawer and the run page are headed by it, and its status tells a thread when to stop
+        asking for messages. Checked against the principal as every id-taking route is — a
+        web-started run is its starter's, any other the household's (arch-security.md S5).
+      operationId: getRun
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+        - { name: runId, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: The run.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunSummary' }
+        '401': { description: principal_required }
+        '403': { description: run_forbidden }
+        '404': { description: run_not_found }
 
   /api/v1/proc/gates/{runId}:
     get:
