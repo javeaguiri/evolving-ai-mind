@@ -19,6 +19,19 @@
     "notFound": "Page not found",
     "goHome": "Go to Home"
   },
+  "needsYou": {
+    "title": "Needs you",
+    "button": "{count, plural, =0 {Needs you, nothing waiting} one {Needs you, # waiting} other {Needs you, # waiting}}",
+    "empty": "Nothing is waiting for you.",
+    "slack": "Slack"
+  },
+  "settings": {
+    "title": "Settings",
+    "profile": "Profile",
+    "name": "Name",
+    "email": "Email",
+    "signOut": "Sign out"
+  },
   "signIn": {
     "problem": "The sign-in didn't complete.",
     "again": "Sign in again"

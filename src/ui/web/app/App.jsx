@@ -3,19 +3,24 @@
 // See LICENSE file in the project root for full license terms.
 // src/ui/web/app/App.jsx
 //
-// The shell (docs/arch-web-app.md §4.1): the top bar over the page the route names. It reads who
+// The shell (docs/arch-web-app.md §4.1): the top bar — 🏠, Pages, Domains, 🔔, ⚙ — over the page
+// the route names, Settings and the run drawer over that. It reads who
 // the user is (GET /me), the household's pages (GET /pages) and its domains (GET /workflows) once,
 // retrying with the §9 banner while the backend can't be reached. Page bodies are each page's
 // title until the panels arrive (Sprint 17 item 4).
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation }      from 'react-i18next';
 import { SignInRequired }      from './auth/session.mjs';
-import { useRoute }            from './router.mjs';
+import { useRoute, matchLocation, navigate, replace, back } from './router.mjs';
 import { Link }                from './Link.jsx';
 import { TopBar, PhoneTabs }   from './shell/TopBar.jsx';
 import { MenuList }            from './shell/Menu.jsx';
-import { domainItems, pollDelay, HOME_PAGE_KEY } from './shell/nav.mjs';
+import { Drawer }              from './shell/Drawer.jsx';
+import { NeedsYou }            from './shell/NeedsYou.jsx';
+import { GearIcon }            from './shell/icons.jsx';
+import { Settings, SETTINGS_ENTRIES } from './pages/Settings.jsx';
+import { domainItems, workflowLabels, pollDelay, HOME_PAGE_KEY } from './shell/nav.mjs';
 
 /**
  * The three reads the shell needs, with retries. `me` may already be in hand — main.jsx reads it
@@ -65,7 +70,7 @@ function useShellData(api, initialMe, onSignInRequired) {
 export function App({ api, me, onSignInRequired, onSignOut }) {
   const route = useRoute();
   const data  = useShellData(api, me, onSignInRequired);
-  return <Shell route={route} {...data} api={api} onSignOut={onSignOut} />;
+  return <Shell route={route} {...data} api={api} onSignInRequired={onSignInRequired} onSignOut={onSignOut} />;
 }
 
 /**
@@ -89,17 +94,27 @@ function usePageTitle(route, pages, domains) {
 
 /**
  * The shell drawn from its data — what App draws once the reads are in, and what the tests draw.
+ * Settings is a dialog over the page it was opened from (or Home, from a deep link); the run
+ * drawer (`?run=`) opens over any page.
  *
  * @param {object} props
- * @param {{ page: string, params: object, run: number|null, from: string|null }} props.route
+ * @param {{ page: string, params: object, run: number|null, location: string, from: string|null }} props.route
  * @param {object|null} props.me
  * @param {object[]|null} props.pages
  * @param {object[]|null} props.domains
  * @param {boolean} props.problem
+ * @param {{ get: (path: string) => Promise<any> }} props.api
+ * @param {() => void} props.onSignInRequired
+ * @param {() => void} props.onSignOut
  */
-export function Shell({ route, pages, domains, problem }) {
-  const { t } = useTranslation();
-  const title = usePageTitle(route, pages, domains);
+export function Shell({ route, me, pages, domains, problem, api, onSignInRequired, onSignOut }) {
+  const { t }    = useTranslation();
+  const settings = route.page === 'settings' && SETTINGS_ENTRIES.includes(route.params.entry);
+  const under    = settings ? route.from ?? '/' : route.location;
+  const page     = settings ? { ...matchLocation(under), location: under } : route;
+  const path     = page.location.split('?')[0];
+  const title    = usePageTitle(page, pages, domains);
+  const labels   = useMemo(() => workflowLabels(domains ?? []), [domains]);
 
   useEffect(() => {
     document.title = title ? `${title} · ${t('app.name')}` : t('app.name');
@@ -107,7 +122,12 @@ export function Shell({ route, pages, domains, problem }) {
 
   return (
     <div className="app">
-      <TopBar route={route} title={title} pages={pages} domains={domains} />
+      <TopBar route={page} title={title} pages={pages} domains={domains}>
+        <NeedsYou api={api} labels={labels} path={path} onSignInRequired={onSignInRequired} />
+        <Link to="/settings/profile" state={{ from: under }} className="ib" aria-label={t('settings.title')} title={t('settings.title')}>
+          <GearIcon />
+        </Link>
+      </TopBar>
       {problem && <div className="banner" role="alert">{t('errors.retrying')}</div>}
       <main className="main">
         {title === null
@@ -117,14 +137,19 @@ export function Shell({ route, pages, domains, problem }) {
               <h1>{title}</h1>
             </div>
           )}
-        {route.page === 'domains' && domains && (
+        {page.page === 'domains' && domains && (
           <div className="panel">
             <MenuList items={domainItems(domains)} currentKey={null} onPick={() => {}} />
           </div>
         )}
-        {route.page === 'notFound' && <p><Link to="/">{t('pages.goHome')}</Link></p>}
+        {page.page === 'notFound' && <p><Link to="/">{t('pages.goHome')}</Link></p>}
       </main>
-      <PhoneTabs route={route} pages={pages} domains={domains} />
+      <PhoneTabs route={page} pages={pages} domains={domains} />
+      {page.run && <Drawer title={t('pages.run', { runId: page.run })} onClose={() => navigate(path)} />}
+      {settings && (
+        <Settings entry={route.params.entry} me={me} from={route.from} onSignOut={onSignOut}
+          onClose={() => (route.from ? back() : replace('/'))} />
+      )}
     </div>
   );
 }

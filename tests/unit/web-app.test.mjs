@@ -308,6 +308,7 @@ describe('components and catalog', () => {
       stdin: {
         contents: `export { renderToString } from 'react-dom/server';
                    export { Shell, SignInProblem } from './App.jsx';
+                   export { WaitingList } from './shell/NeedsYou.jsx';
                    export { initI18n } from './i18n.mjs';
                    export { createElement } from 'react';`,
         resolveDir: APP_DIR, loader: 'jsx',
@@ -326,8 +327,11 @@ describe('components and catalog', () => {
     { pageKey: 'home',  title: 'Home',  position: 0, panels: [] },
   ];
   const DOMAINS = [{ domain: 'pantry', label: 'Pantry', workflows: [] }, { domain: 'garden', label: 'Garden', labelFallback: true, workflows: [] }];
-  const draw    = (location, data = {}) => ui.renderToString(ui.createElement(ui.Shell, {
-    route: { ...matchLocation(location), from: null }, me: null, pages: PAGES, domains: DOMAINS, problem: false, ...data,
+  const ME      = { name: 'A Person', email: 'person@example.test', roles: ['household'], locale: 'en', timezone: 'Europe/Madrid' };
+  const api     = { get: () => new Promise(() => {}) };
+  const draw    = (location, data = {}, from = null) => ui.renderToString(ui.createElement(ui.Shell, {
+    route: { ...matchLocation(location), location, from }, me: ME, pages: PAGES, domains: DOMAINS, problem: false,
+    api, onSignInRequired() {}, onSignOut() {}, ...data,
   }));
 
   it('before the pages are read, the shell draws its top bar and Loading…', () => {
@@ -375,6 +379,62 @@ describe('components and catalog', () => {
   it('the phone tabs carry the two menus, the section the user is in marked', () => {
     const html = draw('/d/pantry');
     assert.match(html, /<nav class="tabbar"[^>]*><button type="button">Pages<\/button><button type="button" aria-current="true">Domains<\/button>/);
+  });
+
+  it('🔔 before its first read: no count, named for a screen reader; ⚙ goes to Profile over this page', () => {
+    const html = draw('/p/money');
+    assert.match(html, /<button type="button" class="ib" aria-label="Needs you, nothing waiting" title="Needs you">/);
+    assert.doesNotMatch(html, /class="badge"/);
+    assert.match(html, /<a href="\/settings\/profile" class="ib" aria-label="Settings" title="Settings">/);
+  });
+
+  it('Settings from a deep link opens over Home: Profile, name and email read-only, Sign out, no Save', () => {
+    const html = draw('/settings/profile');
+    assert.match(html, /<h1>Home<\/h1>/);
+    assert.match(html, /class="mbtn cur"[^>]*>Pages</);
+    assert.match(html, /role="dialog" aria-modal="true" aria-label="Settings"/);
+    assert.match(html, /<a href="\/settings\/profile" aria-current="page">Profile<\/a>/);
+    assert.match(html, /<dt>Name<\/dt><dd>A Person<\/dd><dt>Email<\/dt><dd>person@example.test<\/dd>/);
+    assert.match(html, /<button type="button" class="btn">Sign out<\/button>/);
+    assert.doesNotMatch(html, /Save|<input/);
+  });
+
+  it('Settings opened from a page draws over that page; a name Cognito lacks is left out', () => {
+    const html = draw('/settings/profile', { me: { ...ME, name: undefined } }, '/d/garden');
+    assert.match(html, /<h1>Garden<\/h1>/);
+    assert.match(html, /class="mbtn cur"[^>]*>Domains</);
+    assert.doesNotMatch(html, /<dt>Name/);
+    assert.match(html, /<dt>Email<\/dt>/);
+  });
+
+  it('an unknown Settings entry is Page not found, with no dialog', () => {
+    const html = draw('/settings/nowhere');
+    assert.match(html, /<h1>Page not found<\/h1>/);
+    assert.doesNotMatch(html, /role="dialog"/);
+  });
+
+  it('?run= opens the run drawer over the page', () => {
+    const html = draw('/p/money?run=7');
+    assert.match(html, /<h1>Money<\/h1>/);
+    assert.match(html, /role="dialog" aria-modal="true" aria-label="Run 7"/);
+  });
+
+  it('the waiting list: question, workflow and run, age, Slack, each opening its run over this page', () => {
+    const gates = [
+      { runId: 12, workflowName: 'tidy_up', label: 'Spare room', provider: 'slack', waitingSince: '2026-11-17T09:00:00Z',
+        dialog: { fields: [{ type: 'typography', value: '**Keep** the lamp?\nIt has not moved in a year.' }] } },
+      { runId: 13, workflowName: 'unlisted_flow', label: null, provider: 'web', waitingSince: '2026-11-16T10:00:00Z', dialog: { fields: [] } },
+    ];
+    const html = ui.renderToString(ui.createElement(ui.WaitingList, {
+      gates, labels: new Map([['tidy_up', 'Tidy up']]), path: '/p/money', now: Date.parse('2026-11-17T12:00:00Z'), onPick() {},
+    }));
+    assert.match(html, /<a href="\/p\/money\?run=12"><span class="q">Keep the lamp\?<\/span><span class="sub">Tidy up · Spare room(<!-- -->)? · <time dateTime="2026-11-17T09:00:00Z">3 hours ago<\/time><\/span><span class="pill slack">Slack<\/span><\/a>/);
+    assert.match(html, /<a href="\/p\/money\?run=13"><span class="q">unlisted_flow<\/span><span class="sub">unlisted_flow(<!-- -->)? · <time[^>]*>yesterday<\/time><\/span><\/a>/);
+  });
+
+  it('the waiting list, empty', () => {
+    const html = ui.renderToString(ui.createElement(ui.WaitingList, { gates: [], labels: new Map(), path: '/', now: 0, onPick() {} }));
+    assert.match(html, /Nothing is waiting for you\./);
   });
 
   it('a refused sign-in says so and offers to sign in again', () => {

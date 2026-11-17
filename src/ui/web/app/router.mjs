@@ -83,11 +83,12 @@ const splitLocation = location => {
 export const matchLocation = location => matchPath(...splitLocation(location));
 
 /**
- * The current route, re-drawn when it changes, with `from`: the location an overlay route was
- * opened over, when it was opened inside the app (a deep link has none).
+ * The current route, re-drawn when it changes, with its `location` (path and query) and `from`:
+ * the location an overlay route was opened over, when it was opened inside the app (a deep link
+ * has none).
  */
 export function useRoute() {
   const location = useSyncExternalStore(subscribe, snapshot);
   const from     = window.history.state?.from ?? null;
-  return { ...matchLocation(location), from };
+  return { ...matchLocation(location), location, from };
 }

@@ -196,6 +196,47 @@ h1, h2 { margin: 0; text-wrap: balance; }
 .close:hover { background: var(--soft); }
 .db { flex: 1 1 auto; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 
+/* ---------- 🔔 Needs you ---------- */
+.waiting { list-style: none; margin: 0; padding: 0; }
+.waiting a {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  padding-block: 9px;
+  padding-inline: 6px;
+  border-block-start: 1px solid var(--soft);
+  color: var(--ink);
+  text-decoration: none;
+}
+.waiting li:first-child a { border-block-start: 0; }
+.waiting a:hover { background: var(--ground); }
+.waiting .q { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.waiting .sub { grid-column: 1; font-size: 12px; color: var(--muted); }
+.waiting .pill { grid-column: 2; grid-row: 1; align-self: center; }
+.pill { font-size: 11px; padding-block: 1px; padding-inline: 7px; border-radius: 999px; font-weight: 600; }
+.pill.slack { background: var(--slack-soft); color: var(--slack); }
+
+/* ---------- ⚙ Settings ---------- */
+.settings { display: flex; min-block-size: 240px; margin: -16px; }
+.settings nav { flex: 0 0 180px; border-inline-end: 1px solid var(--line); padding: 8px; }
+.settings nav a { display: block; padding-block: 8px; padding-inline: 10px; border-radius: 8px; color: var(--ink); text-decoration: none; }
+.settings nav a[aria-current="page"] { background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
+.settings .pane { flex: 1 1 auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+.fields { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 0; }
+.fields dt { color: var(--muted); font-weight: 500; }
+.fields dd { margin: 0; overflow-wrap: anywhere; }
+.btn {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: 36px;
+  padding-inline: 14px;
+  border-radius: 8px;
+  border: 1px solid var(--control);
+  background: var(--paper);
+  font-weight: 500;
+}
+.btn:hover { background: var(--soft); }
+
 /* ---------- phone ---------- */
 .tabbar { display: none; }
 @media (max-width: 640px) {
@@ -214,6 +255,8 @@ h1, h2 { margin: 0; text-wrap: balance; }
   .tabbar button { border: 0; background: transparent; min-block-size: 52px; font-size: 12px; color: var(--muted); }
   .tabbar button[aria-current="true"] { color: var(--accent-ink); font-weight: 600; }
   .menulist a { padding-block: 12px; padding-inline: 4px; font-size: 15px; border-radius: 0; border-block-end: 1px solid var(--soft); }
+  .settings { flex-direction: column; }
+  .settings nav { flex: none; border-inline-end: 0; border-block-end: 1px solid var(--line); }
 }
 
 /* ---------- sign-in problem ---------- */
