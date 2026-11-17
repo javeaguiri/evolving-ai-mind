@@ -3,11 +3,12 @@
 <!-- Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). -->
 <!-- See LICENSE file in the project root for full license terms. -->
 
-Version: 0.6
-Status: **Approved — Sprint 14 AC0 (Javear, 2026-10-31); v0.6 on Javear's direction, 2026-11-15.**
+Version: 0.10
+Status: **Approved — Sprint 14 AC0 (Javear, 2026-10-31); v0.6 on Javear's direction, 2026-11-15; v0.7 token storage decided at Sprint 17 scoping, v0.8 `GET /me` and domain labels in Phase 0, v0.9 the infrastructure plan — `WebApiFunction` HTTP only, access token by scope, TOTP first (Javear, 2026-11-15).**
 The four platform choices in §1 were accepted tentatively (Javear, 2026-10-22: "go tentatively with
 the suggestions").
-Last updated: 2026-11-15 (v0.6 — a records panel names its source, not a widget: grid, list and document are views the viewer switches between without changing the panel's config; chart, metric and report stay widgets, on a summary panel. §2.3, §4.2, §4.4, §6.2, §6.3, §10)
+Last updated: 2026-11-17 (v0.10 — Phase 0 built, Sprint 17: a grid split at each `group`, a subheading over its own table (§5.2, decision K); `followup_prompt` drawn as Slack draws it (§5.2); a records column's `label` and `format` (§4.2); menus from data (§13); §7.2's code layout as built)
+Previously: 2026-11-15 (v0.6 — a records panel names its source, not a widget: grid, list and document are views the viewer switches between without changing the panel's config; chart, metric and report stay widgets, on a summary panel. §2.3, §4.2, §4.4, §6.2, §6.3, §10)
 Previously: 2026-10-31 (v0.5, on Javear's review of v0.4 — the navigator becomes Pages, Domains and Activity menus across the top bar; Novia moves to the left; 🏠 always goes Home; Phase 0 draws the household's own pages read-only, with every widget but `form`; a session's topic is set only from its panel)
 Previously: 2026-10-31 (v0.4 — console layout, pages of panels, widgets as data views, renderer-owned ceilings)
 Previously: 2026-10-30 (v0.3 — ☰ menu, labelled runs, Novia separate; §2.4 run labels)
@@ -29,8 +30,8 @@ This document takes `docs/arch-home-brain.md` §4 (product direction, v0.1) to b
 | Concern | Design (tentative) |
 |---|---|
 | **Hosting** | Static single-page app in a private S3 bucket behind **CloudFront** (origin access control). CloudFront has a second origin, the existing REST API, for the path `/api/v1/ui/web/*` — the site and its API share one origin, so the browser makes no cross-origin call and needs no CORS. All of it is declared in `template.yaml` |
-| **Reaching PROC** | A new Lambda, **`WebApiFunction`** (EXP), behind `/api/v1/ui/web/{proxy+}`. It is to the web what `SlackbotFunction` is to Slack: reads call PROC over HTTP with the internal API key; actions enqueue the same SQS messages Slack enqueues. **The browser never holds the internal key** |
-| **Sign-in** | An **Amazon Cognito user pool** with managed login: authorization code flow with PKCE, a public app client (no secret), self-sign-up off, users created by the administrator. A passkey or TOTP is the second factor. The web routes carry `ApiKeyRequired: false` and a **Cognito authorizer** on API Gateway; the user's identity is the token's `sub`, never a request field |
+| **Reaching PROC** | A new Lambda, **`WebApiFunction`** (EXP), behind `/api/v1/ui/web/{proxy+}`. It is to the web what `SlackbotFunction` is to Slack, and HTTP only: every route calls its PROC route with the internal API key and `x-principal-user` set to the token's `sub`. Starting a run and answering a gate enqueue their SQS messages inside PROC (`POST /proc/runs`, `POST /proc/gates/{runId}/responses`), so the function holds no queue. **The browser never holds the internal key** |
+| **Sign-in** | An **Amazon Cognito user pool** with managed login: authorization code flow with PKCE, a public app client (no secret), self-sign-up off, users created by the administrator, on the Essentials tier that managed login needs. TOTP is the second factor in Phase 0; passkeys join with Settings › Security (Phase 1). The web routes carry `ApiKeyRequired: false` and a **Cognito authorizer** on API Gateway that requires the scope `aws.cognito.signin.user.admin` — so only an access token passes, never an ID token — the same scope `GetUser` needs for `/me`'s name and email; the user's identity is the token's `sub`, never a request field. Refresh tokens rotate. The access token is held in memory and the refresh token in `localStorage`, behind the CloudFront Content Security Policy (§11) |
 | **Framework** | **React**, written as `.jsx` and bundled by **esbuild** — the bundler the Lambdas already use. Markdown from `/proc` is rendered by `react-markdown` with `remark-gfm` (tables). Every user-visible string goes through `react-i18next` message catalogs (ICU MessageFormat) from the first component (§13). No component library; the editable grid is built from native inputs |
 | **Result delivery** | **Polling** `GET /inbox?after=<cursor>`: a short interval while a run the user started or answered is in flight, a long one when idle, paused while the tab is hidden. A WebSocket is a Phase 1 option taken only if the delay is felt in use |
 
@@ -50,17 +51,18 @@ build-time configuration; they are not secrets.
           │
           ▼
         WebApiFunction  EXP ─── HTTP + internal key ──► ProcFunction  PROC ──► ServFunction ──► PostgreSQL
-          │                                                  │
-          └── SQS WorkflowQueue (CLASSIFY_INTENT,            └── every message to a person:
-              WORKFLOW_STEP resume_gate)                         PGC_UiMessage row (all providers)
+                                                             │
+                                                             ├── SQS WorkflowQueue (execute_top, resume_gate)
+                                                             └── every message to a person:
+                                                                 PGC_UiMessage row (all providers)
                                                                  + SlackResultsQueue (provider 'slack' only)
 ```
 
 | Code | Location |
 |---|---|
 | SPA source | `src/ui/web/app/` (`.jsx`), built to `dist/web/` by an esbuild script |
-| `WebApiFunction` | `src/ui/web/api/handler.mjs` and one module per resource |
-| Shared experience-layer rules | `src/ui/shared/` — the `number` field rule and the `EMPTY_OPTION_VALUE` convention move here from `src/ui/slackbot/form-fields.mjs`, so Slack and the web validate a form identically |
+| `WebApiFunction` | `src/ui/web/api/` — `handler.mjs`; `routes.mjs`, the allow-list of §3.1's operations; `proc-client.mjs`, every call upstream; `me.mjs`, PROC joined with Cognito; `inbox.mjs`, the `WORKFLOW_ERROR` summary |
+| Shared experience-layer rules | The `number` field rule in `src/shared/number-rule.mjs`, which PROC applies too; the `WORKFLOW_ERROR` summary in `src/ui/shared/workflow-error.mjs`; the `EMPTY_OPTION_VALUE` convention moves to `src/ui/shared/` from `src/ui/slackbot/form-fields.mjs` with the web's first `select`. Slack and the web validate a form and summarise a failure identically |
 | PROC read endpoints | `src/proc/gates.mjs`, `src/proc/inbox.mjs` |
 | Site deploy | `dev_scripts/deploy-web.mjs` — build, `aws s3 sync`, CloudFront invalidation. `sam deploy` does not ship the site |
 
@@ -173,8 +175,11 @@ the latest completed run's messages for every workflow a report names.
 
 ## 3. API surface
 
-All under `/api/v1/ui/web/`, JSON, `Authorization: Bearer`. Spec-first in `docs/openapi.yaml`
-before implementation. Errors are `{ error: { code, message, fields? } }`.
+All under `/api/v1/ui/web/`, JSON, `Authorization: Bearer`. Spec-first in `docs/openapi.yaml` before
+implementation. Errors are `{ error: { code, message, fields? } }`. A call to PROC, or to Cognito
+for `/me`, that fails without an error code — a timeout, a Lambda error, a bare 5xx — is `502
+upstream_unavailable`, the error behind §9's *Offline / API failure* banner; a 5xx PROC names, such
+as `pages_truncated`, keeps its own code.
 
 ### 3.1 Phase 0
 
@@ -186,11 +191,11 @@ before implementation. Errors are `{ error: { code, message, fields? } }`.
 | `GET /inbox` | `?after=<id>&run=<id>&limit=` | `200 { messages: [...], cursor }` | `GET /proc/inbox`: the user's web messages, plus every message of runs the user answered from the web |
 | `POST /runs` | `{ workflow }` | `202 { runId }`; `403 household_required`; `404 workflow_not_found` | `POST /proc/runs`: starts the latest version of the named domain workflow — no intent classification; a system workflow (`domain` null) is not startable by name — with `triggered_by: 'web'` and `callback: { provider: 'web', channel: <sub> }`, `locale` joining it with the profile (§13). The run (§4.3) is its thread, so the callback carries no `threadId` |
 | `GET /runs` | `?workflow=&domain=&status=&limit=&before=` | `200 { runs: [{ runId, workflowName, label, status, startedAt }], cursor }`, newest first | `GET /proc/runs`: `PGC_WorkflowRun` with explicit `columns`; `label` per §2.4. Feeds workflow panels and the run list in 🔔 |
-| `GET /pages` | — | `200 { pages: [{ pageKey, version, title, order, panels }] }`, latest version of each, `title` resolved to the caller's locale | `GET /proc/pages`. Feeds the *Pages* menu and every household page |
+| `GET /pages` | — | `200 { pages: [{ pageKey, version, title, position, panels }] }`, latest version of each, `title` resolved to the caller's locale | `GET /proc/pages`. Feeds the *Pages* menu and every household page |
 | `GET /sources/{source}/rows` | `?filter=&order_by=&columns=&limit=` | `200 { columns: [{ name, type }], rows }` | A records or summary panel's read (§4.2): the PROC `records` read of a registered table or view, read-only in Phase 0 |
 | `GET /outputs/{workflow}` | — | `200 { runId, label, completedAt, payload }`; `404 no_output` before the first completed run | A `report` widget's read (§2.6): `GET /proc/outputs/{workflow}` |
-| `GET /workflows` | — | `200 { domains: [{ domain, label, workflows: [{ name, label, description }] }] }` | The *Domains* menu and each domain page's workflow panel in Phase 0 — the `workflows` part of §3.2's `GET /domains` |
-| `GET /me` | — | `200 { name, email, locale, timezone }` | The token's claims; `locale` and `timezone` from the user's profile, defaulting to the household's (§13) |
+| `GET /workflows` | — | `200 { domains: [{ domain, label, labelFallback?, workflows: [{ name, label, labelFallback?, description }] }] }` | `GET /proc/workflows`: the *Domains* menu and each domain page's workflow panel in Phase 0 — the `workflows` part of §3.2's `GET /domains`. Labels from `display.label` of `PGC_DomainHelp` and `PGC_Workflow`, resolved as §13 says |
+| `GET /me` | — | `200 { name, email, roles, locale, timezone }` | `GET /proc/me` — the principal's `roles`, and `locale` and `timezone` from the user's profile, defaulting to the household's (SSM `household-locale`, `household-timezone`; §13) — joined with `name` and `email` from Cognito (`GetUser` with the request's token). No profile is stored in Phase 0, so the household's apply |
 
 `WORKFLOW_ERROR` reaches the browser summarised by `WebApiFunction`, as `callback.mjs` summarises it
 for Slack; the summary function is shared, not copied.
@@ -348,7 +353,8 @@ belongs to the data rather than to a view — column labels, `format`, `total`, 
 | `report` | A workflow's latest output (§2.6) | The markdown that workflow produced, with when and from which run; **↻ Refresh** runs the workflow again (§4.3) | `workflow` | 0 |
 
 A column named in a view's or widget's options is a name, or `{ name, label, format }` with
-`format` as §6.3 defines it. In Phase 0 that is where labels and formats come from; once the
+`format` as §6.3 defines it — `currency` with the row's own `currency_column` or a fixed ISO 4217
+`currency`, one of the two; `percent`; `date`. In Phase 0 that is where labels and formats come from; once the
 registry carries `display` metadata (§6.3, Phase 1) it supplies them, and a panel names only what
 it changes.
 
@@ -505,7 +511,7 @@ Block Kit. **No domain vocabulary, no Slack ceilings**: a gate is as long as its
 | `confirm` | Message and buttons | `{ action }` |
 | `text_input` | Text area, then the gate's buttons | `{ action, inputValue }` |
 | `review_object` | Key/value table, then buttons | `{ action }` |
-| `followup_prompt` | Message; *Ask a follow-up* is Phase 1 (it opens a Novia or `/chat` turn) | — |
+| `followup_prompt` | Message, and *Ask follow-up* — a text box whose text answers the gate, as Slack's button does; the dialog's own buttons are not drawn, as Slack draws none | `{ action: 'confirm', inputValue }` — written to the step's `output_key` |
 
 **The grid.** A field may carry three optional, generic layout properties on the `human_gate`
 `PGC_StepType` contract:
@@ -528,7 +534,9 @@ their layout comes from the registry.
 
 When **every** input field carries `row` and `column`, the web lays the form out as a grid: rows
 in first-appearance order, columns in first-appearance order, the field `label` of a row's first
-field as its row header, `group` as a heading row. A missing cell is blank. Slack ignores `row` and
+field as its row header. Each run of rows under one `group` is that group's subheading over its own
+table, the tables laid out alike so their columns line up, one Save under them all; keyboard
+movement runs on from one table into the next. A missing cell is blank. Slack ignores `row` and
 `column`, renders `group` as a header between fields, and stacks the inputs as today. The encoding
 of a record id inside a field `name` stays workflow-local.
 
@@ -657,7 +665,7 @@ renderer.** Nothing is copied.
 |---|---|
 | Workflows, `buildDialog`, `run-workflow`, Novia (`minds-eye.mjs`) | **Shared.** Workflows never learn which provider serves them. Phase 1 removes the `arch-home-brain.md` §3.2 leaks |
 | The `dialog` contract | **Shared** — a JSON Schema in `docs/openapi.yaml` both renderers are tested against |
-| Experience-layer rules — the `number` rule, `EMPTY_OPTION_VALUE`, the error summariser | **Shared** from `src/ui/shared/` |
+| Experience-layer rules — the `number` rule, `EMPTY_OPTION_VALUE`, the error summariser | **Shared** — §1.1 |
 | The renderer | **Per provider** — `callback.mjs` emits Block Kit, React components render the web. A copied renderer drifts |
 | Domain views (§6) | **Web only** — Slack keeps `list_entity` and the CRUD workflows |
 
@@ -702,7 +710,8 @@ shape.
         │
         └── provider 'web' ────► <Form>: every input carries row + column
                                   → <Grid>: rows by row, columns by column,
-                                  group as a heading row; no block ceiling
+                                  each group a subheading over its own table;
+                                  no block ceiling
 
  Both answer the same way:
    { action:'save', formValues:{ amt_17:'420', amt_18:'95', … } }
@@ -736,27 +745,40 @@ src/ui/
 │   └── form-fields.mjs                form values ↔ Block Kit block_ids
 │
 ├── web/                               Web
-│   ├── api/                           WebApiFunction (Lambda)
+│   ├── api/                           WebApiFunction (Lambda), HTTP only
 │   │   ├── handler.mjs                IN   browser → /api/v1/ui/web/*, Cognito token
-│   │   ├── gates.mjs                  IN   POST /gates/{runId}/responses → resume_gate SQS
-│   │   └── inbox.mjs                  OUT  GET /inbox → PGC_UiMessage, through PROC
-│   └── app/                           React SPA — runs in the browser, shipped from S3
-│       ├── Gate.jsx, Form.jsx         dialog → components: the web's dialogToBlocks
-│       └── Grid.jsx                   the editable grid
+│   │   ├── routes.mjs                      the §3.1 operations, and nothing else, each to its PROC route
+│   │   ├── proc-client.mjs                 PROC as the token's sub, with the internal key; Cognito
+│   │   ├── me.mjs                          GET /me → PROC /me + Cognito GetUser
+│   │   └── inbox.mjs                  OUT  GET /inbox → PGC_UiMessage through PROC, errors summarised
+│   └── app/                           React SPA — runs in the browser, shipped from S3 by deploy-web.mjs
+│       ├── main.jsx, App.jsx          entry; the shell's data, the settings overlay, run drawer and run page
+│       ├── router.mjs, Link.jsx       history routing
+│       ├── auth/, api/client.mjs      Cognito sign-in (PKCE), tokens; the one fetch to /api/v1/ui/web
+│       ├── shell/                     top bar, menus (nav.mjs), 🔔, drawer, the Reload notice
+│       ├── pages/Settings.jsx         Settings › Profile
+│       ├── panels/, records/          a page's panels: records, workflow, report
+│       ├── runs/                      a run's thread, polled from GET /inbox
+│       ├── Markdown.jsx               marked's tokens → React elements
+│       ├── gates/                     dialog → components: the web's dialogToBlocks
+│       │   ├── Gate.jsx, Input.jsx    every gate type, every input
+│       │   ├── Grid.jsx               the editable grid, a table per group
+│       │   └── gate.mjs               pure: values, checks, the answer, the grid's layout
+│       └── locales/en.json            the catalog (§13)
 │
 └── shared/                            both providers
-    └── form-rules.mjs                 the number rule, EMPTY_OPTION_VALUE
+    └── workflow-error.mjs             a WORKFLOW_ERROR's summary
 ```
 
 | Slack | Web | Why they differ |
 |---|---|---|
-| `handler.mjs` + `interactive.mjs` | `web/api/` | Same job — authenticate, enqueue the same SQS messages. Slack's proof is a request signature, the web's a Cognito token |
+| `handler.mjs` + `interactive.mjs` | `web/api/` | Same job — authenticate, then start or resume a run. Slack's proof is a request signature, the web's a Cognito token; Slack's handlers enqueue, the web's call PROC (`POST /proc/runs`, `POST /proc/gates/{runId}/responses`), which enqueues |
 | `callback.mjs`, a Lambda that pushes | No Lambda: PROC writes a `PGC_UiMessage` row and the browser polls `GET /inbox` | A browser cannot be posted into without a WebSocket (§1, Phase 1 option) |
 | `dialogToBlocks`, inside that Lambda | React components, in the browser | Rendering moves to the client |
 | `form-fields.mjs` | Read from the inputs by name | Block Kit carries a field's name in its `block_id`; an HTML input has a `name` |
 
-`src/ui/shared/` holds the rules both must apply identically — what a valid `number` is, how "none"
-travels — so a value typed in Slack and on the web means the same thing. `PGC_UiMessage` is written
+The shared rules (§1.1) are those both must apply identically — what a valid `number` is, how
+"none" travels, what a failure says — so a value typed in Slack and on the web means the same thing. `PGC_UiMessage` is written
 for every message, Slack's included; that is how a Slack-started run also appears on the site
 (§8).
 
@@ -794,7 +816,7 @@ for every message, Slack's included; that is how a Slack-started run also appear
 | | Phase 0 — prove the seam | Phase 1 — the console |
 |---|---|---|
 | **Infrastructure** | S3 + CloudFront, Cognito pool and one user, `WebApiFunction`, the web routes, `deploy-web.mjs` | WebSocket only if polling is felt |
-| **PROC** | `PGC_UiMessage` and `enqueueCallback` writing it; `gate_id`; run labels (§2.4); `PGC_Page` with the seeded Home, and `upsert-page.mjs` for the household's pages; `GET /proc/gates`, `GET /proc/inbox`, `GET /proc/pages`, `GET /proc/runs`, `GET /proc/outputs` (§2.6), the read-only `records` read behind `GET /sources/{source}/rows`, starting a named workflow | Navigate reads (§3.2), session topics (§2.5), the edit policy and `PGC_RecordEdit`, the `arch-home-brain.md` §3.2 Slack leaks removed |
+| **PROC** | `PGC_UiMessage` and `enqueueCallback` writing it; `gate_id`; run labels (§2.4); `PGC_Page` with the seeded Home, and `upsert-page.mjs` for the household's pages; `GET /proc/gates`, `GET /proc/inbox`, `GET /proc/pages`, `GET /proc/runs`, `GET /proc/outputs` (§2.6), `GET /proc/workflows`, `GET /proc/me`, `PGC_DomainHelp.display` (`label`), the read-only `records` read behind `GET /sources/{source}/rows`, starting a named workflow | Navigate reads (§3.2), session topics (§2.5), the edit policy and `PGC_RecordEdit`, the `arch-home-brain.md` §3.2 Slack leaks removed |
 | **Contract** | `row`, `column`, `group` on the `human_gate` contract | A gridded form's answer may carry a subset of rows (§5.4) |
 | **Pages** | Sign-in; the shell — 🏠, the *Pages* and *Domains* menus, 🔔, ⚙; the household's pages from `PGC_Page`, read-only — three to start: Home, Money, Inventory; workflow panels — *Start*, runs by label, the run stepped through in place; records panels with the view switch over the `grid` (read-only) and `list` views; summary panels with the `chart`, `metric` and `report` widgets; click-through and report Refresh; domain pages with their workflow panel; the run page and run drawer; Settings › Profile; every gate type of §5.2 | The page editor — *+ New page*, *Edit page*, *+ Add panel*, delete; the `document` view and the editable grid; Novia's region and Novia panels; 🧠 Help; Activity; the command bar; the rest of Settings; ⓘ on panels and terms; *Ask Novia about this*; Novia's `propose_page_change` |
 | **Slack** | `gate_id` on buttons; the ephemeral "already answered" | `GATE_RESOLVED` message update; the Slack pager and pick-one modal (§5.4), with L1's gate-size check narrowed |
@@ -824,13 +846,9 @@ The threat model is `docs/arch-security.md`; these are the site's own controls.
 
 ## 12. Open questions
 
-1. **Token storage.** Tentative: access token in memory, refresh token in `localStorage`, with a
-   strict Content Security Policy from CloudFront. The alternative is a cookie session held by
-   `WebApiFunction`, which keeps every token out of script reach at the cost of validating the JWT
-   in the function rather than in API Gateway.
-2. **Inbox retention** (`arch-home-brain.md` §6.5) — how long `PGC_UiMessage` keeps a row; the
+1. **Inbox retention** (`arch-home-brain.md` §6.5) — how long `PGC_UiMessage` keeps a row; the
    latest completed run of every workflow a report names is kept regardless (§2.6).
-3. **Custom domain** — the CloudFront default domain serves Phase 0; a household domain needs an
+2. **Custom domain** — the CloudFront default domain serves Phase 0; a household domain needs an
    ACM certificate in `us-east-1` and a DNS record.
 
 ---
@@ -848,7 +866,7 @@ language a matter of adding catalogs and language maps, not rewriting the app.
 | **The `dialog` stays plain strings** | PROC resolves language maps before a gate is sent (`arch-home-brain.md` §7.2), so §5's components never see one |
 | **System messages by key** | A notification or error carrying `messageKey` and `params` is rendered from the catalog; its `message` text is the fallback |
 | **Fixed words** | The top bar's menus (Pages, Domains, Activity) and Activity's entries (Runs, Schedules, Memory), the Help sections, the Settings entries (Profile, Security, Language, Dates & numbers, Appearance), the panel kinds, view and widget names, Novia, Start, Refresh, the nine vocabulary terms and their definitions (§4.6) — app words, catalog keys like any other. Page titles are the household's, stored as language maps |
-| **Data-driven menus** | The *Domains* menu, domain pages and workflow panels come from `GET /domains` (§3.2) with `label` already in the user's language; the app draws them and never translates a name itself |
+| **Data-driven menus** | The *Domains* menu, domain pages and workflow panels come from `GET /workflows` (§3.1) in Phase 0 and `GET /domains` (§3.2) from Phase 1, with `label` already in the user's language; the app draws them and never translates a name itself |
 | **Registry labels** | `display.label` and column labels may be language maps. PROC picks the user's locale, then the household's, then the first entry, then a humanised identifier (`budgets_expenses` → *Budgets expenses*); the fallback is marked in the response (`labelFallback: true`) so missing translations can be listed |
 | **Layout** | `lang` set on the document from the locale; CSS logical properties (`margin-inline`, `padding-inline-start`) so a right-to-left language is not ruled out; no text baked into images |
 | **User content** | Shown as entered, never machine-translated without being asked |

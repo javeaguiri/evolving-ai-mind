@@ -1,0 +1,102 @@
+{
+  "app": {
+    "name": "Home Brain"
+  },
+  "shell": {
+    "loading": "Loading…",
+    "close": "Close",
+    "newBuild": "A new version is available.",
+    "reload": "Reload"
+  },
+  "nav": {
+    "home": "Home",
+    "sections": "Sections",
+    "pages": "Pages",
+    "domains": "Domains",
+    "seeAll": "See all…"
+  },
+  "pages": {
+    "domains": "Domains",
+    "run": "Run {runId}",
+    "notFound": "Page not found",
+    "goHome": "Go to Home",
+    "homeEmpty": "Your home page is empty — open a domain from the menu."
+  },
+  "records": {
+    "view": "View",
+    "grid": "Grid",
+    "list": "List",
+    "empty": "Nothing here yet",
+    "showing": "Showing {shown, number} of {total, number}",
+    "missing": "“{source}” can’t be found.",
+    "failed": "This panel couldn’t be read."
+  },
+  "report": {
+    "refresh": "↻ Refresh",
+    "refreshing": "Refreshing…",
+    "refreshLabel": "Refresh by running the workflow again",
+    "updated": "Updated {when}",
+    "notRun": "Not run yet",
+    "missing": "“{workflow}” can’t be found."
+  },
+  "workflow": {
+    "domainPanel": "Workflows",
+    "emptyOne": "You don’t have any {workflow} runs yet — they will be shown here.",
+    "empty": "You don’t have any runs yet — they will be shown here.",
+    "failed": "That didn’t work — try again in a moment."
+  },
+  "run": {
+    "openPage": "Open as a page",
+    "working": "Working…",
+    "waiting": "Waiting for your answer.",
+    "reveal": "Show",
+    "noMessages": "No messages were kept for this run.",
+    "gone": "This run can’t be shown.",
+    "unreachable": "Can’t reach the home brain — retrying",
+    "status": {
+      "needsYou": "Needs you",
+      "running": "Running",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    },
+    "meta": "{workflow} · Run {runId}",
+    "earlier": "{count, plural, one {Show # earlier message} other {Show # earlier messages}}"
+  },
+  "gate": {
+    "continue": "Continue",
+    "submit": "Send",
+    "back": "Back",
+    "yes": "Yes",
+    "no": "No",
+    "none": "—",
+    "optional": "(optional)",
+    "actions": "Actions",
+    "changes": "{count, plural, one {# change} other {# changes}}",
+    "youChose": "You chose {label}",
+    "moved": "This was answered elsewhere.",
+    "fixFields": "Nothing was sent — correct the marked fields.",
+    "failed": "That didn’t send — try again in a moment.",
+    "askFollowup": "Ask follow-up",
+    "followupLabel": "Type your follow-up question"
+  },
+  "needsYou": {
+    "title": "Needs you",
+    "button": "{count, plural, =0 {Needs you, nothing waiting} one {Needs you, # waiting} other {Needs you, # waiting}}",
+    "empty": "Nothing is waiting for you.",
+    "slack": "Slack"
+  },
+  "settings": {
+    "title": "Settings",
+    "profile": "Profile",
+    "name": "Name",
+    "email": "Email",
+    "signOut": "Sign out"
+  },
+  "signIn": {
+    "problem": "The sign-in didn't complete.",
+    "again": "Sign in again"
+  },
+  "errors": {
+    "retrying": "Can't reach the home brain — retrying"
+  }
+}

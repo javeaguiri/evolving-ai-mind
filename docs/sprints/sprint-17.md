@@ -1,0 +1,129 @@
+# Sprint 17 — The web app's front end
+
+**Status: CLOSED 2026-11-17 — started 2026-11-15. All five ACs met, every one live or by review.** Scope and ACs agreed with Javear at "start sprint". The second half of `docs/arch-web-app.md` (v0.6) §10 Phase 0; Sprint 16 built the
+backend seam it sits on. The prior sprint's retro is `docs/sprints/sprint-16.md`.
+
+**Branch:** `sprint/17-web-front` — merged to main at close, as every sprint is.
+
+---
+
+## Sprint Goal
+
+**The household signs in to a web page and uses the brain there.** Home, Money and Inventory draw
+from `PGC_Page`; a workflow started on the page is stepped through in place, every gate type
+answered in the browser; `edit_budget` edits a month in one grid.
+
+---
+
+## Decided at scoping
+
+| Question | Decision |
+|---|---|
+| **Token storage** | Access token in memory, refresh token in `localStorage`, behind the CloudFront CSP; the Cognito authorizer on API Gateway validates the token (`arch-web-app.md` v0.7 §1) |
+| **Inbox retention** | None this sprint — `PGC_UiMessage` is unbounded until the web is in use (§12.1 stays open) |
+| **`GET /me`'s locale and timezone** | A new `GET /proc/me` returns the principal's roles with the household's locale and timezone, from SSM String `household-locale` and `household-timezone`, until a profile exists (Phase 1) |
+| **Domain labels** | `PGC_DomainHelp.display` (`label`) is built now, so the *Domains* menu shows the household's names; a domain without one shows its humanised identifier, flagged `labelFallback` |
+
+## Scope
+
+| # | Item |
+|---|---|
+| **1** | ✅ DONE **Infrastructure:** S3 + CloudFront, a Cognito pool with one user, `WebApiFunction` and the web routes, `deploy-web.mjs`, the CSP and the §11 controls. `household-principals` gains the Cognito `sub` alongside the curl id (SSM v2, pin bumped in prod). the S3/CloudFront/Cognito grants to the deploy role deployed alone 2026-11-15 (`sam deploy`, no errors in the logs); `summariseWorkflowError` shared from `src/ui/shared/workflow-error.mjs` for the web handler; spec amended for v0.9 (3.7.0: access token by scope, `502 upstream_unavailable`). **Phase A deployed 2026-11-15** — S3, CloudFront (`dxghnv4qmxz62.cloudfront.net`), the CSP and security headers, the Cognito pool (TOTP required, admin-created users), the PKCE client with refresh-token rotation, managed login at `evomind-home`; smoke read-only: headers as §11, login domain answers, API path refused. Javear's user created and signed in (TOTP confirmed by a second sign-in); `household-principals` v2 (curl id + Cognito sub), PROC pinned `:2` and deployed; smoke read-only: both principals `household`, a stranger none and 403. **Phase B agreed 2026-11-15:** spec ✅ DONE (3.7.1: `route_not_found`, `invalid_body`). Code ✅ DONE 2026-11-16 — `src/ui/web/api/`: `handler.mjs`, `routes.mjs` (an allow-list of the 11 spec operations, never a blanket proxy; path params matched strictly), `proc-client.mjs` (fresh headers: internal key, `x-principal-user` from `requestContext.authorizer.claims.sub`, nothing from the browser; 25 s limit; PROC errors → WebError, codeless 5xx/throw → 502), `me.mjs` (PROC `/me` + Cognito `GetUser` over plain HTTPS), `inbox.mjs` (`WORKFLOW_ERROR` → `summary`); `tests/unit/web-api.test.mjs` on the real handler with `fetch` stubbed (46 tests). PROC's two sentence-coded 400s became `missing_fields` (spec 3.7.2) so the web passes a code. Docs ✅ DONE (`arch-web-app.md` §1.1, §7, §7.2; `architecture.md` §1.5, §3). **Phase B deployed 2026-11-16** — `WebApiFunction` + `WebCognitoAuthorizer` (change set read first: one path and one authorizer added, every existing path identical); smoke read-only: unauthenticated and junk-token calls 401/403 at the gateway, `/proc` key path intact. Live check through CloudFront with Javear's code ✅: no token 401, ID token 401 (Bearer and raw), access token `/me` 200 (household, `en`, `Europe/Madrid`, email from Cognito; Bearer and raw identical) and `/workflows` 200 (four domains, household labels), `/run-workflow` 404 `route_not_found`, a non-JSON POST 400 `invalid_body`; no errors in the logs. **`deploy-web.mjs` ✅ DONE 2026-11-16** — `npm audit --audit-level=high` gate, in-memory esbuild build into hashed assets configured from the stack outputs, MD5-vs-ETag upload (assets first, `index.html` last; immutable vs `no-cache`), `/index.html` refreshed only when changed; 11 tests (the build twice byte for byte, a rerun planning nothing). First deploy 3 files, rerun "no changes — already current"; through CloudFront `/`, `/d/inventory`, `/auth/callback` serve the new `index.html` with the CSP, the script `br` and `immutable`. Six packages vetted under architecture §7a and registered, devDependencies only |
+| **2** | ✅ DONE **The two §3.1 reads Sprint 16 did not build:** `GET /workflows` (the *Domains* menu and domain pages' workflow panel, from `display` `label`/`menu` of `PGC_Workflow` and `PGC_DomainHelp` — the `PGC_DomainHelp.display` column joins Phase 0) and `GET /me` (`GET /proc/me`: roles, and locale and timezone from new SSM `household-locale`/`household-timezone`). Spec ✅ DONE; code ✅ DONE (`workflows.mjs`, `me.mjs`, the `PGC_DomainHelp.display` template and registry seed, 12 tests). Domain labels written by `dev_scripts/upsert-domain-display.mjs` from the seed (`system` hidden) and `household/domains.json`; Novia's domain tooling noted in the backlog. Schema deployed 2026-11-15 (`addColumn` from the template, catalog read back, registry 18/18 ok) and labels written (rerun: no changes). SSM `household-locale` v1 (`en`), `household-timezone` v1 (`Europe/Madrid`); `sam deploy` 2026-11-15; smoke read-only: `/proc/me` household role, `en`, `Europe/Madrid`; `/proc/workflows` four domains with the household's labels, `system` hidden; a stranger 403; no PROC errors |
+| **3** | ✅ DONE **The shell:** sign-in; 🏠, the *Pages* and *Domains* menus, 🔔, ⚙; Settings › Profile; English catalogs from day one (§13). 🟡 IN PROGRESS — layout agreed 2026-11-16 (own `history` router, the six packages, page bodies wait for item 4, one hand-written stylesheet); the empty shell deployed by `deploy-web.mjs` (`App.jsx`, `i18n.mjs`, `locales/en.json`, `styles.css`). Sign-in ✅ code DONE 2026-11-16 (`8007efc`) — `auth/pkce.mjs`, `auth/session.mjs` (refresh through `GetTokensFromRefreshToken`, rotated token kept, one refresh at a time), `api/client.mjs` (one refresh and retry on 401), `router.mjs`, `config.mjs`; 36 tests incl. components via `react-dom/server` and the catalog both ways. Deployed (2 files up, the stylesheet unchanged); the bundle carries the client and auth domain; Cognito's token, revoke and `cognito-idp` endpoints answer our origin's preflight. Live ✅ 2026-11-16 (Javear, in the browser): a deep link sent to sign-in and back to it, a reload refreshed silently (rotation), sign-out through Cognito's logout and back to sign-in. **Top bar and Settings › Profile** — compared with the v0.6 mock-up and agreed 2026-11-17 (Settings a dialog on its route; Profile read-only, no Save; 🔔 entries as the mock-up, with the run label `/gates` already carries). Code ✅ DONE 2026-11-17 (`9058211`, `3e296ac`): the language from `/me` before the first draw; 🏠, *Pages* and *Domains* (hover and click, Escape and click outside, quiet after a pick, *See all…* → `/d`); the phone's title and tabs; page titles from the reads, *Page not found*; the §9 retrying banner; 🔔 from `GET /gates` while visible, with backoff; ⚙ Settings › Profile over the page it was opened from; the run drawer's frame; `shell/nav.mjs` pure and tested; colour tokens from the mock-up, system fonts. 1708 tests. Deployed (3 files up; rerun "no changes — already current"). Live ✅ 2026-11-17 (Javear, in the browser): every check passed — the menus, `/d`, ⚙ over the page and from a deep link, Sign out, the phone layout; 🔔 counted 6 and listed them, each with its question, workflow and age, all six started in Slack |
+| **4** | ✅ DONE **Panels:** workflow panels (*Start*, runs by label, a run stepped through in place); records panels with the view switch (`grid` read-only, `list`); summary panels (~~`chart`, `metric`~~ — moved to Phase 1 2026-11-17: no household page uses one, so none can be checked live, and a useful one needs a current-period view from Novia and a `format` on its columns; they arrive with the page editor and the registry's `display.format`. `report` stays); ~~click-through~~ (with the chart) and report Refresh; domain pages' workflow panel; the run page and run drawer. 🟡 IN PROGRESS — **records panels** agreed 2026-11-17 (D: column labels from PROC; E: a column's `format` in the page contract; F: the household's pages given columns). ✅ DONE: spec 3.7.3 (`90572f9`) and `/proc/sources` column `label`/`labelFallback` (`bb75672`, deployed, live read checked); the page contract's column `{ name, label?, format? }` (`23346e6`); `resolveLanguageMap` and `isReadableColumn` shared (`6f81ff6`); the page's panels by width, records panels with grid and list, the viewer's choice per panel, the record drawer, *Showing n of m*, loading/empty/missing/failed (`4c32fe1`, deployed, rerun a no-op); `household/pages.json` written (home v4, money v3, inventory v3; rerun "no changes"). `year` left out of the budget panel — an integer is grouped (2,026) and §6.3 has no plain format. Records panels live ✅ 2026-11-17 (Javear, in the browser): every check passed; three usability findings — column spacing, a long list pushing the next panel far down, the record drawer blocking a click on the next row — fixed (`766d4f3`: the grid sized to its content, the panel body scrolling with its header in place, the drawer beside the page following the next row; deployed). **Workflow panels** agreed 2026-11-17 (H: `GET /runs/{runId}`; I: `marked`'s lexer drawn as elements). ✅ DONE: spec 3.8.0 (`51992e9`); `getRun` in PROC, runs dispatched by first segment, `webGetRun` allowed (`b2a9aa9`, deployed; live read: 200, 404, the list intact, no PROC errors); `Markdown.jsx` on `marked` 18.1.3, registered under §7a (`4a3d1b4`); workflow panels, the run thread, the run drawer and page, domain pages (`f45c401`, deployed, rerun a no-op). Javear's first look: a report run showed no messages — Novia's test runs (1028, 1029) were listed, and runs from before the inbox (2026-11-15 08:50) hold none. Fixed: `/runs` leaves out and refuses test runs as `/gates` does (spec 3.8.1 `046b315`, `351faf7`, deployed; live: 1028/1029 gone from the list, 1029 refused 403); an empty thread says no messages were kept (`8aebafa`, deployed). Workflow panels live ✅ 2026-11-17 (Javear, in the browser): every check passed; the list view's details sat at the far edge of a wide panel on a PC — the list capped in width (`b879ddc`, deployed). A run started on the web stops at its first question until item 5. **Report panel** agreed 2026-11-17 (N: the report now, chart and metric to Phase 1). ✅ DONE (`d5a4d79`, deployed, rerun a no-op): the latest output as markdown with when, label and run id; ↻ Refresh through the run drawer, the report read again once the run completes. Live ✅ 2026-11-17 (Javear): the report and ↻ Refresh through the drawer; one finding fixed — a wide markdown table squeezed on a phone instead of scrolling sideways (`.mdtable` cells no longer wrap anywhere), deployed |
+| **5** | ✅ DONE **Every gate type of §5.2** rendered and answered on the web, the grid from `row`/`column`/`group`. **`GET /gates` names each gate's workflow** (added 2026-11-17, from 🔔's live check): a `workflowLabel` resolved by PROC as `/workflows` resolves it — the household's `display.label`, else the humanised identifier with `labelFallback` — so a system workflow's gate (`help`, `ping_core`) is not shown by its raw name, and the web never builds a label itself (§13). Spec first (`WaitingGate`), its own commit. 🟡 IN PROGRESS — agreed 2026-11-17 (J: the waiting question from `GET /gates/{runId}`, whichever surface started the run — Slack → web works, web → Slack does not, by design; L: *You chose …* only while the page holds it, the answer record to the backlog). ✅ DONE: spec 3.9.0 (`8c15356`) and `workflowLabel`/`labelFallback` on every waiting gate, 🔔 using it (`1256683`, deployed; live: *Help*, *Ping core*, the stored labels); every gate type rendered and answered, the grid (`1950741`, deployed, rerun a no-op). Live 2026-11-17 (Javear): `ping_core` (958, from Slack) answered on the web, every test but 9 — `followup_prompt` had no button. With three findings fixed in `978cbf5` (deployed): run ids on lists, 🔔 and every thread; `followup_prompt` drawn as Slack draws it (§5.2 corrected); a long thread folds before the last answer and a new question is brought into view; an open tab offers Reload when a newer build is live. Every gate type checked live ✅ 2026-11-17 (Javear): `ping_core` again (all ten tests, test 9's *Ask follow-up* included) and `manage_expenses` (list_selection, form). The grid's live proof is `edit_budget`, item 6 |
+| **6** | ✅ DONE **First workflow:** `edit_budget` (357; the design names it `manage_budget`) — month pick, then one grid grouped by budget type, after Novia's four corrections. Read live 2026-11-17: v8 still carries all four — step 15 writes every category on each save, step 12 builds `text` fields labelled `[Type] name`, steps 9pre and 15 write `currency: 'USD'` into a euro household (every stored row is EUR, so a save would rewrite them all as USD) and steps 11 and 19 print `$`. Brief to Novia: `number` fields with `row`/`column`/`group`; only changed rows written (and step 19's summary from the merged amounts); the currency the month's rows carry. ✅ Novia, session 1362: **v9** — all four, plus a new condition 15c that skips the upsert when nothing changed; sandbox run 1048 changed two amounts, wrote exactly those two rows, both EUR, and summarised all 22 categories in €; reviewed against the definition 2026-11-17. Rendering decision K (Javear, 2026-11-17): each `group` a subheading over its own table, columns aligned, one Save (`arch-web-app.md` §5.2), deployed. Live ✅ 2026-11-17 (Javear): Money › Edit Budget — the month as three grids, edited, saved |
+
+## Acceptance Criteria
+
+| # | Status | Criterion | Scope | Threshold |
+|---|---|---|---|---|
+| **AC1** | ✅ | Javear signs in, and Home, Money and Inventory render from `PGC_Page`, read-only, with the view switch on records panels | 1, 2, 3, 4 | Shown live — met 2026-11-17: every panel of Home, Money and Inventory checked live (records, workflow, report) |
+| **AC2** | ✅ | Every §5.2 gate type renders and is answered in the browser; a gate answered elsewhere shows *This was answered elsewhere* (`409`) | 4, 5, [6](#scope) | One live run per gate type, or a named fallback vehicle — every type live 2026-11-17 (`ping_core`, `manage_expenses`); the gridded form live with `edit_budget` v9 2026-11-17 — met |
+| **AC3** | ✅ | `edit_budget` edits a month's budgets in one grid grouped by type, one Save | 5, 6 | Shown live — met 2026-11-17 (Javear): v9 (Novia, session 1362), each type its own grid (K), one Save writing only the changed rows, in EUR |
+| **AC4** | ✅ | No internal key reaches the browser; the CSP and the Cognito authorizer hold | 1 | Review against §11, and tests — authorizer, allow-list and fresh PROC headers held live and in tests 2026-11-16; `deploy-web.mjs`'s `npm audit` gate ✅ and no internal key in the bundle (tested); §11's markdown control met — `Markdown.jsx` turns `marked`'s tokens into React elements, and no `innerHTML` is written anywhere in the app (checked 2026-11-17) |
+| **AC5** | ✅ | Each new endpoint is in `openapi.yaml` before it is built, as its own commit, and its spec matches its code | all | Review as each lands — met 2026-11-17: every endpoint change on the branch has its own `docs(openapi)` commit ahead of its code, 3.7.3 → 3.10.0; the column `format` is page config, returned as stored, and lives in the page contract (`arch-web-app.md` §4.2) |
+
+## Retro lessons to apply (sprint-16)
+
+- **An upsert proves its rerun:** "no changes" on a second run is tested before the first live
+  write — `deploy-web.mjs` and any new upsert included.
+- **A writable field joins the reads that verify it,** in the same change.
+- **Read a new test's output,** not only its count — no unit test touches the network.
+
+## Out of scope
+
+| Item | Why |
+|---|---|
+| Phase 1: the page editor, the `form` widget and editable grids on pages, Novia's region and panels, Help, Activity, the command bar | §10 Phase 1 |
+| `GATE_RESOLVED` — retiring Slack's stale buttons when a gate is answered on the web | §8, Phase 1 |
+| WebSocket | Polling first, until it's felt (§10) |
+| Tenancy | Deferred until the second household commits (`arch-home-brain.md`) |
+| Inbox retention | Decided at scoping: none until the web is in use (`arch-web-app.md` §12.1) |
+
+## Outcome — closed 2026-11-17
+
+**The household signs in to a web page and uses the brain there.** Home, Money and Inventory draw
+from `PGC_Page`; a workflow started on a page, or in Slack, is stepped through in the browser, and
+every gate type is answered there; `edit_budget` edits a month as three grids, one per budget type,
+with one Save that writes only what changed.
+
+**Built:** the site on S3 + CloudFront with Cognito sign-in (TOTP) and `WebApiFunction`'s
+allow-list; the shell — menus from `/pages` and `/workflows`, 🔔, Settings › Profile, the run drawer
+and run page, a *Reload* notice when a newer build is live; records panels (grid/list, column
+`label` and `format`, a record's detail beside the list), workflow panels, the report panel; a
+run's thread with folding and the waiting question in view; every §5.2 gate type, the grid split at
+each `group` (decision K). PROC: `GET /proc/workflows`, `/proc/me`, `/proc/runs/{runId}`; a waiting
+gate and a run name their workflow; Novia's test runs neither listed nor read. Spec 3.7.3 → 3.10.0.
+Unit tests 1571 → 1774.
+
+**Novia, session 1362:** `edit_budget` v9 from a four-point brief — `number` fields with grid
+hints, only changed rows written, the rows' currency instead of a hardcoded USD, amounts formatted
+in it — tested in the sandbox (run 1048) and checked against the definition.
+
+**Moved out:** `chart` and `metric` panels to Phase 1 (decision N). **To the backlog:** the custom
+domain; a thread that keeps the answers given (decision L).
+
+## Retro
+
+**What went right.**
+
+*Every design went to Javear before it was built, as lettered decisions.* A to N, then K: each
+was answered in one line, and none was reworked after it shipped.
+
+*A live check per item found what tests could not, and each finding was fixed the same day.* The
+list's alignment on a wide screen, a drawer that blocked the next click, long threads, a missing
+run id, a report table squeezed on a phone. None of them was a logic error, so no unit test would
+have caught them.
+
+*The procedure/experience split decided K in a minute.* "Three grids" sounded like a workflow
+change. `group` already says what the sections are, so only the renderer changed, and Novia's
+brief stayed as it was.
+
+*A written brief made Novia's correction a one-session job.* She read the workflow, simulated the
+change, tested it in the sandbox against the brief's own expected values, and reported what she
+had not tested. Reviewing her work against the live definition found nothing to fix.
+
+**What went wrong, and what it says.**
+
+*A stale tab looked like a bug.* The `ping_core` drawer was empty because the browser was still
+running the previous build. **A single-page app has to say when it is out of date; and before
+diagnosing a web defect, confirm which build the tab is running.** The *Reload* notice now does
+the first part.
+
+*A design doc deferred something Slack already does.* §5.2 put `followup_prompt`'s button in
+Phase 1, so it was not built, and the missing button was found live. **Parity with Slack is the
+baseline: a deferral in the web design is checked against what Slack draws today.**
+
+*Test runs leaked into a person's lists.* Novia's sandbox runs showed up in `/runs` as empty
+threads. **Every read a person sees excludes test runs, decided once and applied to every sibling
+read in the same change** (it was then applied to `/gates` too).
+
+*Spreading a helper's result overwrote a field.* `labelOf` returns `{ label, … }`, and spreading
+it into a gate replaced the run's own `label`. **Map a helper's result to named fields; don't
+spread an object whose keys you don't own.**
+
+*A full disk emptied a doc mid-write.* `docs/backlog.md` was truncated to nothing; it was
+recovered from git. **When a write fails strangely, check `df` before anything else.**
+

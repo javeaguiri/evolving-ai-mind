@@ -41,10 +41,19 @@ export function pickLabelColumn(columns = [], { preferred = ['name', 'title'] } 
     if (byName.has(candidate)) return candidate;
   }
 
-  const readable = columns.find(c =>
-    !SYSTEM_COLUMNS.has(c.name)
-    && !/embedding/i.test(c.name)
-    && !UNREADABLE_TYPES.has(String(c.type ?? '').toLowerCase())
-  );
-  return readable?.name ?? null;
+  return columns.find(isReadableColumn)?.name ?? null;
+}
+
+/**
+ * Can this column read as a value a person recognises — not a system column, not an embedding,
+ * not a structured or binary blob? The rule pickLabelColumn falls back on, and the web app's list
+ * view picks its detail columns by.
+ *
+ * @param {{name: string, type: string}} column
+ * @returns {boolean}
+ */
+export function isReadableColumn(column) {
+  return !SYSTEM_COLUMNS.has(column.name)
+    && !/embedding/i.test(column.name)
+    && !UNREADABLE_TYPES.has(String(column.type ?? '').toLowerCase());
 }

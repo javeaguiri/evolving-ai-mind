@@ -319,6 +319,11 @@
         "comment": "pgvector 1024-dim embedding computed by SERV from domain+description+aliases. NULL until backfill-embeddings.mjs runs on existing rows."
       },
       {
+        "name": "display",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
         "name": "created_at",
         "type": "timestamptz",
         "nullable": false,

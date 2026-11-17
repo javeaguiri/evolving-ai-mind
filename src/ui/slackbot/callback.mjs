@@ -22,6 +22,7 @@
 import { randomUUID }        from 'node:crypto';
 import { WebClient }         from '@slack/web-api';
 import { FORM_BLOCK_PREFIX, EMPTY_OPTION_VALUE, listIdBlockId, numberActionId, NOVIA_ANSWER_PREFIX, NOVIA_COMMENT_PREFIX, NOVIA_NOTE_BLOCK } from './form-fields.mjs';
+import { summariseWorkflowError } from '../shared/workflow-error.mjs';
 
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
@@ -647,17 +648,7 @@ async function postGateMoved(message) {
 
 async function postWorkflowError(message) {
   const { callback, step, message: errMessage, traceId, workflowRunId } = message;
-  const isValidationError = typeof errMessage === 'string' && errMessage.includes('llm_call validation failed');
-  const isLlmError        = typeof errMessage === 'string' && /LLM (returned|call timed)/.test(errMessage);
-  const errCount          = errMessage.match(/"keyword"/g)?.length ?? '?';
-  let summary;
-  if (isValidationError) {
-    summary = `LLM output validation failed after 2 attempts (${errCount} schema errors). The prompt has been logged for improvement.`;
-  } else if (isLlmError) {
-    summary = `LLM call failed: ${errMessage.slice(0, 200)}`;
-  } else {
-    summary = typeof errMessage === 'string' ? errMessage.slice(0, 500) : 'An unexpected error occurred.';
-  }
+  const summary = summariseWorkflowError(errMessage);
   const displayText = `\u26a0\ufe0f *Workflow failed*${step ? ` at step ${step}` : ''}\n\n${summary}`;
   const contextText = `runId: ${workflowRunId} | traceId: ${traceId}`;
   const blocks = textToBlocks(displayText, contextText);

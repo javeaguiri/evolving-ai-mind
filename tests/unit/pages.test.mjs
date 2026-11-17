@@ -10,12 +10,13 @@ import { describe, it, afterEach } from 'node:test';
 import assert                      from 'node:assert/strict';
 import { readFileSync }            from 'node:fs';
 
-import { pageProblems, viewsFor, resolveTitle } from '../../src/proc/page-config.mjs';
+import { pageProblems, viewsFor }               from '../../src/proc/page-config.mjs';
+import { resolveLanguageMap }                   from '../../src/shared/language-map.mjs';
 import { latestPages, handle }                  from '../../src/proc/pages.mjs';
 
 const registry = {
   sources:   new Map([
-    ['PGD_Items', { type: 'table', columns: new Set(['id', 'name', 'qty']) }],
+    ['PGD_Items', { type: 'table', columns: new Set(['id', 'name', 'qty', 'price', 'price_currency', 'share', 'bought']) }],
     ['PGD_ItemSummary', { type: 'view', columns: new Set(['name', 'total']) }],
   ]),
   entities:  new Map([['Item', 'PGD_Items']]),
@@ -62,6 +63,34 @@ describe('pageProblems — refused, not stored', () => {
     assert.match(problemsOf(panel('summary', { widget: 'report', workflow: 'gone' }))[0], /no workflow "gone"/);
   });
 
+  it('a column\'s label and format (§4.2, §6.3): accepted as defined, refused otherwise', () => {
+    const records = columns => problemsOf(panel('records', { source: 'PGD_Items', columns }));
+    assert.deepEqual(records([
+      'name',
+      { name: 'price', label: { en: 'Price', es: 'Precio' }, format: 'currency', currency_column: 'price_currency' },
+      { name: 'qty', format: 'currency', currency: 'EUR' },
+      { name: 'share', format: 'percent' },
+      { name: 'bought', format: 'date', label: 'Bought' },
+    ]), []);
+    for (const [columns, expected] of [
+      [{ name: 'price', format: 'money' }, /column "price": format is one of currency, percent, date/],
+      [{ name: 'price', format: 'currency' }, /column "price": a currency names its currency_column or its currency, one of the two/],
+      [{ name: 'price', format: 'currency', currency: 'EUR', currency_column: 'price_currency' }, /one of the two/],
+      [{ name: 'price', format: 'currency', currency_column: 'colour' }, /no column "colour"/],
+      [{ name: 'price', format: 'currency', currency: 'euro' }, /column "price": currency is an ISO 4217 code/],
+      [{ name: 'share', currency: 'EUR' }, /column "share": currency only with format currency/],
+      [{ name: 'price', width: 3 }, /column "price": unknown key width/],
+      [{ name: 'price', label: 7 }, /column "price": label is a string or a language map/],
+      [{ label: 'x' }, /a column is a name, or \{ name, label\?, format\? \}/],
+      [{ name: 'colour' }, /no column "colour"/],
+    ]) {
+      const problems = records([columns]);
+      assert.equal(problems.length, 1, `${JSON.stringify(columns)} → ${problems.join(' | ')}`);
+      assert.match(problems[0], expected);
+    }
+    assert.match(records('name')[0], /columns is an array/);
+  });
+
   it('a source and an entity together, or a workflow and a domain together', () => {
     assert.match(problemsOf(panel('records', { source: 'PGD_Items', entity: 'Item' }))[0], /not both/);
     assert.match(problemsOf(panel('workflow', { workflow: 'do_thing', domain: 'things' }))[0], /not both/);
@@ -84,7 +113,7 @@ describe('the system seed stays generic', () => {
   });
 });
 
-describe('latestPages and resolveTitle', () => {
+describe('latestPages and resolveLanguageMap', () => {
   it('keeps each page\'s latest version, ordered by position', () => {
     const rows = [
       { page_key: 'money', version: 1, title: 'Money', position: 10, panels: [] },
@@ -98,9 +127,9 @@ describe('latestPages and resolveTitle', () => {
   });
 
   it('a title falls back to English, then to the first language held', () => {
-    assert.equal(resolveTitle({ es: 'Inicio', en: 'Home' }, 'es'), 'Inicio');
-    assert.equal(resolveTitle({ es: 'Inicio', en: 'Home' }, 'fr'), 'Home');
-    assert.equal(resolveTitle({ es: 'Inicio' }), 'Inicio');
+    assert.equal(resolveLanguageMap({ es: 'Inicio', en: 'Home' }, 'es'), 'Inicio');
+    assert.equal(resolveLanguageMap({ es: 'Inicio', en: 'Home' }, 'fr'), 'Home');
+    assert.equal(resolveLanguageMap({ es: 'Inicio' }), 'Inicio');
   });
 });
 

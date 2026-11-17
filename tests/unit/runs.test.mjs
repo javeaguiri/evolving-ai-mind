@@ -106,7 +106,21 @@ describe('toRunsPage — visibility after the bound, cursor at the last run exam
     assert.deepEqual(page.runs.map(r => r.runId), [8]);
     assert.equal(page.cursor, 8);
     assert.equal(page.more, true);
-    assert.deepEqual(page.runs[0], { runId: 8, workflowName: 'w', workflowLabel: 'Do it', label: null, status: 'completed', startedAt: 't8' });
+    assert.deepEqual(page.runs[0], { runId: 8, workflowName: 'w', workflowLabel: 'Do it', labelFallback: false, label: null, status: 'completed', startedAt: 't8' });
+  });
+
+  it('names a workflow with no stored label — a system workflow — by its humanised name', () => {
+    const page = toRunsPage([row(8, { provider: 'slack' })], new Map([[1, { name: 'ping_core', display: null }]]), member, 5);
+    assert.deepEqual([page.runs[0].workflowLabel, page.runs[0].labelFallback], ['Ping core', true]);
+    const gone = toRunsPage([row(8, { provider: 'slack' })], new Map(), member, 5);
+    assert.deepEqual([gone.runs[0].workflowName, gone.runs[0].workflowLabel], [null, null]);
+  });
+
+  it('Novia\'s test runs are never listed, and the cursor still passes them', () => {
+    const page = toRunsPage([row(9, { provider: 'novia', sessionId: 1 }), row(8, { provider: 'slack', channel: 'C1' })], wfs, member, 1);
+    assert.deepEqual(page.runs, []);
+    assert.equal(page.cursor, 9);
+    assert.equal(page.more, true);
   });
 
   it('an empty page has no cursor', () => {
@@ -134,6 +148,16 @@ describe('/proc/runs — the principal, and starting a run', () => {
     assert.equal(calls.length, 0);
   });
 
+  it('400 missing_fields when no workflow is named, before any read', async () => {
+    process.env.HOUSEHOLD_PRINCIPALS = 'sub-a';
+    const calls = stubServ(() => ({ rows: [] }));
+    for (const body of [{}, { workflow: '' }, { workflow: 7 }]) {
+      const [status, resp] = out(await handle(req('POST', { 'x-principal-user': 'sub-a' }, { body })));
+      assert.deepEqual([status, resp.error, resp.message], [400, 'missing_fields', 'workflow is required']);
+    }
+    assert.equal(calls.length, 0);
+  });
+
   it('404 for a system workflow (domain null) and for an unknown name', async () => {
     process.env.HOUSEHOLD_PRINCIPALS = 'sub-a';
     for (const rows of [[{ id: 1, domain: null }], []]) {
@@ -156,6 +180,37 @@ describe('/proc/runs — the principal, and starting a run', () => {
     assert.equal(inserted.triggered_by, 'web');
     assert.deepEqual(inserted.input, { domain: 'd' });
     assert.equal(JSON.parse(sent[0].MessageBody).workflowRunId, 77);
+  });
+
+  it('GET /runs/{runId}: the list\'s entry for one run, checked against the principal', async () => {
+    process.env.HOUSEHOLD_PRINCIPALS = 'sub-a,sub-b';
+    const one = id => req('GET', { 'x-principal-user': 'sub-a' }, { proxy: `runs/${id}` });
+    const runRow = callback => ({ id: 12, workflow_id: 5, label: 'Nov', status: 'awaiting_human_gate', started_at: 's', created_at: 'c', callback });
+
+    let calls = stubServ(path => ({ rows: calls.length === 1 ? [runRow({ provider: 'slack', channel: 'C1' })] : [{ id: 5, name: 'w', display: { label: 'Do it' } }] }));
+    assert.deepEqual(out(await handle(one(12))), [200, { success: true, runId: 12, workflowName: 'w', workflowLabel: 'Do it', labelFallback: false, label: 'Nov', status: 'awaiting_human_gate', startedAt: 's' }]);
+    assert.deepEqual(calls[0].body.filters, [{ column: 'id', op: 'eq', value: 12 }]);
+    assert.ok(!calls[0].body.columns.includes('stack'));
+
+    calls = stubServ(() => ({ rows: [runRow({ provider: 'web', channel: 'sub-b' })] }));
+    assert.deepEqual(out(await handle(one(12))).map(x => x.error ?? x), [403, 'run_forbidden']);
+    assert.equal(calls.length, 1, 'refused before its workflow is read');
+
+    calls = stubServ(() => ({ rows: [runRow({ provider: 'novia', sessionId: 1355, reply: { provider: 'slack' } })] }));
+    assert.deepEqual(out(await handle(one(12))).map(x => x.error ?? x), [403, 'run_forbidden'], 'a Novia test run');
+    assert.equal(calls.length, 1);
+
+    stubServ(() => ({ rows: [] }));
+    assert.deepEqual(out(await handle(one(13))).map(x => x.error ?? x), [404, 'run_not_found']);
+  });
+
+  it('runs/{runId} is a GET of a run id, or 404 before the principal is read', async () => {
+    const calls = stubServ(() => ({ rows: [] }));
+    for (const [method, proxy] of [['GET', 'runs/0'], ['GET', 'runs/x'], ['POST', 'runs/12'], ['GET', 'runs/12/steps']]) {
+      assert.equal((await handle(req(method, {}, { proxy }))).statusCode, 404, `${method} ${proxy}`);
+    }
+    assert.equal((await handle(req('GET', {}, { proxy: 'runs/12' }))).statusCode, 401);
+    assert.equal(calls.length, 0);
   });
 
   it('lists with explicit columns — never the stack — newest first', async () => {

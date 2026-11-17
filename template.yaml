@@ -3,11 +3,12 @@ Transform: AWS::Serverless-2016-10-31
 
 Description: >
   evolving-mind-ai v3.2
-  Four Lambda functions — SlackbotFunction, ProcFunction, ServFunction, SlackCallbackListenerFunction.
+  Five Lambda functions — SlackbotFunction, ProcFunction, ServFunction, SlackCallbackListenerFunction, WebApiFunction.
   SlackbotFunction: Slack slash commands + interactive callbacks (HTTP).
   ProcFunction: business logic, LLM routing, workflow execution (HTTP + SQS WorkflowQueue).
   ServFunction: DB CRUD and DDL (HTTP).
   SlackCallbackListenerFunction: posts threaded Slack replies (SQS SlackResultsQueue).
+  WebApiFunction: the web app's routes, as the signed-in user (HTTP, Cognito authorizer).
   
 # -----------------------------------------------------------------------------
 # Global defaults applied to every Function unless overridden
@@ -34,6 +35,15 @@ Globals:
       AllowMethods: "'GET,POST,OPTIONS'"
       AllowHeaders: "'Content-Type,X-Correlation-Id,Authorization'"
       AllowOrigin: "'*'" 
+    # The web routes' authorizer (docs/arch-web-app.md §1). Named by WebApiFunction's event only —
+    # no DefaultAuthorizer, so no other route changes. The event requires the scope
+    # aws.cognito.signin.user.admin, which only an access token carries: an ID token is refused.
+    Auth:
+      Authorizers:
+        WebCognitoAuthorizer:
+          UserPoolArn: !GetAtt WebUserPool.Arn
+          Identity:
+            Header: Authorization
       
 # -----------------------------------------------------------------------------
 # Parameters
@@ -56,7 +66,12 @@ Parameters:
   DBName:
     Type: String
     Default: "evo_mind"
-    Description: "The name of the initial database created"    
+    Description: "The name of the initial database created"
+  WebAuthDomainPrefix:
+    Type: String
+    Default: evomind-home
+    AllowedPattern: '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$'
+    Description: "The web sign-in's Cognito domain prefix — https://<prefix>.auth.<region>.amazoncognito.com"
     
 
 # -----------------------------------------------------------------------------
@@ -262,6 +277,93 @@ Resources:
                   - s3:PutBucketVersioning
                   - s3:GetEncryptionConfiguration
                   - s3:PutEncryptionConfiguration
+                Resource: "*"
+              # The web app (docs/arch-web-app.md §1). Granted in a deploy of their own, before the
+              # resources that need them: CloudFormation runs as THIS role. S3 — the site bucket's
+              # policy, public-access block and ownership; deploy-web.mjs syncs into it.
+              - Effect: Allow
+                Action:
+                  - s3:PutBucketPolicy
+                  - s3:GetBucketPolicy
+                  - s3:DeleteBucketPolicy
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:GetBucketPublicAccessBlock
+                  - s3:PutBucketOwnershipControls
+                  - s3:GetBucketOwnershipControls
+                  - s3:PutBucketTagging
+                  - s3:GetBucketTagging
+                  - s3:GetBucketVersioning
+                  - s3:DeleteBucket
+                Resource: "*"
+              # CloudFront — the site's distribution, origin access control, security headers and
+              # SPA rewrite function; invalidations from deploy-web.mjs
+              - Effect: Allow
+                Action:
+                  - cloudfront:CreateDistribution
+                  - cloudfront:UpdateDistribution
+                  - cloudfront:DeleteDistribution
+                  - cloudfront:GetDistribution
+                  - cloudfront:GetDistributionConfig
+                  - cloudfront:ListDistributions
+                  - cloudfront:TagResource
+                  - cloudfront:UntagResource
+                  - cloudfront:ListTagsForResource
+                  - cloudfront:CreateOriginAccessControl
+                  - cloudfront:UpdateOriginAccessControl
+                  - cloudfront:DeleteOriginAccessControl
+                  - cloudfront:GetOriginAccessControl
+                  - cloudfront:GetOriginAccessControlConfig
+                  - cloudfront:ListOriginAccessControls
+                  - cloudfront:CreateResponseHeadersPolicy
+                  - cloudfront:UpdateResponseHeadersPolicy
+                  - cloudfront:DeleteResponseHeadersPolicy
+                  - cloudfront:GetResponseHeadersPolicy
+                  - cloudfront:GetResponseHeadersPolicyConfig
+                  - cloudfront:ListResponseHeadersPolicies
+                  - cloudfront:GetCachePolicy
+                  - cloudfront:ListCachePolicies
+                  - cloudfront:GetOriginRequestPolicy
+                  - cloudfront:ListOriginRequestPolicies
+                  - cloudfront:CreateFunction
+                  - cloudfront:UpdateFunction
+                  - cloudfront:PublishFunction
+                  - cloudfront:DeleteFunction
+                  - cloudfront:DescribeFunction
+                  - cloudfront:GetFunction
+                  - cloudfront:ListFunctions
+                  - cloudfront:CreateInvalidation
+                  - cloudfront:GetInvalidation
+                  - cloudfront:ListInvalidations
+                Resource: "*"
+              # Cognito — the web user pool, its client, domain and managed login branding; the
+              # administrator creates the household's users
+              - Effect: Allow
+                Action:
+                  - cognito-idp:CreateUserPool
+                  - cognito-idp:UpdateUserPool
+                  - cognito-idp:DeleteUserPool
+                  - cognito-idp:DescribeUserPool
+                  - cognito-idp:SetUserPoolMfaConfig
+                  - cognito-idp:GetUserPoolMfaConfig
+                  - cognito-idp:CreateUserPoolClient
+                  - cognito-idp:UpdateUserPoolClient
+                  - cognito-idp:DeleteUserPoolClient
+                  - cognito-idp:DescribeUserPoolClient
+                  - cognito-idp:CreateUserPoolDomain
+                  - cognito-idp:UpdateUserPoolDomain
+                  - cognito-idp:DeleteUserPoolDomain
+                  - cognito-idp:DescribeUserPoolDomain
+                  - cognito-idp:CreateManagedLoginBranding
+                  - cognito-idp:UpdateManagedLoginBranding
+                  - cognito-idp:DeleteManagedLoginBranding
+                  - cognito-idp:DescribeManagedLoginBranding
+                  - cognito-idp:DescribeManagedLoginBrandingByClient
+                  - cognito-idp:TagResource
+                  - cognito-idp:UntagResource
+                  - cognito-idp:ListTagsForResource
+                  - cognito-idp:AdminCreateUser
+                  - cognito-idp:AdminGetUser
+                  - cognito-idp:ListUsers
                 Resource: "*"
               # Lambda — full management for sam deploy (create, update, event source mappings)
               - Effect: Allow
@@ -628,6 +730,208 @@ Resources:
           echo "Bastion bootstrap complete" >> /var/log/bastion-bootstrap.log
 
   # ===========================================================================
+  # WEB APP — the site and its sign-in (docs/arch-web-app.md §1, §11)
+  # S3 holds the built SPA, served only through CloudFront. CloudFront is the one origin the
+  # browser talks to: the site, and /api/v1/ui/web/* passed to this stack's API. Cognito signs
+  # the household in; users are created by the administrator, never by sign-up.
+  # ===========================================================================
+  WebSiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # Only this stack's distribution reads the bucket, signed by origin access control
+  WebSiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebSiteBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${WebSiteBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${WebDistribution}'
+
+  WebOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-web'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # The app owns its routes: a site path whose last segment has no extension is served
+  # index.html. Attached to the site's behaviour only, so the API's own 403s and 404s stay JSON.
+  WebSpaRewrite:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub '${AWS::StackName}-web-spa-rewrite'
+      AutoPublish: true
+      FunctionConfig:
+        Comment: 'Serve index.html for the web app routes'
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          var last = request.uri.substring(request.uri.lastIndexOf('/') + 1);
+          if (last.indexOf('.') === -1) request.uri = '/index.html';
+          return request;
+        }
+
+  # §11: scripts and styles from the site only; connect to the site and Cognito (managed
+  # login's token endpoint, and cognito-idp for GetTokensFromRefreshToken, which refresh
+  # token rotation requires); images from the site and data: only; never framed.
+  WebSecurityHeaders:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub '${AWS::StackName}-web-security'
+        SecurityHeadersConfig:
+          ContentSecurityPolicy:
+            ContentSecurityPolicy: !Sub "default-src 'self'; img-src 'self' data:; connect-src 'self' https://${WebAuthDomainPrefix}.auth.${AWS::Region}.amazoncognito.com https://cognito-idp.${AWS::Region}.amazonaws.com; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+            Override: true
+          ContentTypeOptions:
+            Override: true
+          FrameOptions:
+            FrameOption: DENY
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: no-referrer
+            Override: true
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 63072000
+            IncludeSubdomains: true
+            Override: true
+
+  WebDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: 'evolving-mind-ai web app'
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: site
+            DomainName: !GetAtt WebSiteBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt WebOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+          - Id: api
+            DomainName: !Sub '${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com'
+            OriginPath: /Prod
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+        DefaultCacheBehavior:
+          TargetOriginId: site
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6          # Managed-CachingOptimized
+          ResponseHeadersPolicyId: !Ref WebSecurityHeaders
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt WebSpaRewrite.FunctionMetadata.FunctionARN
+        CacheBehaviors:
+          # CloudFront offers no GET+POST-only set; WebApiFunction answers the rest itself
+          - PathPattern: /api/v1/ui/web/*
+            TargetOriginId: api
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad          # Managed-CachingDisabled
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac  # Managed-AllViewerExceptHostHeader
+            ResponseHeadersPolicyId: !Ref WebSecurityHeaders
+
+  WebUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub '${AWS::StackName}-web'
+      UserPoolTier: ESSENTIALS                     # managed login needs Essentials
+      DeletionProtection: ACTIVE
+      UsernameAttributes: [email]
+      UsernameConfiguration:
+        CaseSensitive: false
+      AutoVerifiedAttributes: [email]
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      MfaConfiguration: 'ON'
+      EnabledMfas: [SOFTWARE_TOKEN_MFA]            # TOTP; passkeys join with Settings › Security
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+
+  WebUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref WebUserPool
+      Domain: !Ref WebAuthDomainPrefix
+      ManagedLoginVersion: 2
+
+  # A public client: authorization code with PKCE, no secret. Refresh tokens rotate, which
+  # Cognito serves only through GetTokensFromRefreshToken — so the refresh-token flow is left
+  # out of ExplicitAuthFlows, as rotation requires.
+  WebUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref WebUserPool
+      ClientName: !Sub '${AWS::StackName}-web'
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, email, profile, aws.cognito.signin.user.admin]
+      SupportedIdentityProviders: [COGNITO]
+      CallbackURLs:
+        - !Sub 'https://${WebDistribution.DomainName}/auth/callback'
+      LogoutURLs:
+        - !Sub 'https://${WebDistribution.DomainName}/'
+      ExplicitAuthFlows: [ALLOW_USER_SRP_AUTH]
+      RefreshTokenRotation:
+        Feature: ENABLED
+        RetryGracePeriodSeconds: 10
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+
+  WebLoginBranding:
+    Type: AWS::Cognito::ManagedLoginBranding
+    DependsOn: WebUserPoolDomain
+    Properties:
+      UserPoolId: !Ref WebUserPool
+      ClientId: !Ref WebUserPoolClient
+      UseCognitoProvidedValues: true
+
+  # ===========================================================================
   # LAMBDA 1 — UI / Slackbot
   # Owns:  /api/v1/ui/slack/{proxy+}
   # Pings: POST /api/v1/ui/slack/ping-api
@@ -695,7 +999,10 @@ Resources:
           SLACK_BOT_TOKEN:      '{{resolve:ssm:/evolving-mind-ai/slack-bot-token}}'
           INTERNAL_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/internal-api-key:2}}'
           # Comma-separated principals (web user subs) holding the household role — proc/principal.mjs
-          HOUSEHOLD_PRINCIPALS: '{{resolve:ssm:/evolving-mind-ai/household-principals:1}}'
+          HOUSEHOLD_PRINCIPALS: '{{resolve:ssm:/evolving-mind-ai/household-principals:2}}'
+          # The household's language (BCP 47) and timezone (IANA) — every principal's until a profile exists — proc/me.mjs
+          HOUSEHOLD_LOCALE:     '{{resolve:ssm:/evolving-mind-ai/household-locale:1}}'
+          HOUSEHOLD_TIMEZONE:   '{{resolve:ssm:/evolving-mind-ai/household-timezone:1}}'
       Events:
         ProcProxy:
           Type: Api
@@ -802,6 +1109,45 @@ Resources:
         EntryPoints:
           - src/ui/slackbot/callback.mjs
 
+  # ===========================================================================
+  # LAMBDA 5 — UI / Web API  (HTTP only)
+  # Owns:  /api/v1/ui/web/{proxy+}, reached through CloudFront (docs/arch-web-app.md §1, §3.1)
+  # No API key: the Cognito authorizer verifies the access token, and the function calls PROC as
+  # the token's sub with the internal key — which never reaches the browser.
+  # ===========================================================================
+  WebApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: evolving-mind-ai-web-api
+      Description: 'UI layer — the web app routes, forwarded to PROC as the signed-in user'
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Handler: handler.handler
+      Environment:
+        Variables:
+          PROC_API_URL:         'https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod'
+          INTERNAL_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/internal-api-key:2}}'
+      Events:
+        WebApiProxy:
+          Type: Api
+          Properties:
+            Path: /api/v1/ui/web/{proxy+}
+            Method: ANY
+            Auth:
+              Authorizer: WebCognitoAuthorizer
+              AuthorizationScopes: [aws.cognito.signin.user.admin]
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Format: esm
+        OutExtension:
+          - .js=.mjs
+        Banner:
+          - js=import { createRequire } from 'module'; const require = createRequire(import.meta.url);
+        EntryPoints:
+          - src/ui/web/api/handler.mjs
+
 # -----------------------------------------------------------------------------
 # API Gateway API Key + Usage Plan — protects /proc/* and /serv/* routes.
 # Key value sourced from SSM so it matches INTERNAL_API_KEY env var on Lambdas.
@@ -875,3 +1221,17 @@ Outputs:
     Value: !Ref SlackResultsQueue
     Export:
       Name: !Sub '${AWS::StackName}-CallbackResultsQueueUrl'
+
+  # The web app's build-time configuration, read by deploy-web.mjs — none of it is secret
+  WebSiteUrl:
+    Value: !Sub 'https://${WebDistribution.DomainName}'
+  WebSiteBucketName:
+    Value: !Ref WebSiteBucket
+  WebDistributionId:
+    Value: !Ref WebDistribution
+  WebUserPoolId:
+    Value: !Ref WebUserPool
+  WebUserPoolClientId:
+    Value: !Ref WebUserPoolClient
+  WebAuthDomain:
+    Value: !Sub 'https://${WebAuthDomainPrefix}.auth.${AWS::Region}.amazoncognito.com'

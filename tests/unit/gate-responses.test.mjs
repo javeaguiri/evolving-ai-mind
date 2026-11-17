@@ -33,8 +33,10 @@ const waitingAt = (gate_type, step_ref, gate_id = 'g-1') => ({
 
 describe('checkGateResponse — which gate', () => {
   it('requires gateId and action', () => {
-    assert.equal(checkGateResponse(waitingAt('confirm', {}), { action: 'confirm' }).status, 400);
-    assert.equal(checkGateResponse(waitingAt('confirm', {}), { gateId: 'g-1' }).status, 400);
+    for (const body of [{ action: 'confirm' }, { gateId: 'g-1' }]) {
+      assert.deepEqual(checkGateResponse(waitingAt('confirm', {}), body),
+        { status: 400, body: { error: 'missing_fields', message: 'gateId and action are required' } });
+    }
   });
 
   it('404 for a run that does not exist', () => {

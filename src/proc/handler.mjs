@@ -48,6 +48,8 @@ import { handle as runs }               from './runs.mjs';
 import { handle as pages }              from './pages.mjs';
 import { handle as outputs }            from './outputs.mjs';
 import { handle as sources }            from './sources.mjs';
+import { handle as me }                 from './me.mjs';
+import { handle as workflows }          from './workflows.mjs';
 import { processScheduledRun }          from './scheduled-run.mjs';
 
 /**
@@ -291,16 +293,23 @@ async function dispatch(req) {
   if ((req.proxy || '').split('/').filter(Boolean)[0] === 'sources') {
     return sources(req);
   }
+  // One run names its id in the path (/runs/{runId}); the list and a start are /runs alone.
+  if ((req.proxy || '').split('/').filter(Boolean)[0] === 'runs') {
+    return runs(req);
+  }
 
   switch (req.route) {
     case 'inbox':
       return inbox(req);
 
-    case 'runs':
-      return runs(req);
-
     case 'pages':
       return pages(req);
+
+    case 'me':
+      return me(req);
+
+    case 'workflows':
+      return workflows(req);
 
     case 'ping-llm':
       return pingLlm(req);
