@@ -19,6 +19,8 @@ import { base64url, createVerifier, createState, challengeFor } from '../../src/
 import { createSession, safeReturnPath, SignInRequired, AuthUnavailable, REFRESH_KEY, PENDING_KEY } from '../../src/ui/web/app/auth/session.mjs';
 import { createApiClient, ApiError } from '../../src/ui/web/app/api/client.mjs';
 import { matchPath, matchLocation }  from '../../src/ui/web/app/router.mjs';
+import { formatValue, isNumericColumn }   from '../../src/ui/web/app/records/format.mjs';
+import { rowsRequest, mergeColumns, listFields, initialView, viewKey } from '../../src/ui/web/app/records/query.mjs';
 import { pageItems, domainItems, sectionOf, currentItem, workflowLabels, gateHeadline, relativeAge, pollDelay, POLL_MS, POLL_MAX_MS } from '../../src/ui/web/app/shell/nav.mjs';
 
 const APP_DIR = new URL('../../src/ui/web/app/', import.meta.url).pathname;
@@ -301,6 +303,98 @@ describe('nav — the shell\'s decisions', () => {
   });
 });
 
+describe('records — formatting through Intl (§6.3, §13)', () => {
+  const en = { locale: 'en', timeZone: 'Europe/Madrid' };
+  const es = { locale: 'es', timeZone: 'Europe/Madrid' };
+  const f  = (value, column, row = {}, where = en) => formatValue(value, column, row, where).replace(/\s/g, ' ');
+
+  it('a date is its calendar day in every timezone; SERV sends it as UTC midnight', () => {
+    assert.equal(f('2026-10-09T00:00:00.000Z', { type: 'date' }), 'Oct 9, 2026');
+    assert.equal(f('2026-10-09T00:00:00.000Z', { type: 'date' }, {}, { locale: 'en', timeZone: 'America/Los_Angeles' }), 'Oct 9, 2026');
+    assert.equal(f('2026-10-09', { type: 'date' }, {}, es), '9 oct 2026');
+  });
+
+  it('a timestamp is shown in the household\'s timezone; format date keeps only its day there', () => {
+    assert.equal(f('2026-11-17T09:05:00Z', { type: 'timestamptz' }), 'Nov 17, 2026, 10:05 AM');
+    assert.equal(f('2026-11-17T23:30:00Z', { type: 'timestamptz', format: 'date' }), 'Nov 18, 2026');
+  });
+
+  it('numbers — SERV sends numeric as a string — in the locale\'s separators', () => {
+    assert.equal(f('9.1', { type: 'numeric' }), '9.1');
+    assert.equal(f('1234.5', { type: 'numeric' }), '1,234.5');
+    assert.equal(f('12345.5', { type: 'numeric' }, {}, es), '12.345,5');
+    assert.equal(f(7, { type: 'integer' }), '7');
+    assert.equal(f('0.25', { type: 'numeric', format: 'percent' }), '25%');
+  });
+
+  it('a currency only when the panel names one: the row\'s own column, or a fixed code', () => {
+    const fromRow = { type: 'numeric', format: 'currency', currency_column: 'currency' };
+    assert.equal(f('9.1', fromRow, { currency: 'EUR' }), '€9.10');
+    assert.equal(f('9.1', fromRow, { currency: 'EUR' }, es), '9,10 €');
+    assert.equal(f('9.1', { type: 'numeric', format: 'currency', currency: 'USD' }), '$9.10');
+    assert.equal(f('9.1', fromRow, { currency: null }), '9.1', 'no code on the row — a plain number, never a guess');
+    assert.equal(f('9.1', { type: 'numeric' }, { currency: 'EUR' }), '9.1', 'no format — no currency');
+  });
+
+  it('empty, true, a structure and text', () => {
+    for (const empty of [null, undefined, '']) assert.equal(f(empty, { type: 'numeric' }), '');
+    assert.equal(f(true, { type: 'boolean' }), '✓');
+    assert.equal(f(false, { type: 'boolean' }), '');
+    assert.equal(f({ a: 1 }, { type: 'jsonb' }), '{"a":1}');
+    assert.equal(f('as entered', { type: 'varchar' }), 'as entered');
+    assert.equal(f('not a number', { type: 'numeric' }), 'not a number');
+  });
+
+  it('numbers line up on the right', () => {
+    for (const type of ['numeric', 'integer', 'serial', 'bigint', 'double precision', 'numeric(10,2)']) assert.ok(isNumericColumn({ type }), type);
+    for (const type of ['varchar', 'date', 'text', 'interval']) assert.ok(!isNumericColumn({ type }), type);
+  });
+});
+
+describe('records — the read, the columns, the views (§4.2)', () => {
+  const READ = [
+    { name: 'id', type: 'serial', label: 'Id' },
+    { name: 'created_at', type: 'timestamptz', label: 'Created at' },
+    { name: 'title', type: 'varchar', label: 'Title' },
+    { name: 'amount', type: 'numeric', label: 'Amount' },
+    { name: 'currency', type: 'varchar', label: 'Currency' },
+    { name: 'date', type: 'date', label: 'Date' },
+  ];
+
+  it('rowsRequest: the panel\'s columns, plus any a currency or the list needs; its filter, order and limit', () => {
+    assert.deepEqual(rowsRequest({ source: 'PGD_Things', columns: ['date', { name: 'amount', format: 'currency', currency_column: 'currency' }],
+      title_column: 'title', filter: [{ column: 'deleted_at', op: 'is_null' }], order_by: 'date DESC', limit: 50 }), {
+      source: 'PGD_Things',
+      query:  { columns: 'date,amount,currency,title', filter: '[{"column":"deleted_at","op":"is_null"}]', order_by: 'date DESC', limit: 50 },
+    });
+    assert.deepEqual(rowsRequest({ entity: 'Thing' }), { source: 'Thing', query: { columns: undefined, filter: undefined, order_by: undefined, limit: undefined } });
+  });
+
+  it('mergeColumns: the panel\'s order, labels (a language map read in the language) and formats; the rest read but not in the grid', () => {
+    const merged = mergeColumns({ columns: ['date', { name: 'amount', label: { en: 'Spent', es: 'Gastado' }, format: 'currency', currency_column: 'currency' }] }, READ, 'es');
+    assert.deepEqual(merged.filter(c => c.shown).map(c => [c.name, c.label]), [['date', 'Date'], ['amount', 'Gastado']]);
+    assert.equal(merged.find(c => c.name === 'amount').format, 'currency');
+    assert.deepEqual(merged.filter(c => !c.shown).map(c => c.name), ['id', 'created_at', 'title', 'currency']);
+    assert.ok(mergeColumns({}, READ, 'en').every(c => c.shown), 'no columns named — the grid shows every column read');
+  });
+
+  it('listFields: the panel\'s choice, else the label column and the next two readable columns', () => {
+    const all = mergeColumns({}, READ, 'en');
+    assert.deepEqual(listFields({}, all), { title: 'title', details: ['amount', 'currency'] });
+    assert.deepEqual(listFields({ title_column: 'date', detail_columns: ['title'] }, all), { title: 'date', details: ['title'] });
+    const named = mergeColumns({ columns: ['date', 'amount'] }, READ, 'en');
+    assert.deepEqual(listFields({ columns: ['date', 'amount'] }, named), { title: 'title', details: ['date', 'amount'] });
+  });
+
+  it('initialView: the viewer\'s last choice, else the panel\'s view, else grid — of the views Phase 0 draws', () => {
+    assert.equal(initialView({}, null), 'grid');
+    assert.equal(initialView({ view: 'list' }, null), 'list');
+    assert.equal(initialView({ view: 'list' }, 'grid'), 'grid');
+    assert.equal(initialView({ view: 'document' }, 'gallery'), 'grid');
+    assert.equal(viewKey('money', 'expenses'), 'evomind.view.money.expenses');
+  });
+});
+
 describe('components and catalog', () => {
   let ui;
   before(async () => {
@@ -309,6 +403,7 @@ describe('components and catalog', () => {
         contents: `export { renderToString } from 'react-dom/server';
                    export { Shell, SignInProblem } from './App.jsx';
                    export { WaitingList } from './shell/NeedsYou.jsx';
+                   export { RecordsBody, RecordDetail } from './panels/RecordsPanel.jsx';
                    export { initI18n } from './i18n.mjs';
                    export { createElement } from 'react';`,
         resolveDir: APP_DIR, loader: 'jsx',
@@ -435,6 +530,60 @@ describe('components and catalog', () => {
   it('the waiting list, empty', () => {
     const html = ui.renderToString(ui.createElement(ui.WaitingList, { gates: [], labels: new Map(), path: '/', now: 0, onPick() {} }));
     assert.match(html, /Nothing is waiting for you\./);
+  });
+
+  it('a household page draws its panels in their widths; a records panel loads, other kinds are their frame', () => {
+    const pages = [{ pageKey: 'home', title: 'Home', position: 0, panels: [
+      { id: 'r', kind: 'records', width: 'full', title: { en: 'Things', es: 'Cosas' }, config: { source: 'PGD_Things' } },
+      { id: 'w', kind: 'workflow', width: '1/2', title: 'Flows', config: { domain: 'd' } },
+    ] }];
+    const html = draw('/', { pages });
+    assert.match(html, /<div class="panels"><section class="panel w-full" aria-label="Things"><div class="phead"><h2>Things<\/h2><\/div><div class="skeleton" aria-busy="true"/);
+    assert.match(html, /<section class="panel w-half" aria-label="Flows"><div class="phead"><h2>Flows<\/h2><\/div><\/section>/);
+  });
+
+  it('a Home with no panels says how to go on', () => {
+    assert.match(draw('/'), /Your home page is empty — open a domain from the menu\./);
+    assert.doesNotMatch(draw('/p/money'), /home page is empty/);
+  });
+
+  const BODY = {
+    columns: [
+      { name: 'id', type: 'serial', label: 'Id' }, { name: 'title', type: 'varchar', label: 'Title' },
+      { name: 'amount', type: 'numeric', label: 'Amount' }, { name: 'currency', type: 'varchar', label: 'Currency' },
+    ],
+    rows: [{ id: 1, title: 'Shop A', amount: '62.4', currency: 'EUR' }, { id: 2, title: 'Shop B', amount: '18.9', currency: 'EUR' }],
+    more: true, totalMatching: 1228,
+  };
+  const CONFIG = { source: 'PGD_Things', columns: ['title', { name: 'amount', format: 'currency', currency_column: 'currency' }] };
+  const body   = (view, extra = {}) => ui.renderToString(ui.createElement(ui.RecordsBody, {
+    config: CONFIG, body: { ...BODY, ...extra }, view, where: { locale: 'en', timeZone: 'Europe/Madrid' }, onOpen() {},
+  }));
+
+  it('grid: the panel\'s columns, numbers on the right, a currency from the row; a bounded read says so', () => {
+    const html = body('grid');
+    assert.match(html, /<thead><tr><th scope="col">Title<\/th><th scope="col" class="num">Amount<\/th><\/tr><\/thead>/);
+    assert.match(html, /<tr tabindex="0"><td>Shop A<\/td><td class="num">€62.40<\/td><\/tr>/);
+    assert.doesNotMatch(html, /Currency|EUR/);
+    assert.match(html, /<p class="pfoot">Showing 2 of 1,228<\/p>/);
+    assert.doesNotMatch(body('grid', { more: false }), /Showing/);
+  });
+
+  it('list: the label column, then the details, each row a button', () => {
+    const html = body('list');
+    assert.match(html, /<li><button type="button"><span class="rt">Shop A<\/span><span class="rd">€62.40<\/span><\/button><\/li>/);
+  });
+
+  it('a source with no rows says Nothing here yet', () => {
+    assert.match(body('grid', { rows: [], more: false }), /Nothing here yet/);
+  });
+
+  it('a record\'s detail: every column read, labelled and formatted', () => {
+    const html = ui.renderToString(ui.createElement(ui.RecordDetail, {
+      columns: BODY.columns.map(c => (c.name === 'amount' ? { ...c, format: 'currency', currency_column: 'currency' } : c)),
+      row: BODY.rows[0], where: { locale: 'en', timeZone: 'Europe/Madrid' },
+    }));
+    assert.match(html, /<dt>Id<\/dt><dd>1<\/dd>.*<dt>Title<\/dt><dd>Shop A<\/dd>.*<dt>Amount<\/dt><dd>€62.40<\/dd>.*<dt>Currency<\/dt><dd>EUR<\/dd>/);
   });
 
   it('a refused sign-in says so and offers to sign in again', () => {

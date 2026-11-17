@@ -17,7 +17,17 @@
     "domains": "Domains",
     "run": "Run {runId}",
     "notFound": "Page not found",
-    "goHome": "Go to Home"
+    "goHome": "Go to Home",
+    "homeEmpty": "Your home page is empty — open a domain from the menu."
+  },
+  "records": {
+    "view": "View",
+    "grid": "Grid",
+    "list": "List",
+    "empty": "Nothing here yet",
+    "showing": "Showing {shown, number} of {total, number}",
+    "missing": "“{source}” can’t be found.",
+    "failed": "This panel couldn’t be read."
   },
   "needsYou": {
     "title": "Needs you",

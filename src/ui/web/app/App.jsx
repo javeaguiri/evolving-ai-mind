@@ -6,8 +6,8 @@
 // The shell (docs/arch-web-app.md §4.1): the top bar — 🏠, Pages, Domains, 🔔, ⚙ — over the page
 // the route names, Settings and the run drawer over that. It reads who
 // the user is (GET /me), the household's pages (GET /pages) and its domains (GET /workflows) once,
-// retrying with the §9 banner while the backend can't be reached. Page bodies are each page's
-// title until the panels arrive (Sprint 17 item 4).
+// retrying with the §9 banner while the backend can't be reached. A household page draws its
+// panels (§4.2); the other pages draw their title until their bodies arrive (Sprint 17 item 4).
 
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation }      from 'react-i18next';
@@ -20,6 +20,7 @@ import { Drawer }              from './shell/Drawer.jsx';
 import { NeedsYou }            from './shell/NeedsYou.jsx';
 import { GearIcon }            from './shell/icons.jsx';
 import { Settings, SETTINGS_ENTRIES } from './pages/Settings.jsx';
+import { PageBody }            from './panels/PageBody.jsx';
 import { domainItems, workflowLabels, pollDelay, HOME_PAGE_KEY } from './shell/nav.mjs';
 
 /**
@@ -108,13 +109,17 @@ function usePageTitle(route, pages, domains) {
  * @param {() => void} props.onSignOut
  */
 export function Shell({ route, me, pages, domains, problem, api, onSignInRequired, onSignOut }) {
-  const { t }    = useTranslation();
+  const { t, i18n } = useTranslation();
   const settings = route.page === 'settings' && SETTINGS_ENTRIES.includes(route.params.entry);
   const under    = settings ? route.from ?? '/' : route.location;
   const page     = settings ? { ...matchLocation(under), location: under } : route;
   const path     = page.location.split('?')[0];
   const title    = usePageTitle(page, pages, domains);
   const labels   = useMemo(() => workflowLabels(domains ?? []), [domains]);
+  const pageKey  = page.page === 'home' ? HOME_PAGE_KEY : page.page === 'householdPage' ? page.params.pageKey : null;
+  const shown    = pageKey && pages?.find(p => p.pageKey === pageKey);
+  const context  = useMemo(() => ({ api, locale: me?.locale ?? i18n.language, timeZone: me?.timezone, onSignInRequired }),
+    [api, me, i18n.language, onSignInRequired]);
 
   useEffect(() => {
     document.title = title ? `${title} · ${t('app.name')}` : t('app.name');
@@ -137,6 +142,8 @@ export function Shell({ route, me, pages, domains, problem, api, onSignInRequire
               <h1>{title}</h1>
             </div>
           )}
+        {shown && shown.panels.length > 0 && <PageBody pageKey={shown.pageKey} panels={shown.panels} context={context} />}
+        {shown && shown.panels.length === 0 && page.page === 'home' && <p className="muted">{t('pages.homeEmpty')}</p>}
         {page.page === 'domains' && domains && (
           <div className="panel">
             <MenuList items={domainItems(domains)} currentKey={null} onPick={() => {}} />
