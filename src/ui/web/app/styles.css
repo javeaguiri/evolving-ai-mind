@@ -401,6 +401,7 @@ table.grid .num { text-align: end; font-variant-numeric: tabular-nums; white-spa
 .fld .opts { display: flex; flex-wrap: wrap; gap: 4px 14px; }
 .problem { font-size: 12.5px; color: var(--bad); }
 .problems { margin: 6px 0 0; padding-inline-start: 18px; color: var(--bad); font-size: 12.5px; }
+.tablewrap { max-inline-size: 100%; overflow-x: auto; }
 table.kv { border-collapse: collapse; }
 table.kv th, table.kv td { text-align: start; vertical-align: top; padding-block: 4px; padding-inline: 0 16px; border-block-end: 1px solid var(--soft); }
 table.kv th { color: var(--muted); font-weight: 500; white-space: nowrap; }

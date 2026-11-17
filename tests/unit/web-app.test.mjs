@@ -21,7 +21,7 @@ import { createApiClient, ApiError } from '../../src/ui/web/app/api/client.mjs';
 import { matchPath, matchLocation }  from '../../src/ui/web/app/router.mjs';
 import { formatValue, isNumericColumn }   from '../../src/ui/web/app/records/format.mjs';
 import { rowsRequest, mergeColumns, listFields, initialView, viewKey } from '../../src/ui/web/app/records/query.mjs';
-import { inputsOf, initialValues, isChanged, fieldProblems, formValues, answerFor, gridOf, gridSections, moveCell, listColumns } from '../../src/ui/web/app/gates/gate.mjs';
+import { inputsOf, initialValues, isChanged, fieldProblems, formValues, answerFor, gridOf, gridSections, moveCell, listColumns, revealContent } from '../../src/ui/web/app/gates/gate.mjs';
 import { liveScript, isNewBuild } from '../../src/ui/web/app/shell/version.mjs';
 import { runName, panelWorkflows, foldPoint, addMessages, threadDelay, isActive, isWorking, THREAD_POLL_MS, THREAD_POLL_MAX_MS } from '../../src/ui/web/app/runs/runs.mjs';
 import { pageItems, domainItems, sectionOf, currentItem, gateHeadline, relativeAge, pollDelay, POLL_MS, POLL_MAX_MS } from '../../src/ui/web/app/shell/nav.mjs';
@@ -515,8 +515,25 @@ describe('gates — the answer Slack sends, checked before it is sent (§5)', ()
     assert.deepEqual(moveCell({ r: 1, c: 1 }, 'Tab', size), { r: 1, c: 1 });
   });
 
-  it('listColumns: every key across the items, in first-appearance order', () => {
-    assert.deepEqual(listColumns([{ fields: { a: 1 } }, { fields: { b: 2, a: 3 } }, {}]), ['a', 'b']);
+  it('listColumns: every key across the items, in first-appearance order, headed as Slack heads it', () => {
+    assert.deepEqual(listColumns([{ fields: { unit_price: 1 } }, { fields: { deck_id: 'Basics', unit_price: 3 } }, {}]),
+      [{ key: 'unit_price', label: 'Unit Price' }, { key: 'deck_id', label: 'Deck Name' }]);
+  });
+
+  it('revealContent: an array of records is a table, as Slack draws it (run 1042)', () => {
+    const items = [{ unit: 'each', name_en: 'Monitor Stand', line_total: 19.99 }, { unit: 'each', name_en: 'Drops', line_total: 9.99 }];
+    assert.deepEqual(revealContent(items), { kind: 'table', records: items });
+  });
+
+  it('revealContent: single syntax/verb/command records and plain values are a list of lines', () => {
+    assert.deepEqual(revealContent([{ syntax: 'list <x>' }, { verb: 'add' }]), { kind: 'list', items: ['list <x>', 'add'] });
+    assert.deepEqual(revealContent(['a', 2]), { kind: 'list', items: ['a', '2'] });
+    assert.deepEqual(revealContent([]), { kind: 'list', items: [] });
+  });
+
+  it('revealContent: anything else is markdown', () => {
+    assert.deepEqual(revealContent('| A |\n|---|\n| 1 |'), { kind: 'text', text: '| A |\n|---|\n| 1 |' });
+    assert.deepEqual(revealContent(null), { kind: 'text', text: '' });
   });
 
   it('inputsOf: a form\'s inputs only', () => {
@@ -880,8 +897,18 @@ describe('components and catalog', () => {
     it('review_object: a key/value table, an array of records nested as a table', () => {
       const html = draw(gateOf('review_object', [{ type: 'review_object', items: [{ key: 'name', value: 'Lamp' }, { key: 'parts', value: [{ part: 'shade', qty: 1 }] }, { key: 'tags', value: ['a', 'b'] }] }, actions({ action: 'confirm', label: 'OK' })]));
       assert.match(html, /<tr><th scope="row">name<\/th><td>Lamp<\/td><\/tr>/);
-      assert.match(html, /<table class="kv nested"><thead><tr><th>part<\/th><th>qty<\/th><\/tr><\/thead><tbody><tr><td>shade<\/td><td>1<\/td><\/tr>/);
+      assert.match(html, /<table class="kv nested"><thead><tr><th>Part<\/th><th>Qty<\/th><\/tr><\/thead><tbody><tr><td>shade<\/td><td>1<\/td><\/tr>/);
       assert.match(html, /<ul class="plainlist"><li>a<\/li><li>b<\/li><\/ul>/);
+    });
+
+    it('reveal: an array of records is a table headed as Slack heads it, never JSON (run 1042)', () => {
+      const html = draw(gateOf('confirm', [{ type: 'reveal', button_label: 'View items (1)', content: [{ name_en: 'Monitor Stand', unit_price: 19.99 }] }, actions({ action: 'confirm', label: 'OK' })]));
+      assert.match(html, /<details class="reveal"><summary>View items \(1\)<\/summary><div class="tablewrap"><table class="kv nested"><thead><tr><th>Name En<\/th><th>Unit Price<\/th><\/tr><\/thead><tbody><tr><td>Monitor Stand<\/td><td>19.99<\/td><\/tr>/);
+      assert.doesNotMatch(html, /\{&quot;/);
+    });
+
+    it('a table wider than its pane scrolls sideways inside it', () => {
+      assert.match(readFileSync(join(APP_DIR, 'styles.css'), 'utf8'), /^\.tablewrap \{[^}]*overflow-x: auto;/m);
     });
 
     it('list_selection: a table, each row\'s own action button in place of typing its id', () => {

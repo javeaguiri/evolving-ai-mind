@@ -16,32 +16,36 @@ import { SignInRequired } from '../auth/session.mjs';
 import { Markdown }       from '../Markdown.jsx';
 import { Grid }           from './Grid.jsx';
 import { Input }          from './Input.jsx';
-import { inputsOf, initialValues, isChanged, fieldProblems, answerFor, gridOf, listColumns } from './gate.mjs';
+import { inputsOf, initialValues, isChanged, fieldProblems, answerFor, gridOf, listColumns, revealContent } from './gate.mjs';
 
-/** A collapsible part — Slack's reveal button. Its content is markdown, or a list of lines. */
+/** A collapsible part — Slack's reveal button. Its content is records as a table, a list of lines, or markdown. */
 export function Reveal({ label, content }) {
   const { t } = useTranslation();
-  const text = Array.isArray(content) ? content.map(c => `- ${typeof c === 'string' ? c : JSON.stringify(c)}`).join('\n') : String(content ?? '');
+  const shown = revealContent(content);
   return (
     <details className="reveal">
       <summary>{label || t('run.reveal')}</summary>
-      <Markdown text={text} />
+      {shown.kind === 'table' ? <div className="tablewrap"><RecordTable records={shown.records} /></div>
+        : <Markdown text={shown.kind === 'list' ? shown.items.map(line => `- ${line}`).join('\n') : shown.text} />}
     </details>
+  );
+}
+
+/** An array of records as a table: a column per key, headed as Slack heads it. */
+function RecordTable({ records }) {
+  const cols = listColumns(records.map(r => ({ fields: r })));
+  return (
+    <table className="kv nested">
+      <thead><tr>{cols.map(c => <th key={c.key}>{c.label}</th>)}</tr></thead>
+      <tbody>{records.map((r, i) => <tr key={i}>{cols.map(c => <td key={c.key}>{format(r[c.key])}</td>)}</tr>)}</tbody>
+    </table>
   );
 }
 
 /** A value of a review_object pair: an array of records as a table, of values as a list. */
 function ReviewValue({ value }) {
   if (Array.isArray(value)) {
-    if (value.length && value.every(v => v && typeof v === 'object' && !Array.isArray(v))) {
-      const cols = listColumns(value.map(v => ({ fields: v })));
-      return (
-        <table className="kv nested">
-          <thead><tr>{cols.map(c => <th key={c}>{c}</th>)}</tr></thead>
-          <tbody>{value.map((v, i) => <tr key={i}>{cols.map(c => <td key={c}>{format(v[c])}</td>)}</tr>)}</tbody>
-        </table>
-      );
-    }
+    if (value.length && value.every(v => v && typeof v === 'object' && !Array.isArray(v))) return <RecordTable records={value} />;
     return <ul className="plainlist">{value.map((v, i) => <li key={i}>{format(v)}</li>)}</ul>;
   }
   return format(value);
@@ -133,9 +137,11 @@ export function Gate({ gate, context, onAnswered, onMoved }) {
             );
           case 'review_object':
             return (
-              <table key={i} className="kv">
-                <tbody>{f.items.map((item, j) => <tr key={j}><th scope="row">{item.key}</th><td><ReviewValue value={item.value} /></td></tr>)}</tbody>
-              </table>
+              <div key={i} className="tablewrap">
+                <table className="kv">
+                  <tbody>{f.items.map((item, j) => <tr key={j}><th scope="row">{item.key}</th><td><ReviewValue value={item.value} /></td></tr>)}</tbody>
+                </table>
+              </div>
             );
           case 'textbox':
             return (
@@ -153,11 +159,11 @@ export function Gate({ gate, context, onAnswered, onMoved }) {
                 {f.parentHeading && <h4>{f.parentHeading}</h4>}
                 <div className="tablewrap">
                   <table className="grid static">
-                    <thead><tr>{cols.map(c => <th key={c} scope="col">{c}</th>)}<th aria-label={t('gate.actions')} /></tr></thead>
+                    <thead><tr>{cols.map(c => <th key={c.key} scope="col">{c.label}</th>)}<th aria-label={t('gate.actions')} /></tr></thead>
                     <tbody>
                       {f.items.map(item => (
                         <tr key={item.id}>
-                          {cols.map(c => <td key={c}>{format(item.fields?.[c])}</td>)}
+                          {cols.map(c => <td key={c.key}>{format(item.fields?.[c.key])}</td>)}
                           <td className="act">
                             {item.secondaryAction && confirming !== item.id && (
                               <button type="button" className={`btn sm ${item.secondaryAction.style ?? ''}`} disabled={sending}

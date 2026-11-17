@@ -10,6 +10,7 @@
 // seconds. Numbers are checked by the shared rule PROC checks them by again.
 
 import { numberRule, readNumber } from '../../../../shared/number-rule.mjs';
+import { formatColumnHeader }     from '../../../shared/column-header.mjs';
 
 const MULTI = new Set(['multi_select', 'checkbox']);
 
@@ -137,9 +138,28 @@ export function moveCell(at, key, size) {
   return { r, c };
 }
 
-/** A list's columns: every key any item's fields hold, in first-appearance order (§5.1). */
+/**
+ * A list's columns: every key any item's fields hold, in first-appearance order (§5.1), each with
+ * the header Slack draws above it (column-header.mjs).
+ * @returns {{ key: string, label: string }[]}
+ */
 export function listColumns(items) {
   const keys = [];
   for (const item of items) for (const k of Object.keys(item.fields ?? {})) if (!keys.includes(k)) keys.push(k);
-  return keys;
+  return keys.map(key => ({ key, label: formatColumnHeader(key, items.map(item => item.fields?.[key])) }));
+}
+
+/**
+ * What a reveal holds, read as Slack's buildRevealBlock reads it: an array of records is a table,
+ * unless every record is a single `syntax`/`verb`/`command` entry; any other array is a list of
+ * lines; anything else is markdown.
+ * @returns {{ kind: 'table', records: object[] } | { kind: 'list', items: string[] } | { kind: 'text', text: string }}
+ */
+export function revealContent(content) {
+  if (!Array.isArray(content)) return { kind: 'text', text: String(content ?? '') };
+  const isObject = v => v !== null && typeof v === 'object';
+  if (content.length > 0 && content.every(isObject) && !content.every(v => v.syntax || v.verb || v.command)) {
+    return { kind: 'table', records: content };
+  }
+  return { kind: 'list', items: content.map(v => (isObject(v) ? String(v.syntax ?? v.verb ?? v.command) : String(v))) };
 }
