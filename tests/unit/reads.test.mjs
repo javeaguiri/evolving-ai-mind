@@ -138,6 +138,13 @@ describe('GET /proc/sources/{source}/rows — read-only, registered columns only
     assert.match(chooseColumns(registered, { columns: ['colour'], filter: [{ column: 'size', op: 'eq' }] }).error, /no column "colour", "size"/);
   });
 
+  it('each column carries its humanised name as its label, marked labelFallback', () => {
+    assert.deepEqual(chooseColumns([{ name: 'purchase_date', type: 'date' }, { name: 'id', type: 'serial' }], { columns: null, filter: [] }).columns, [
+      { name: 'purchase_date', type: 'date', label: 'Purchase date', labelFallback: true },
+      { name: 'id', type: 'serial', label: 'Id', labelFallback: true },
+    ]);
+  });
+
   it('a PGC_ table is never a source', async () => {
     process.env.HOUSEHOLD_PRINCIPALS = 'sub-a';
     const calls = stubServ(() => ({ rows: [] }));
@@ -153,7 +160,7 @@ describe('GET /proc/sources/{source}/rows — read-only, registered columns only
       : n === 3 ? { rows: [{ table_name: 'PGD_Items', type: 'table', columns: registered }] }
       : { rows: [{ id: 1, name: 'a' }], truncated: true, total_matching: 900 });
     const r = await sources(req('sources/Item/rows', 'GET', member, { query: { limit: '1' } }));
-    assert.deepEqual(body(r), { success: true, columns: [{ name: 'id', type: 'serial' }, { name: 'name', type: 'varchar' }], rows: [{ id: 1, name: 'a' }], more: true, totalMatching: 900 });
+    assert.deepEqual(body(r), { success: true, columns: [{ name: 'id', type: 'serial', label: 'Id', labelFallback: true }, { name: 'name', type: 'varchar', label: 'Name', labelFallback: true }], rows: [{ id: 1, name: 'a' }], more: true, totalMatching: 900 });
     assert.deepEqual([calls[3].tableName, calls[3].columns], ['PGD_Items', ['id', 'name']]);
   });
 

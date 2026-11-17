@@ -7,12 +7,15 @@
 // panel (docs/arch-web-app.md §3.1, §4.2). A source is a registered PGD_ table or view, or an
 // entity name, whose root table is read; a PGC_ system table is never a source. Columns default to
 // every non-vector column, and any column named — to select or to filter — must be registered.
-// The page is bounded and says so. Domain data belongs to the household.
+// Each column carries the label a person reads: until the registry holds column labels (§6.3,
+// Phase 1), the humanised name, marked labelFallback (§13). The page is bounded and says so.
+// Domain data belongs to the household.
 // Transport-agnostic — no AWS SDK, no Slack SDK.
 
 import { respond, err }   from '../shared/lambda-utils.mjs';
 import { getRows }        from '../shared/serv-client.mjs';
 import { readPrincipal }  from './principal.mjs';
+import { humanise }       from './workflows.mjs';
 
 export const SOURCE_DEFAULT_LIMIT = 100;
 export const SOURCE_MAX_LIMIT     = 500;
@@ -51,7 +54,7 @@ export function chooseColumns(registered, { columns, filter }) {
   const chosen = columns
     ? columns.map(n => byName.get(n))
     : registered.filter(c => !String(c.type ?? '').toLowerCase().startsWith('vector'));
-  return { columns: chosen.map(c => ({ name: c.name, type: c.type })) };
+  return { columns: chosen.map(c => ({ name: c.name, type: c.type, label: humanise(c.name), labelFallback: true })) };
 }
 
 /** The PGC_Schema row a source reads, or null. Never a PGC_ table. */
