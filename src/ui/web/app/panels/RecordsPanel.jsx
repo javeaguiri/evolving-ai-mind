@@ -6,8 +6,9 @@
 // A records panel (docs/arch-web-app.md §4.2, §9), read-only in Phase 0: a table, view or entity
 // read through GET /sources/{source}/rows, shown in one view at a time — grid or list — with the
 // switch in its header. The viewer's choice is remembered per panel in this browser and never
-// changes the page. A row opens a read-only record drawer. A bounded read says so; a source that
-// is gone draws a frame naming it, and the rest of the page draws normally.
+// changes the page. A long read scrolls inside the panel, its header in place. A row opens a
+// read-only record drawer beside the page, which follows the next row clicked. A bounded read says
+// so; a source that is gone draws a frame naming it, and the rest of the page draws normally.
 
 import { useEffect, useState } from 'react';
 import { useTranslation }      from 'react-i18next';
@@ -54,8 +55,9 @@ function useRows(api, config, onSignInRequired) {
  * @param {'grid'|'list'} props.view
  * @param {{ locale: string, timeZone: string }} props.where
  * @param {(row: object) => void} props.onOpen
+ * @param {object|null} [props.selected]  The row the record drawer shows
  */
-export function RecordsBody({ config, body, view, where, onOpen }) {
+export function RecordsBody({ config, body, view, where, onOpen, selected = null }) {
   const { t, i18n } = useTranslation();
   const columns = mergeColumns(config, body.columns, i18n.language);
   const shown   = columns.filter(c => c.shown);
@@ -73,10 +75,10 @@ export function RecordsBody({ config, body, view, where, onOpen }) {
     const byName = new Map(columns.map(c => [c.name, c]));
     return (
       <>
-        <ul className="rlist">
+        <ul className="rlist pbody">
           {body.rows.map((row, i) => (
             <li key={row.id ?? i}>
-              <button type="button" onClick={() => onOpen(row)}>
+              <button type="button" onClick={() => onOpen(row)} aria-current={row === selected ? 'true' : undefined}>
                 <span className="rt">{title ? cell(row, byName.get(title)) : ''}</span>
                 <span className="rd">{details.map(d => cell(row, byName.get(d))).filter(Boolean).join(' · ')}</span>
               </button>
@@ -89,14 +91,14 @@ export function RecordsBody({ config, body, view, where, onOpen }) {
   }
   return (
     <>
-      <div className="tablewrap">
+      <div className="tablewrap pbody">
         <table className="grid">
           <thead>
             <tr>{shown.map(c => <th key={c.name} scope="col" className={isNumericColumn(c) ? 'num' : undefined}>{c.label}</th>)}</tr>
           </thead>
           <tbody>
             {body.rows.map((row, i) => (
-              <tr key={row.id ?? i} tabIndex={0} onClick={() => onOpen(row)} onKeyDown={onKey(row)}>
+              <tr key={row.id ?? i} tabIndex={0} onClick={() => onOpen(row)} onKeyDown={onKey(row)} aria-selected={row === selected ? 'true' : undefined}>
                 {shown.map(c => <td key={c.name} className={isNumericColumn(c) ? 'num' : undefined}>{cell(row, c)}</td>)}
               </tr>
             ))}
@@ -157,7 +159,7 @@ export function RecordsPanel({ pageKey, panel, title, context }) {
   } else if (state.status === 'failed') {
     body = <p className="muted">{t('records.failed')}</p>;
   } else {
-    body = <RecordsBody config={panel.config} body={state.body} view={view} where={where} onOpen={setOpen} />;
+    body = <RecordsBody config={panel.config} body={state.body} view={view} where={where} onOpen={setOpen} selected={open} />;
   }
 
   const columns = state.status === 'ready' ? mergeColumns(panel.config, state.body.columns, i18n.language) : [];
@@ -171,7 +173,7 @@ export function RecordsPanel({ pageKey, panel, title, context }) {
     <PanelFrame title={title} width={panel.width} tools={state.status === 'ready' ? tools : null}>
       {body}
       {open && (
-        <Drawer title={titleOf(open)} onClose={() => setOpen(null)}>
+        <Drawer title={titleOf(open)} onClose={() => setOpen(null)} beside>
           <RecordDetail columns={columns} row={open} where={where} />
         </Drawer>
       )}

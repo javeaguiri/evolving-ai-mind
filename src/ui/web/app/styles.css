@@ -205,12 +205,13 @@ h1, h2 { margin: 0; text-wrap: balance; }
 .vsw button:hover { background: var(--soft); }
 .vsw button[aria-pressed="true"] { background: var(--soft); color: var(--ink); font-weight: 600; }
 
-.tablewrap { overflow-x: auto; }
-table.grid { border-collapse: collapse; inline-size: 100%; }
-table.grid th { font-size: 12px; color: var(--muted); font-weight: 500; text-align: start; padding-block: 6px; padding-inline: 8px; border-block-end: 1px solid var(--line); white-space: nowrap; }
-table.grid td { padding-block: 6px; padding-inline: 8px; border-block-end: 1px solid var(--soft); }
+.pbody { max-block-size: 28rem; overflow: auto; }
+table.grid { border-collapse: collapse; }
+table.grid th { position: sticky; inset-block-start: 0; background: var(--paper); font-size: 12px; color: var(--muted); font-weight: 500; text-align: start; padding-block: 6px; padding-inline: 8px 16px; border-block-end: 1px solid var(--line); white-space: nowrap; }
+table.grid td { padding-block: 6px; padding-inline: 8px 16px; border-block-end: 1px solid var(--soft); }
 table.grid tbody tr { cursor: pointer; }
 table.grid tbody tr:hover { background: var(--ground); }
+table.grid tbody tr[aria-selected="true"] { background: var(--accent-soft); }
 table.grid .num { text-align: end; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .rlist { list-style: none; margin: 0; padding: 0; }
@@ -227,6 +228,7 @@ table.grid .num { text-align: end; font-variant-numeric: tabular-nums; white-spa
   text-align: start;
 }
 .rlist button:hover { background: var(--ground); }
+.rlist button[aria-current="true"] { background: var(--accent-soft); }
 .rlist .rd { color: var(--muted); text-align: end; }
 
 .skeleton { display: flex; flex-direction: column; gap: 8px; }
@@ -240,6 +242,7 @@ table.grid .num { text-align: end; font-variant-numeric: tabular-nums; white-spa
 .scrim.center { justify-content: center; align-items: center; }
 .drawer, .modal { background: var(--paper); display: flex; flex-direction: column; }
 .drawer { inline-size: min(560px, 100%); block-size: 100%; box-shadow: -8px 0 30px var(--shadow); }
+.drawer.beside { position: fixed; inset-block: 0; inset-inline-end: 0; inline-size: min(420px, 100%); z-index: 20; border-inline-start: 1px solid var(--line); }
 .modal { inline-size: min(720px, calc(100% - 32px)); max-block-size: 90%; border-radius: 14px; overflow: hidden; box-shadow: 0 20px 60px var(--shadow); }
 .dh { display: flex; align-items: center; gap: 10px; padding-block: 14px; padding-inline: 16px; border-block-end: 1px solid var(--line); }
 .dh h2 { font-size: 16px; flex: 1 1 auto; }

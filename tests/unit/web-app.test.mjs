@@ -404,6 +404,7 @@ describe('components and catalog', () => {
                    export { Shell, SignInProblem } from './App.jsx';
                    export { WaitingList } from './shell/NeedsYou.jsx';
                    export { RecordsBody, RecordDetail } from './panels/RecordsPanel.jsx';
+                   export { Drawer } from './shell/Drawer.jsx';
                    export { initI18n } from './i18n.mjs';
                    export { createElement } from 'react';`,
         resolveDir: APP_DIR, loader: 'jsx',
@@ -556,8 +557,8 @@ describe('components and catalog', () => {
     more: true, totalMatching: 1228,
   };
   const CONFIG = { source: 'PGD_Things', columns: ['title', { name: 'amount', format: 'currency', currency_column: 'currency' }] };
-  const body   = (view, extra = {}) => ui.renderToString(ui.createElement(ui.RecordsBody, {
-    config: CONFIG, body: { ...BODY, ...extra }, view, where: { locale: 'en', timeZone: 'Europe/Madrid' }, onOpen() {},
+  const body   = (view, extra = {}, selected = null) => ui.renderToString(ui.createElement(ui.RecordsBody, {
+    config: CONFIG, body: { ...BODY, ...extra }, view, where: { locale: 'en', timeZone: 'Europe/Madrid' }, onOpen() {}, selected,
   }));
 
   it('grid: the panel\'s columns, numbers on the right, a currency from the row; a bounded read says so', () => {
@@ -572,6 +573,20 @@ describe('components and catalog', () => {
   it('list: the label column, then the details, each row a button', () => {
     const html = body('list');
     assert.match(html, /<li><button type="button"><span class="rt">Shop A<\/span><span class="rd">€62.40<\/span><\/button><\/li>/);
+  });
+
+  it('a long read scrolls inside the panel; the row the drawer shows is marked in either view', () => {
+    assert.match(body('grid'), /<div class="tablewrap pbody"><table class="grid">/);
+    assert.match(body('list'), /<ul class="rlist pbody">/);
+    assert.match(body('grid', {}, BODY.rows[1]), /<tr tabindex="0" aria-selected="true"><td>Shop B<\/td>/);
+    assert.equal((body('grid', {}, BODY.rows[1]).match(/aria-selected/g) ?? []).length, 1);
+    assert.match(body('list', {}, BODY.rows[0]), /<button type="button" aria-current="true"><span class="rt">Shop A/);
+  });
+
+  it('a drawer beside the page has no scrim and does not hold the page; the others do', () => {
+    const drawer = props => ui.renderToString(ui.createElement(ui.Drawer, { title: 'Shop A', onClose() {}, ...props }));
+    assert.match(drawer({ beside: true }), /^<div class="drawer beside" role="dialog" aria-modal="false" aria-label="Shop A">/);
+    assert.match(drawer({}), /^<div class="scrim"><div class="drawer" role="dialog" aria-modal="true"/);
   });
 
   it('a source with no rows says Nothing here yet', () => {
