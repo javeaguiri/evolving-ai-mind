@@ -18,7 +18,8 @@ import * as esbuild                         from 'esbuild';
 import { base64url, createVerifier, createState, challengeFor } from '../../src/ui/web/app/auth/pkce.mjs';
 import { createSession, safeReturnPath, SignInRequired, AuthUnavailable, REFRESH_KEY, PENDING_KEY } from '../../src/ui/web/app/auth/session.mjs';
 import { createApiClient, ApiError } from '../../src/ui/web/app/api/client.mjs';
-import { matchPath }                 from '../../src/ui/web/app/router.mjs';
+import { matchPath, matchLocation }  from '../../src/ui/web/app/router.mjs';
+import { pageItems, domainItems, sectionOf, currentItem, workflowLabels, gateHeadline, relativeAge, pollDelay, POLL_MS, POLL_MAX_MS } from '../../src/ui/web/app/shell/nav.mjs';
 
 const APP_DIR = new URL('../../src/ui/web/app/', import.meta.url).pathname;
 const CONFIG  = { userPoolId: 'us-east-2_pool', clientId: 'client123', authDomain: 'https://auth.example', siteUrl: 'https://site.example', region: 'us-east-2' };
@@ -232,13 +233,81 @@ describe('matchPath — the §4.8 routes', () => {
   }
 });
 
+describe('nav — the shell\'s decisions', () => {
+  it('pageItems: position order; Home at /, the rest at /p/{pageKey}', () => {
+    assert.deepEqual(pageItems([
+      { pageKey: 'money', title: 'Money', position: 2 },
+      { pageKey: 'home', title: 'Home', position: 0 },
+      { pageKey: 'a b', title: 'AB', position: 1 },
+    ]), [
+      { key: 'home', label: 'Home', to: '/' },
+      { key: 'a b', label: 'AB', to: '/p/a%20b' },
+      { key: 'money', label: 'Money', to: '/p/money' },
+    ]);
+  });
+
+  it('domainItems: PROC\'s order and labels, each to /d/{domain}', () => {
+    assert.deepEqual(domainItems([{ domain: 'b_x', label: 'B x', labelFallback: true }, { domain: 'a', label: 'A' }]),
+      [{ key: 'b_x', label: 'B x', to: '/d/b_x' }, { key: 'a', label: 'A', to: '/d/a' }]);
+  });
+
+  it('sectionOf and currentItem', () => {
+    const at = path => matchLocation(path);
+    assert.equal(sectionOf(at('/')), 'pages');
+    assert.equal(sectionOf(at('/p/money')), 'pages');
+    assert.equal(sectionOf(at('/d')), 'domains');
+    assert.equal(sectionOf(at('/d/x')), 'domains');
+    assert.equal(sectionOf(at('/runs/4')), null);
+    assert.equal(sectionOf(at('/settings/profile')), null);
+    assert.equal(currentItem(at('/')), 'home');
+    assert.equal(currentItem(at('/p/money')), 'money');
+    assert.equal(currentItem(at('/d/x')), 'x');
+    assert.equal(currentItem(at('/d')), null);
+  });
+
+  it('workflowLabels: every domain\'s workflows by name', () => {
+    const labels = workflowLabels([{ workflows: [{ name: 'w1', label: 'One' }] }, { workflows: [{ name: 'w2', label: 'Two' }] }]);
+    assert.equal(labels.get('w1'), 'One');
+    assert.equal(labels.get('w2'), 'Two');
+    assert.equal(labels.get('w3'), undefined);
+  });
+
+  it('gateHeadline: the message\'s first line, without markdown\'s marks', () => {
+    const d = value => ({ fields: [{ type: 'typography', value }, { type: 'button', value: 'x' }] });
+    assert.equal(gateHeadline(d('Merge *Bread, sliced* into **Bread**?\nTwo items look alike.')), 'Merge Bread, sliced into Bread?');
+    assert.equal(gateHeadline(d('\n\n## Choose a `month`\n')), 'Choose a month');
+    assert.equal(gateHeadline(d('- [Item](https://x.example) first')), 'Item first');
+    assert.equal(gateHeadline(d('|---|---|\n| a | b |')), '| a | b |');
+    assert.equal(gateHeadline(d('   \n  ')), null);
+    assert.equal(gateHeadline({ fields: [] }), null);
+    assert.equal(gateHeadline(undefined), null);
+  });
+
+  it('relativeAge: the largest whole unit, in the locale\'s words', () => {
+    const now = Date.parse('2026-11-17T12:00:00Z');
+    assert.equal(relativeAge('2026-11-17T11:59:30Z', now, 'en'), 'now');
+    assert.equal(relativeAge('2026-11-17T11:55:00Z', now, 'en'), '5 minutes ago');
+    assert.equal(relativeAge('2026-11-17T09:00:00Z', now, 'en'), '3 hours ago');
+    assert.equal(relativeAge('2026-11-16T10:00:00Z', now, 'en'), 'yesterday');
+    assert.equal(relativeAge('2026-11-01T12:00:00Z', now, 'en'), '2 weeks ago');
+    assert.equal(relativeAge('2026-11-16T10:00:00Z', now, 'es'), 'ayer');
+  });
+
+  it('pollDelay: steady while reads succeed, doubling per failure, to a ceiling', () => {
+    assert.equal(pollDelay(0), POLL_MS);
+    assert.equal(pollDelay(1), POLL_MS * 2);
+    assert.equal(pollDelay(2), POLL_MS * 4);
+    assert.equal(pollDelay(50), POLL_MAX_MS);
+  });
+});
+
 describe('components and catalog', () => {
   let ui;
   before(async () => {
     const out = await esbuild.build({
       stdin: {
         contents: `export { renderToString } from 'react-dom/server';
-                   export { App, SignInProblem } from './App.jsx';
+                   export { Shell, SignInProblem } from './App.jsx';
                    export { initI18n } from './i18n.mjs';
                    export { createElement } from 'react';`,
         resolveDir: APP_DIR, loader: 'jsx',
@@ -252,11 +321,60 @@ describe('components and catalog', () => {
     await ui.initI18n('en');
   });
 
-  it('the shell draws its name and Loading… before /me answers', () => {
-    const api  = { get: () => new Promise(() => {}) };
-    const html = ui.renderToString(ui.createElement(ui.App, { api, onSignInRequired() {}, onSignOut() {} }));
-    assert.match(html, /<h1>Home Brain<\/h1>/);
+  const PAGES   = [
+    { pageKey: 'money', title: 'Money', position: 1, panels: [] },
+    { pageKey: 'home',  title: 'Home',  position: 0, panels: [] },
+  ];
+  const DOMAINS = [{ domain: 'pantry', label: 'Pantry', workflows: [] }, { domain: 'garden', label: 'Garden', labelFallback: true, workflows: [] }];
+  const draw    = (location, data = {}) => ui.renderToString(ui.createElement(ui.Shell, {
+    route: { ...matchLocation(location), from: null }, me: null, pages: PAGES, domains: DOMAINS, problem: false, ...data,
+  }));
+
+  it('before the pages are read, the shell draws its top bar and Loading…', () => {
+    const html = draw('/', { pages: null, domains: null });
+    assert.match(html, /aria-label="Home"/);
+    assert.match(html, />Pages<span class="car"/);
     assert.match(html, /Loading…/);
+    assert.doesNotMatch(html, /<h1>/);
+  });
+
+  it('Home draws the household\'s title for it; 🏠 and the Pages menu are marked current', () => {
+    const html = draw('/');
+    assert.match(html, /<h1>Home<\/h1>/);
+    assert.match(html, /class="homeb" aria-label="Home" title="Home" aria-current="page"/);
+    assert.match(html, /class="mbtn cur"[^>]*>Pages</);
+    assert.match(html, /class="mbtn"[^>]*>Domains</);
+  });
+
+  it('a household page and a domain page take their titles from the reads', () => {
+    assert.match(draw('/p/money'), /<h1>Money<\/h1>/);
+    const html = draw('/d/garden');
+    assert.match(html, /<h1>Garden<\/h1>/);
+    assert.match(html, /class="mbtn cur"[^>]*>Domains</);
+  });
+
+  it('an unknown page, domain or path says Page not found and offers Home', () => {
+    for (const path of ['/p/nowhere', '/d/nowhere', '/nowhere/at/all']) {
+      const html = draw(path);
+      assert.match(html, /<h1>Page not found<\/h1>/, path);
+    }
+    assert.match(draw('/nowhere/at/all'), /<a href="\/">Go to Home<\/a>/);
+  });
+
+  it('See all… lists every domain, each linked to its page', () => {
+    const html = draw('/d');
+    assert.match(html, /<h1>Domains<\/h1>/);
+    assert.match(html, /<a href="\/d\/pantry">Pantry<\/a>.*<a href="\/d\/garden">Garden<\/a>/);
+  });
+
+  it('a backend that can\'t be reached shows the retrying banner', () => {
+    assert.match(draw('/', { problem: true }), /role="alert">Can(&#x27;|')t reach the home brain — retrying</);
+    assert.doesNotMatch(draw('/'), /role="alert"/);
+  });
+
+  it('the phone tabs carry the two menus, the section the user is in marked', () => {
+    const html = draw('/d/pantry');
+    assert.match(html, /<nav class="tabbar"[^>]*><button type="button">Pages<\/button><button type="button" aria-current="true">Domains<\/button>/);
   });
 
   it('a refused sign-in says so and offers to sign in again', () => {

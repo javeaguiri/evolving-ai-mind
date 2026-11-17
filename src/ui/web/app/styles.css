@@ -1,46 +1,223 @@
 /* Copyright (c) 2026 Javea Guiri. All rights reserved. */
 /* Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). */
 /* See LICENSE file in the project root for full license terms. */
-/* src/ui/web/app/styles.css — the app's one stylesheet: colour tokens, light and dark, and
-   logical properties so a right-to-left language is not ruled out (docs/arch-web-app.md §13). */
+/* src/ui/web/app/styles.css — the app's one stylesheet: colour tokens from the approved mock-up
+   (v0.6), light and dark; system fonts; logical properties so a right-to-left language is not
+   ruled out (docs/arch-web-app.md §13). */
 
 :root {
-  --bg:      #f7f7f5;
-  --surface: #ffffff;
-  --text:    #1d1d1b;
-  --muted:   #6b6b66;
-  --line:    #e2e2dd;
-  --accent:  #2f6f5e;
-  color-scheme: light dark;
+  --ink:         #15191e;
+  --muted:       #586170;
+  --line:        #dce0e5;
+  --soft:        #eef1f4;
+  --paper:       #ffffff;
+  --ground:      #f4f5f7;
+  --control:     #c9cfd6;
+  --accent:      #0d6a6a;
+  --accent-ink:  #0a5555;
+  --accent-soft: #e3f1f0;
+  --warn:        #9a3412;
+  --warn-soft:   #fff3c4;
+  --bad:         #b42318;
+  --slack:       #4a154b;
+  --slack-soft:  #f1e6f1;
+  --scrim:       rgba(21, 25, 30, .35);
+  --shadow:      rgba(0, 0, 0, .14);
+  color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg:      #161615;
-    --surface: #20201e;
-    --text:    #ececea;
-    --muted:   #a0a09a;
-    --line:    #34342f;
-    --accent:  #6fbfa8;
+    --ink:         #e8eaed;
+    --muted:       #a0a7b1;
+    --line:        #353b43;
+    --soft:        #262b31;
+    --paper:       #1b1f24;
+    --ground:      #121519;
+    --control:     #4a525b;
+    --accent:      #4fb3a9;
+    --accent-ink:  #7fd1c8;
+    --accent-soft: #173634;
+    --warn:        #f0b37e;
+    --warn-soft:   #3d2c12;
+    --bad:         #f06c5f;
+    --slack:       #d9a6d9;
+    --slack-soft:  #3a2340;
+    --scrim:       rgba(0, 0, 0, .55);
+    --shadow:      rgba(0, 0, 0, .45);
+    color-scheme: dark;
   }
 }
 
 *, *::before, *::after { box-sizing: border-box; }
 
+html, body { height: 100%; margin: 0; }
+
 body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--ground);
+  color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
-.shell {
-  padding-block: 24px;
+button { font: inherit; color: inherit; cursor: pointer; }
+a { color: var(--accent-ink); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+h1, h2 { margin: 0; text-wrap: balance; }
+.muted { color: var(--muted); }
+
+#root { height: 100%; }
+.app { height: 100%; display: flex; flex-direction: column; position: relative; }
+
+/* ---------- top bar ---------- */
+.top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-block: 10px;
+  padding-inline: 16px;
+  background: var(--paper);
+  border-block-end: 1px solid var(--line);
+}
+.homeb {
+  inline-size: 40px;
+  block-size: 40px;
+  flex: none;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+}
+.homeb:hover { background: var(--soft); }
+.homeb[aria-current="page"] { background: var(--accent-soft); }
+.crumb { display: none; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.menus { display: flex; gap: 2px; }
+.menuwrap { position: relative; }
+.mbtn {
+  border: 0;
+  background: transparent;
+  padding-block: 8px;
+  padding-inline: 10px;
+  border-radius: 8px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.mbtn:hover, .menuwrap.open .mbtn { background: var(--soft); }
+.mbtn.cur { color: var(--accent-ink); font-weight: 600; box-shadow: inset 0 -3px 0 var(--accent); }
+.mbtn .car { font-size: 10px; margin-inline-start: 4px; color: var(--muted); }
+.dd {
+  position: absolute;
+  inset-block-start: 100%;
+  inset-inline-start: 0;
+  min-inline-size: 230px;
+  max-block-size: 320px;
+  overflow: auto;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px var(--shadow);
+  padding: 6px;
+  z-index: 15;
+}
+
+.menulist { list-style: none; margin: 0; padding: 0; }
+.menulist a {
+  display: block;
+  padding-block: 7px;
+  padding-inline: 10px;
+  border-radius: 8px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.menulist a:hover { background: var(--soft); }
+.menulist a[aria-current="page"] { background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
+.menulist .foot { border-block-start: 1px solid var(--line); margin-block-start: 4px; padding-block-start: 4px; }
+
+.icons { display: flex; gap: 6px; margin-inline-start: auto; }
+.ib {
+  position: relative;
+  inline-size: 40px;
+  block-size: 40px;
+  border-radius: 999px;
+  border: 1px solid var(--control);
+  background: var(--paper);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink);
+}
+.ib:hover { background: var(--soft); }
+.ib .badge {
+  position: absolute;
+  inset-block-start: -4px;
+  inset-inline-end: -4px;
+  min-inline-size: 18px;
+  block-size: 18px;
+  padding-inline: 5px;
+  border-radius: 999px;
+  background: var(--bad);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---------- page ---------- */
+.banner {
+  padding-block: 8px;
+  padding-inline: 16px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-weight: 500;
+}
+.main { flex: 1 1 auto; min-block-size: 0; overflow: auto; padding-block: 18px 40px; padding-inline: 20px; }
+.pagehead { display: flex; align-items: center; gap: 12px; margin-block-end: 14px; flex-wrap: wrap; }
+.pagehead h1 { font-size: 20px; font-weight: 600; }
+.panel {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding-block: 14px;
   padding-inline: 16px;
 }
 
-.shell h1 {
-  margin: 0;
-  font-size: 1.5rem;
-  font-weight: 600;
+/* ---------- drawers and dialogs ---------- */
+.scrim { position: fixed; inset: 0; background: var(--scrim); z-index: 20; display: flex; justify-content: flex-end; }
+.scrim.center { justify-content: center; align-items: center; }
+.drawer, .modal { background: var(--paper); display: flex; flex-direction: column; }
+.drawer { inline-size: min(560px, 100%); block-size: 100%; box-shadow: -8px 0 30px var(--shadow); }
+.modal { inline-size: min(720px, calc(100% - 32px)); max-block-size: 90%; border-radius: 14px; overflow: hidden; box-shadow: 0 20px 60px var(--shadow); }
+.dh { display: flex; align-items: center; gap: 10px; padding-block: 14px; padding-inline: 16px; border-block-end: 1px solid var(--line); }
+.dh h2 { font-size: 16px; flex: 1 1 auto; }
+.close { inline-size: 32px; block-size: 32px; border: 0; border-radius: 8px; background: transparent; font-size: 20px; line-height: 1; }
+.close:hover { background: var(--soft); }
+.db { flex: 1 1 auto; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+
+/* ---------- phone ---------- */
+.tabbar { display: none; }
+@media (max-width: 640px) {
+  .menus { display: none; }
+  .crumb { display: block; flex: 1 1 auto; }
+  .icons { margin-inline-start: 0; }
+  .top { padding-inline: 12px; }
+  .main { padding-block: 14px 30px; padding-inline: 16px; }
+  .tabbar {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    background: var(--paper);
+    border-block-start: 1px solid var(--line);
+    padding-block-end: 10px;
+  }
+  .tabbar button { border: 0; background: transparent; min-block-size: 52px; font-size: 12px; color: var(--muted); }
+  .tabbar button[aria-current="true"] { color: var(--accent-ink); font-weight: 600; }
+  .menulist a { padding-block: 12px; padding-inline: 4px; font-size: 15px; border-radius: 0; border-block-end: 1px solid var(--soft); }
 }
+
+/* ---------- sign-in problem ---------- */
+.signin { padding-block: 24px; padding-inline: 16px; }
+.signin h1 { font-size: 1.5rem; font-weight: 600; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

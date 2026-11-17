@@ -4,14 +4,26 @@
   },
   "shell": {
     "loading": "Loading…",
-    "signedInAs": "Signed in as {name}",
-    "signOut": "Sign out"
+    "close": "Close"
+  },
+  "nav": {
+    "home": "Home",
+    "sections": "Sections",
+    "pages": "Pages",
+    "domains": "Domains",
+    "seeAll": "See all…"
+  },
+  "pages": {
+    "domains": "Domains",
+    "run": "Run {runId}",
+    "notFound": "Page not found",
+    "goHome": "Go to Home"
   },
   "signIn": {
     "problem": "The sign-in didn't complete.",
     "again": "Sign in again"
   },
   "errors": {
-    "unreachable": "Can't reach the home brain."
+    "retrying": "Can't reach the home brain — retrying"
   }
 }
