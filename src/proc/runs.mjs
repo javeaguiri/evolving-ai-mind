@@ -18,6 +18,7 @@ import { respond, err }              from '../shared/lambda-utils.mjs';
 import { getRows, insertRow }        from '../shared/serv-client.mjs';
 import { enqueueWorkflow }           from '../shared/sqs-callback.mjs';
 import { readPrincipal, canSeeRun, isNoviaTestRun } from './principal.mjs';
+import { labelOf }                                  from './workflows.mjs';
 
 export const RUNS_DEFAULT_LIMIT = 20;
 export const RUNS_MAX_LIMIT     = 100;
@@ -38,16 +39,19 @@ export function parseRunsQuery(query = {}) {
 }
 
 /**
- * One run as a list entry (RunSummary).
+ * One run as a list entry (RunSummary): its workflow named for a person by /workflows' rule.
  *
  * @param {object} r     A PGC_WorkflowRun row (RUN_COLUMNS)
  * @param {object} [wf]  Its workflow { name, display }
+ * @param {string} [locale]
  */
-export function toRunSummary(r, wf) {
+export function toRunSummary(r, wf, locale = process.env.HOUSEHOLD_LOCALE) {
+  const named = wf?.name ? labelOf(wf.display, wf.name, locale) : { label: null, labelFallback: true };
   return {
     runId:         r.id,
     workflowName:  wf?.name ?? null,
-    workflowLabel: wf?.display?.label ?? null,
+    workflowLabel: named.label,
+    labelFallback: named.labelFallback,
     label:         r.label ?? null,
     status:        r.status,
     startedAt:     r.started_at ?? r.created_at,

@@ -106,7 +106,14 @@ describe('toRunsPage — visibility after the bound, cursor at the last run exam
     assert.deepEqual(page.runs.map(r => r.runId), [8]);
     assert.equal(page.cursor, 8);
     assert.equal(page.more, true);
-    assert.deepEqual(page.runs[0], { runId: 8, workflowName: 'w', workflowLabel: 'Do it', label: null, status: 'completed', startedAt: 't8' });
+    assert.deepEqual(page.runs[0], { runId: 8, workflowName: 'w', workflowLabel: 'Do it', labelFallback: false, label: null, status: 'completed', startedAt: 't8' });
+  });
+
+  it('names a workflow with no stored label — a system workflow — by its humanised name', () => {
+    const page = toRunsPage([row(8, { provider: 'slack' })], new Map([[1, { name: 'ping_core', display: null }]]), member, 5);
+    assert.deepEqual([page.runs[0].workflowLabel, page.runs[0].labelFallback], ['Ping core', true]);
+    const gone = toRunsPage([row(8, { provider: 'slack' })], new Map(), member, 5);
+    assert.deepEqual([gone.runs[0].workflowName, gone.runs[0].workflowLabel], [null, null]);
   });
 
   it('Novia\'s test runs are never listed, and the cursor still passes them', () => {
@@ -181,7 +188,7 @@ describe('/proc/runs — the principal, and starting a run', () => {
     const runRow = callback => ({ id: 12, workflow_id: 5, label: 'Nov', status: 'awaiting_human_gate', started_at: 's', created_at: 'c', callback });
 
     let calls = stubServ(path => ({ rows: calls.length === 1 ? [runRow({ provider: 'slack', channel: 'C1' })] : [{ id: 5, name: 'w', display: { label: 'Do it' } }] }));
-    assert.deepEqual(out(await handle(one(12))), [200, { success: true, runId: 12, workflowName: 'w', workflowLabel: 'Do it', label: 'Nov', status: 'awaiting_human_gate', startedAt: 's' }]);
+    assert.deepEqual(out(await handle(one(12))), [200, { success: true, runId: 12, workflowName: 'w', workflowLabel: 'Do it', labelFallback: false, label: 'Nov', status: 'awaiting_human_gate', startedAt: 's' }]);
     assert.deepEqual(calls[0].body.filters, [{ column: 'id', op: 'eq', value: 12 }]);
     assert.ok(!calls[0].body.columns.includes('stack'));
 
