@@ -25,12 +25,10 @@ import { getRows }                       from '../shared/serv-client.mjs';
 import { enqueueWorkflow }               from '../shared/sqs-callback.mjs';
 import { numberRule, readNumber }        from '../shared/number-rule.mjs';
 import { resolveFormFields, buildDialog } from './step-executor.mjs';
-import { readPrincipal, canSeeRun }      from './principal.mjs';
+import { readPrincipal, canSeeRun, isNoviaTestRun } from './principal.mjs';
 
 const GATE_RUN_COLUMNS = ['id', 'label', 'status', 'stack', 'callback'];
 const GATE_LIST_LIMIT  = 100;
-
-const isNoviaTestRun = run => run?.callback?.provider === 'novia';
 
 /**
  * A waiting run's gate as a surface draws it: the top frame rebuilt into its dialog, carrying the

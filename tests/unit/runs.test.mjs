@@ -109,6 +109,13 @@ describe('toRunsPage — visibility after the bound, cursor at the last run exam
     assert.deepEqual(page.runs[0], { runId: 8, workflowName: 'w', workflowLabel: 'Do it', label: null, status: 'completed', startedAt: 't8' });
   });
 
+  it('Novia\'s test runs are never listed, and the cursor still passes them', () => {
+    const page = toRunsPage([row(9, { provider: 'novia', sessionId: 1 }), row(8, { provider: 'slack', channel: 'C1' })], wfs, member, 1);
+    assert.deepEqual(page.runs, []);
+    assert.equal(page.cursor, 9);
+    assert.equal(page.more, true);
+  });
+
   it('an empty page has no cursor', () => {
     assert.deepEqual(toRunsPage([], wfs, member, 20), { runs: [], cursor: null, more: false });
   });
@@ -181,6 +188,10 @@ describe('/proc/runs — the principal, and starting a run', () => {
     calls = stubServ(() => ({ rows: [runRow({ provider: 'web', channel: 'sub-b' })] }));
     assert.deepEqual(out(await handle(one(12))).map(x => x.error ?? x), [403, 'run_forbidden']);
     assert.equal(calls.length, 1, 'refused before its workflow is read');
+
+    calls = stubServ(() => ({ rows: [runRow({ provider: 'novia', sessionId: 1355, reply: { provider: 'slack' } })] }));
+    assert.deepEqual(out(await handle(one(12))).map(x => x.error ?? x), [403, 'run_forbidden'], 'a Novia test run');
+    assert.equal(calls.length, 1);
 
     stubServ(() => ({ rows: [] }));
     assert.deepEqual(out(await handle(one(13))).map(x => x.error ?? x), [404, 'run_not_found']);

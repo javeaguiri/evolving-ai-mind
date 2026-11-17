@@ -6,6 +6,7 @@
 // /api/v1/proc/runs (docs/arch-web-app.md §2.4, §3.1, §4.3):
 //   GET   runs the principal may see, newest first, each named by its label
 //   GET   /runs/{runId} — one of them, by the same rule: the run drawer and run page's heading
+// Novia's test runs are neither, as the gates routes leave them out.
 //   POST  start a named domain workflow for the principal — no intent classification
 //
 // A started run's callback is { provider: 'web', channel: <principal> }: every message it sends
@@ -16,7 +17,7 @@ import { randomUUID }                from 'crypto';
 import { respond, err }              from '../shared/lambda-utils.mjs';
 import { getRows, insertRow }        from '../shared/serv-client.mjs';
 import { enqueueWorkflow }           from '../shared/sqs-callback.mjs';
-import { readPrincipal, canSeeRun }  from './principal.mjs';
+import { readPrincipal, canSeeRun, isNoviaTestRun } from './principal.mjs';
 
 export const RUNS_DEFAULT_LIMIT = 20;
 export const RUNS_MAX_LIMIT     = 100;
@@ -54,15 +55,16 @@ export function toRunSummary(r, wf) {
 }
 
 /**
- * Shape one page from up to limit + 1 runs, newest first. Runs the principal may not see are
- * dropped after the bound, so the cursor is the last run examined, not the last returned.
+ * Shape one page from up to limit + 1 runs, newest first. Runs the principal may not see, and
+ * Novia's test runs, are dropped after the bound, so the cursor is the last run examined, not the
+ * last returned.
  *
  * @param {object[]} rows        PGC_WorkflowRun rows (RUN_COLUMNS)
  * @param {Map<number, object>} workflows  id → { name, display }
  */
 export function toRunsPage(rows, workflows, principal, limit) {
   const examined = rows.slice(0, limit);
-  const runs = examined.filter(r => canSeeRun(principal, r)).map(r => toRunSummary(r, workflows.get(r.workflow_id)));
+  const runs = examined.filter(r => !isNoviaTestRun(r) && canSeeRun(principal, r)).map(r => toRunSummary(r, workflows.get(r.workflow_id)));
   return { runs, cursor: examined.length ? examined[examined.length - 1].id : null, more: rows.length > limit };
 }
 
@@ -99,7 +101,7 @@ export async function getRun(principal, runId) {
   const runResp = await getRows('PGC_WorkflowRun', [{ column: 'id', op: 'eq', value: runId }], undefined, 1, undefined, RUN_COLUMNS);
   const run     = runResp.rows?.[0];
   if (!run) return { status: 404, body: { error: 'run_not_found' } };
-  if (!canSeeRun(principal, run)) return { status: 403, body: { error: 'run_forbidden' } };
+  if (isNoviaTestRun(run) || !canSeeRun(principal, run)) return { status: 403, body: { error: 'run_forbidden' } };
   const wfResp = await getRows('PGC_Workflow', [{ column: 'id', op: 'eq', value: run.workflow_id }], undefined, 1, undefined, ['id', 'name', 'display']);
   return { status: 200, body: toRunSummary(run, wfResp.rows?.[0]) };
 }

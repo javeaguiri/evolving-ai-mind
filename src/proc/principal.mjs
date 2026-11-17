@@ -37,3 +37,11 @@ export function canSeeRun(principal, run) {
   if (callback?.provider === 'web') return callback.channel === principal.user;
   return principal.roles.includes('household');
 }
+
+/**
+ * A run Novia started to test her work (callback provider `novia`): it ran against the sandbox
+ * and its messages went to her session, so no web read lists it or answers for it.
+ *
+ * @param {{ callback?: object|null }} run
+ */
+export const isNoviaTestRun = run => run?.callback?.provider === 'novia';
