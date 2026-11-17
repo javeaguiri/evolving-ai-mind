@@ -641,7 +641,7 @@ describe('components and catalog', () => {
   it('the thread: loading, a run that can\'t be shown, one that sent nothing, and the backend unreachable', () => {
     assert.match(thread({}), /Loading…/);
     assert.match(thread({ problem: 'gone' }), /This run can(’|&#x27;)t be shown\./);
-    assert.match(thread({ run: { status: 'completed' } }), /This run sent no messages\./);
+    assert.match(thread({ run: { status: 'completed' } }), /No messages were kept for this run\./);
     assert.match(thread({ run: { status: 'running' }, problem: 'unreachable' }), /Working….*Can(’|&#x27;)t reach the home brain — retrying/);
   });
 

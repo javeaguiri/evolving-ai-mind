@@ -40,7 +40,7 @@
     "working": "Working…",
     "waiting": "Waiting for your answer.",
     "reveal": "Show",
-    "noMessages": "This run sent no messages.",
+    "noMessages": "No messages were kept for this run.",
     "gone": "This run can’t be shown.",
     "unreachable": "Can’t reach the home brain — retrying",
     "status": {
