@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: evolving-mind-ai
-  version: 3.8.1
+  version: 3.9.0
   description: >
     Self-evolving cognitive automation system.
     Slack → Lambda → PostgreSQL → LLM pipeline.
@@ -82,11 +82,13 @@ components:
   schemas:
     WaitingGate:
       type: object
-      required: [runId, gateId, workflowName, gate_type, dialog, waitingSince]
+      required: [runId, gateId, workflowName, workflowLabel, labelFallback, gate_type, dialog, waitingSince]
       properties:
         runId:        { type: integer }
         gateId:       { type: string, description: "The gate_id an answer must name (POST /proc/gates/{runId}/responses)." }
         workflowName: { type: string }
+        workflowLabel: { type: string, description: "What a person reads for the workflow, resolved as GET /proc/workflows resolves it (docs/arch-web-app.md §13): its display.label in the household's language, else the humanised name — a system workflow's too." }
+        labelFallback: { type: boolean, description: "True when workflowLabel is the humanised name, not a stored label." }
         label:        { type: string, nullable: true, description: The run's label, once resolved. }
         gate_type:    { type: string }
         dialog:       { type: object, description: "The provider-neutral dialog, as buildDialog builds it for Slack, carrying gate_id." }
