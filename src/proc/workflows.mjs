@@ -15,7 +15,7 @@
 import { respond, err }  from '../shared/lambda-utils.mjs';
 import { getRows }       from '../shared/serv-client.mjs';
 import { readPrincipal } from './principal.mjs';
-import { resolveTitle }  from './page-config.mjs';
+import { resolveLanguageMap } from '../shared/language-map.mjs';
 import { isLabel }       from './workflow-display.mjs';
 
 /** budgets_expenses → "Budgets expenses" */
@@ -26,7 +26,7 @@ export function humanise(identifier) {
 
 function labelOf(display, identifier, locale) {
   return isLabel(display?.label)
-    ? { label: resolveTitle(display.label, locale), labelFallback: false }
+    ? { label: resolveLanguageMap(display.label, locale), labelFallback: false }
     : { label: humanise(identifier), labelFallback: true };
 }
 

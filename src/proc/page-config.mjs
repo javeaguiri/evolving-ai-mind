@@ -219,12 +219,3 @@ function noviaProblems(config, report) {
   unknownKeys(config, KIND_KEYS.novia, report);
   if (!isText(config.topic)) report('topic is required');
 }
-
-/**
- * The page's title in the caller's language: the language itself, else English, else the first
- * language the map holds.
- */
-export function resolveTitle(title, language = 'en') {
-  if (typeof title === 'string') return title;
-  return title?.[language] ?? title?.en ?? Object.values(title ?? {})[0] ?? '';
-}

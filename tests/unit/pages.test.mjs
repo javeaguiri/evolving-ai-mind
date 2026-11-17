@@ -10,7 +10,8 @@ import { describe, it, afterEach } from 'node:test';
 import assert                      from 'node:assert/strict';
 import { readFileSync }            from 'node:fs';
 
-import { pageProblems, viewsFor, resolveTitle } from '../../src/proc/page-config.mjs';
+import { pageProblems, viewsFor }               from '../../src/proc/page-config.mjs';
+import { resolveLanguageMap }                   from '../../src/shared/language-map.mjs';
 import { latestPages, handle }                  from '../../src/proc/pages.mjs';
 
 const registry = {
@@ -112,7 +113,7 @@ describe('the system seed stays generic', () => {
   });
 });
 
-describe('latestPages and resolveTitle', () => {
+describe('latestPages and resolveLanguageMap', () => {
   it('keeps each page\'s latest version, ordered by position', () => {
     const rows = [
       { page_key: 'money', version: 1, title: 'Money', position: 10, panels: [] },
@@ -126,9 +127,9 @@ describe('latestPages and resolveTitle', () => {
   });
 
   it('a title falls back to English, then to the first language held', () => {
-    assert.equal(resolveTitle({ es: 'Inicio', en: 'Home' }, 'es'), 'Inicio');
-    assert.equal(resolveTitle({ es: 'Inicio', en: 'Home' }, 'fr'), 'Home');
-    assert.equal(resolveTitle({ es: 'Inicio' }), 'Inicio');
+    assert.equal(resolveLanguageMap({ es: 'Inicio', en: 'Home' }, 'es'), 'Inicio');
+    assert.equal(resolveLanguageMap({ es: 'Inicio', en: 'Home' }, 'fr'), 'Home');
+    assert.equal(resolveLanguageMap({ es: 'Inicio' }), 'Inicio');
   });
 });
 

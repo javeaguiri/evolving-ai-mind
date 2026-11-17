@@ -11,7 +11,7 @@
 import { respond, err }   from '../shared/lambda-utils.mjs';
 import { getRows }        from '../shared/serv-client.mjs';
 import { readPrincipal }  from './principal.mjs';
-import { resolveTitle }   from './page-config.mjs';
+import { resolveLanguageMap } from '../shared/language-map.mjs';
 
 /**
  * The latest version of each page, ordered by position then key, with its title resolved.
@@ -26,7 +26,7 @@ export function latestPages(rows, language = 'en') {
   }
   return [...latest.values()]
     .sort((a, b) => a.position - b.position || a.page_key.localeCompare(b.page_key))
-    .map(r => ({ pageKey: r.page_key, version: r.version, title: resolveTitle(r.title, language), position: r.position, panels: r.panels }));
+    .map(r => ({ pageKey: r.page_key, version: r.version, title: resolveLanguageMap(r.title, language), position: r.position, panels: r.panels }));
 }
 
 export async function handle(req) {
