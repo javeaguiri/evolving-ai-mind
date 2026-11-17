@@ -60,7 +60,16 @@ export function addMessages(held, arrived) {
 export const THREAD_POLL_MS     = 3_000;
 export const THREAD_POLL_MAX_MS = 60_000;
 
+/** While the run waits on a person, only an answer given elsewhere changes it: ask less often. */
+export const WAITING_POLL_MS = 15_000;
+
 /** The wait before the thread's next read: steady, doubling with each failure in a row. */
-export function threadDelay(failures) {
-  return Math.min(THREAD_POLL_MS * 2 ** failures, THREAD_POLL_MAX_MS);
+export function threadDelay(failures, status) {
+  const base = status === 'awaiting_human_gate' ? WAITING_POLL_MS : THREAD_POLL_MS;
+  return Math.min(base * 2 ** failures, THREAD_POLL_MAX_MS);
+}
+
+/** The gate_id the newest question in the thread was sent with, or null. */
+export function latestGateId(messages) {
+  return messages.findLast(m => m.messageType === 'HUMAN_GATE')?.payload?.dialog?.gate_id ?? null;
 }

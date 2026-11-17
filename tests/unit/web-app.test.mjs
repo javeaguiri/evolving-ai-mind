@@ -21,6 +21,7 @@ import { createApiClient, ApiError } from '../../src/ui/web/app/api/client.mjs';
 import { matchPath, matchLocation }  from '../../src/ui/web/app/router.mjs';
 import { formatValue, isNumericColumn }   from '../../src/ui/web/app/records/format.mjs';
 import { rowsRequest, mergeColumns, listFields, initialView, viewKey } from '../../src/ui/web/app/records/query.mjs';
+import { inputsOf, initialValues, isChanged, fieldProblems, formValues, answerFor, gridOf, moveCell, listColumns } from '../../src/ui/web/app/gates/gate.mjs';
 import { runName, panelWorkflows, addMessages, threadDelay, isActive, isWorking, THREAD_POLL_MS, THREAD_POLL_MAX_MS } from '../../src/ui/web/app/runs/runs.mjs';
 import { pageItems, domainItems, sectionOf, currentItem, gateHeadline, relativeAge, pollDelay, POLL_MS, POLL_MAX_MS } from '../../src/ui/web/app/shell/nav.mjs';
 
@@ -422,6 +423,78 @@ describe('runs — names, workflows, the thread\'s messages and pace (§2.4, §4
   });
 });
 
+describe('gates — the answer Slack sends, checked before it is sent (§5)', () => {
+  const field = (name, input_type, extra = {}) => ({ type: 'input', name, input_type, label: name.toUpperCase(), optional: false, ...extra });
+
+  it('initialValues: each input\'s initial; a multi-select an array', () => {
+    const inputs = [field('a', 'text', { initial: 'x' }), field('b', 'number', { initial: 12.5 }), field('c', 'multi_select', { initial: ['1', 2] }), field('d', 'checkbox'), field('e', 'select')];
+    assert.deepEqual(initialValues(inputs), { a: 'x', b: '12.5', c: ['1', '2'], d: [], e: '' });
+  });
+
+  it('isChanged: a value moved from where it opened — order of a multi-select aside, whitespace aside', () => {
+    const initial = { a: 'x', c: ['1', '2'] };
+    assert.equal(isChanged({ name: 'a' }, { a: ' x ' }, initial), false);
+    assert.equal(isChanged({ name: 'a' }, { a: 'y' }, initial), true);
+    assert.equal(isChanged({ name: 'c' }, { c: ['2', '1'] }, initial), false);
+    assert.equal(isChanged({ name: 'c' }, { c: ['1'] }, initial), true);
+  });
+
+  it('fieldProblems: a required field empty, a number the shared rule refuses; an optional field may be empty', () => {
+    const inputs = [field('amount', 'number', { decimal: true, min: 0 }), field('count', 'number', { decimal: false }), field('note', 'text', { optional: true }), field('tags', 'multi_select')];
+    assert.deepEqual(fieldProblems(inputs, { amount: '12,50', count: '3', note: '', tags: ['a'] }), []);
+    assert.deepEqual(fieldProblems(inputs, { amount: '-1', count: '2.5', note: '', tags: [] }), [
+      { name: 'amount', problem: 'must be at least 0' }, { name: 'count', problem: 'must be a whole number' }, { name: 'tags', problem: 'is required' },
+    ]);
+    assert.deepEqual(fieldProblems([field('x', 'number')], { x: 'twelve' }), [{ name: 'x', problem: 'must be a number' }]);
+  });
+
+  it('formValues: every field, as Slack sends it — empty null, none null, multi an array, a date-time epoch seconds', () => {
+    const inputs = [field('a', 'text'), field('b', 'select'), field('c', 'multi_select'), field('d', 'date'), field('e', 'datetime'), field('f', 'number')];
+    assert.deepEqual(formValues(inputs, { a: '  ', b: '', c: ['x', ''], d: '2026-11-17', e: '2026-11-17T10:00:00Z', f: ' 12,5 ' }),
+      { a: null, b: null, c: ['x'], d: '2026-11-17', e: String(Date.parse('2026-11-17T10:00:00Z') / 1000), f: '12,5' });
+  });
+
+  it('answerFor: each gate type\'s answer (§5.2)', () => {
+    const inputs = [field('a', 'text')];
+    assert.deepEqual(answerFor('confirm', 'confirm'), { action: 'confirm' });
+    assert.deepEqual(answerFor('choice', 'b'), { action: 'b' });
+    assert.deepEqual(answerFor('text_input', 'submit', { inputValue: '  hello ' }), { action: 'submit', inputValue: 'hello' });
+    assert.deepEqual(answerFor('text_input', 'cancel', { inputValue: '' }), { action: 'cancel' });
+    assert.deepEqual(answerFor('form', 'save', { inputs, values: { a: 'x' } }), { action: 'save', formValues: { a: 'x' } });
+    assert.deepEqual(answerFor('list_selection', 'open', { row: { id: 7, responseData: { table: 'PGD_Things' } } }), { action: 'open', inputValue: '7', listGroup: 'PGD_Things' });
+    assert.deepEqual(answerFor('list_selection', 'open', { row: { id: 'x' } }), { action: 'open', inputValue: 'x', listGroup: '' });
+    assert.deepEqual(answerFor('review_object', 'add_note', { inputValue: 'from a modal' }), { action: 'add_note', inputValue: 'from a modal' });
+  });
+
+  it('gridOf: a grid only when every input names row and column; rows and columns as they first appear', () => {
+    const cell = (row, column, label, group) => field(`${row}_${column}`, 'number', { row, column, label, ...(group ? { group } : {}) });
+    const grid = gridOf([cell('1', 'Amount', 'Food', 'Monthly'), cell('1', 'Note', 'Food', 'Monthly'), cell('2', 'Amount', 'Rent', 'Monthly'), cell('3', 'Amount', 'Gifts', 'Annual')]);
+    assert.deepEqual(grid.columns, ['Amount', 'Note']);
+    assert.deepEqual(grid.rows.map(r => [r.key, r.label, r.group, Object.keys(r.cells)]), [
+      ['1', 'Food', 'Monthly', ['Amount', 'Note']], ['2', 'Rent', 'Monthly', ['Amount']], ['3', 'Gifts', 'Annual', ['Amount']],
+    ]);
+    assert.equal(gridOf([cell('1', 'Amount', 'Food'), field('x', 'text')]), null, 'one field without the hints — a stacked form');
+    assert.equal(gridOf([]), null);
+  });
+
+  it('moveCell: Enter and arrows move, stopping at the edges', () => {
+    const size = { rows: 3, columns: 2 };
+    assert.deepEqual(moveCell({ r: 0, c: 0 }, 'Enter', size), { r: 1, c: 0 });
+    assert.deepEqual(moveCell({ r: 2, c: 1 }, 'ArrowDown', size), { r: 2, c: 1 });
+    assert.deepEqual(moveCell({ r: 1, c: 0 }, 'ArrowLeft', size), { r: 1, c: 0 });
+    assert.deepEqual(moveCell({ r: 1, c: 0 }, 'ArrowRight', size), { r: 1, c: 1 });
+    assert.deepEqual(moveCell({ r: 1, c: 1 }, 'Tab', size), { r: 1, c: 1 });
+  });
+
+  it('listColumns: every key across the items, in first-appearance order', () => {
+    assert.deepEqual(listColumns([{ fields: { a: 1 } }, { fields: { b: 2, a: 3 } }, {}]), ['a', 'b']);
+  });
+
+  it('inputsOf: a form\'s inputs only', () => {
+    assert.deepEqual(inputsOf({ fields: [{ type: 'typography' }, field('a', 'text'), { type: 'actions', buttons: [] }] }).map(f => f.name), ['a']);
+  });
+});
+
 describe('components and catalog', () => {
   let ui;
   before(async () => {
@@ -435,6 +508,7 @@ describe('components and catalog', () => {
                    export { Markdown } from './Markdown.jsx';
                    export { WorkflowList } from './panels/WorkflowPanel.jsx';
                    export { ThreadView } from './runs/RunThread.jsx';
+                   export { Gate, AnsweredRecord } from './gates/Gate.jsx';
                    export { initI18n } from './i18n.mjs';
                    export { createElement } from 'react';`,
         resolveDir: APP_DIR, loader: 'jsx',
@@ -625,7 +699,7 @@ describe('components and catalog', () => {
   it('the thread: the question the run waits at is marked; Working… while it works', () => {
     const gate = id => message(id, 'HUMAN_GATE', { dialog: { title: 'internal step note', fields: [{ type: 'typography', value: `Question ${id}` }, { type: 'button', value: 'x' }] } });
     const waiting = thread({ run: { status: 'awaiting_human_gate' }, messages: [gate(1), gate(2)] });
-    assert.match(waiting, /<div class="msg gate"><div class="md"><p>Question 1<\/p><\/div><\/div><div class="msg gate waiting"><div class="md"><p>Question 2<\/p><\/div><p class="hint">Waiting for your answer\.<\/p>/);
+    assert.match(waiting, /<div class="msg gate"><div class="md"><p>Question 1<\/p><\/div><\/div><\/div><div><div class="msg gate waiting"><div class="md"><p>Question 2<\/p><\/div><p class="hint">Waiting for your answer\.<\/p>/);
     assert.doesNotMatch(waiting, /internal step note/);
     assert.match(thread({ run: { status: 'running' }, messages: [gate(1)] }), /<div class="msg gate">.*<p class="working" role="status">Working…<\/p>/);
     assert.doesNotMatch(thread({ run: { status: 'completed' }, messages: [gate(1)] }), /waiting|Working/);
@@ -728,6 +802,104 @@ describe('components and catalog', () => {
       assert.match(html, /<li><code>code<\/code><\/li>/);
       assert.match(html, /<ol start="3"><li>third<\/li><li>fourth<\/li><\/ol>/);
       assert.doesNotMatch(html, /style=/);
+    });
+  });
+
+  describe('the gate, drawn by its type', () => {
+    const CONTEXT = { api: { post: () => new Promise(() => {}) }, onSignInRequired() {} };
+    const gateOf  = (gate_type, fields) => ({ runId: 5, gateId: 'g-1', gate_type, dialog: { fields: [{ type: 'typography', value: '**Pick** one' }, ...fields] } });
+    const actions = (...buttons) => ({ type: 'actions', buttons });
+    const draw    = gate => ui.renderToString(ui.createElement(ui.Gate, { gate, context: CONTEXT, onAnswered() {}, onMoved() {} })).replace(/<!-- -->/g, '');
+
+    it('confirm: the message and its buttons, styles kept', () => {
+      const html = draw(gateOf('confirm', [actions({ action: 'confirm', label: 'Save', style: 'primary' }, { action: 'delete', label: 'Delete', style: 'danger' }, { action: 'cancel', label: 'Cancel', style: 'default' })]));
+      assert.match(html, /<div class="msg gate waiting" aria-busy="false"><div class="md"><p><strong>Pick<\/strong> one<\/p><\/div>/);
+      assert.match(html, /<button type="button" class="btn primary">Save<\/button><button type="button" class="btn danger">Delete<\/button><button type="button" class="btn ">Cancel<\/button>/);
+    });
+
+    it('choice: one radio per described option and Continue, waiting for a pick; other buttons stay buttons', () => {
+      const html = draw(gateOf('choice', [
+        { type: 'description_list', items: [{ value: 'a', label: 'A', description: 'The first' }, { value: 'b', label: 'B', description: '' }] },
+        actions({ action: 'a', label: 'A' }, { action: 'b', label: 'B' }, { action: 'cancel', label: 'Cancel' }),
+      ]));
+      assert.match(html, /<input type="radio" name="choice-g-1" value="a"\/><span><b>A<\/b><span class="desc">The first<\/span><\/span>/);
+      assert.match(html, /<button type="button" class="btn primary" disabled="">Continue<\/button><button type="button" class="btn ">Cancel<\/button><\/div>/);
+      assert.doesNotMatch(html, />A<\/button>/);
+    });
+
+    it('text_input: its box, then the buttons', () => {
+      const html = draw(gateOf('text_input', [{ type: 'textbox', name: 'user_input', label: 'Your note', multiline: true, placeholder: 'Type…' }, actions({ action: 'submit', label: 'Send' })]));
+      assert.match(html, /<label class="fld"><span>Your note<\/span><textarea placeholder="Type…" rows="4"><\/textarea><\/label>/);
+    });
+
+    it('review_object: a key/value table, an array of records nested as a table', () => {
+      const html = draw(gateOf('review_object', [{ type: 'review_object', items: [{ key: 'name', value: 'Lamp' }, { key: 'parts', value: [{ part: 'shade', qty: 1 }] }, { key: 'tags', value: ['a', 'b'] }] }, actions({ action: 'confirm', label: 'OK' })]));
+      assert.match(html, /<tr><th scope="row">name<\/th><td>Lamp<\/td><\/tr>/);
+      assert.match(html, /<table class="kv nested"><thead><tr><th>part<\/th><th>qty<\/th><\/tr><\/thead><tbody><tr><td>shade<\/td><td>1<\/td><\/tr>/);
+      assert.match(html, /<ul class="plainlist"><li>a<\/li><li>b<\/li><\/ul>/);
+    });
+
+    it('list_selection: a table, each row\'s own action button in place of typing its id', () => {
+      const html = draw(gateOf('list_selection', [
+        { type: 'list', name: 'rows', parentHeading: 'Things', items: [
+          { id: 7, fields: { Name: 'Lamp', Qty: 2 }, secondaryAction: { action: 'open', label: 'Open Lamp' } },
+          { id: 8, fields: { Name: 'Rug' }, secondaryAction: null },
+        ] },
+        actions({ action: 'done', label: 'Done' }),
+      ]));
+      assert.match(html, /<h4>Things<\/h4>.*<thead><tr><th scope="col">Name<\/th><th scope="col">Qty<\/th><th aria-label="Actions"><\/th><\/tr><\/thead>/);
+      assert.match(html, /<tr><td>Lamp<\/td><td>2<\/td><td class="act"><button type="button" class="btn sm ">Open Lamp<\/button><\/td><\/tr><tr><td>Rug<\/td><td><\/td><td class="act"><\/td><\/tr>/);
+    });
+
+    it('form: labelled typed controls, optional marked, a select with none', () => {
+      const html = draw(gateOf('form', [
+        { type: 'input', name: 'amount', input_type: 'number', label: 'Amount', optional: false, initial: 12.5 },
+        { type: 'input', name: 'kind', input_type: 'select', label: 'Kind', optional: true, options: [{ value: 'a', label: 'A' }] },
+        { type: 'input', name: 'on', input_type: 'date', label: 'On', optional: false },
+        actions({ action: 'save', label: 'Save', style: 'primary' }),
+      ]));
+      assert.match(html, /<label for="f-amount" class="flabel">Amount<\/label><input id="f-amount" type="text" inputMode="decimal" name="amount" value="12.5"\/>/);
+      assert.match(html, /<label for="f-kind" class="flabel">Kind<i> \(optional\)<\/i><\/label><select id="f-kind" name="kind"><option value="" selected="">—<\/option><option value="a">A<\/option><\/select>/);
+      assert.match(html, /<input id="f-on" type="date" name="on" value=""\/>/);
+    });
+
+    it('form with grid hints: one grid — row headers, group rows, a blank where a row has no cell', () => {
+      const cell = (row, column, label, group, initial) => ({ type: 'input', name: `${row}_${column}`, input_type: 'number', label, optional: false, row, column, group, initial });
+      const html = draw(gateOf('form', [cell('1', 'Amount', 'Food', 'Monthly', 400), cell('1', 'Limit', 'Food', 'Monthly', 500), cell('2', 'Amount', 'Gifts', 'Annual', 300), actions({ action: 'save', label: 'Save' })]));
+      assert.match(html, /<table class="grid edit"><thead><tr><th scope="col" aria-hidden="true"><\/th><th scope="col">Amount<\/th><th scope="col">Limit<\/th><\/tr><\/thead>/);
+      assert.match(html, /<tr class="grp"><th colSpan="3" scope="colgroup">Monthly<\/th><\/tr><tr><th scope="row">Food<\/th><td><input id="f-1_Amount" aria-label="Food — Amount" data-cell="0:0" type="text" inputMode="decimal" class="cell num" name="1_Amount" value="400"\/><\/td>/);
+      assert.match(html, /<tr class="grp"><th colSpan="3" scope="colgroup">Annual<\/th><\/tr><tr><th scope="row">Gifts<\/th><td>.*data-cell="1:0".*<\/td><td><\/td><\/tr>/);
+      assert.equal((html.match(/<table class="grid edit">/g) ?? []).length, 1);
+    });
+
+    it('a button that opens a modal on Slack waits for its text in place', () => {
+      const html = draw(gateOf('review_object', [actions({ action: 'revise', label: 'Revise', modal: { title: 'Revise', input_label: 'What to change' } })]));
+      assert.match(html, /<button type="button" class="btn ">Revise<\/button>/);
+    });
+
+    it('an answer given here is one line', () => {
+      const html = ui.renderToString(ui.createElement(ui.AnsweredRecord, { record: { label: 'Save', changes: 3 } })).replace(/<!-- -->/g, '');
+      assert.equal(html, '<p class="answered">You chose Save · 3 changes</p>');
+    });
+
+    it('the thread puts the live question where its copy was sent, and a question answered here as its record', () => {
+      const sent = (id, gid, text) => ({ id, messageType: 'HUMAN_GATE', payload: { dialog: { gate_id: gid, fields: [{ type: 'typography', value: text }] } } });
+      const live = gateOf('confirm', [actions({ action: 'ok', label: 'OK' })]);
+      const html = ui.renderToString(ui.createElement(ui.ThreadView, {
+        run: { status: 'awaiting_human_gate' }, messages: [sent(1, 'g-0', 'First'), sent(2, 'g-1', 'Second (as sent)')], gate: live,
+        answered: { 'g-0': { label: 'Yes', changes: 0 } }, problem: null, context: CONTEXT, onAnswered() {}, onMoved() {},
+      })).replace(/<!-- -->/g, '');
+      assert.match(html, /<p>First<\/p><\/div><\/div><p class="answered">You chose Yes<\/p>/);
+      assert.doesNotMatch(html, /Second \(as sent\)/);
+      assert.match(html, /<div class="msg gate waiting" aria-busy="false"><div class="md"><p><strong>Pick<\/strong> one<\/p>.*>OK<\/button>/);
+    });
+
+    it('a waiting gate with no copy in the inbox — a scheduled run\'s — is still answered', () => {
+      const html = ui.renderToString(ui.createElement(ui.ThreadView, {
+        run: { status: 'awaiting_human_gate' }, messages: [], gate: gateOf('confirm', [actions({ action: 'ok', label: 'OK' })]), problem: null, context: CONTEXT, onAnswered() {}, onMoved() {},
+      }));
+      assert.match(html, /^<div class="thread"><div class="msg gate waiting"/);
+      assert.doesNotMatch(html, /No messages were kept/);
     });
   });
 

@@ -50,6 +50,21 @@
       "cancelled": "Cancelled"
     }
   },
+  "gate": {
+    "continue": "Continue",
+    "submit": "Send",
+    "back": "Back",
+    "yes": "Yes",
+    "no": "No",
+    "none": "—",
+    "optional": "(optional)",
+    "actions": "Actions",
+    "changes": "{count, plural, one {# change} other {# changes}}",
+    "youChose": "You chose {label}",
+    "moved": "This was answered elsewhere.",
+    "fixFields": "Nothing was sent — correct the marked fields.",
+    "failed": "That didn’t send — try again in a moment."
+  },
   "needsYou": {
     "title": "Needs you",
     "button": "{count, plural, =0 {Needs you, nothing waiting} one {Needs you, # waiting} other {Needs you, # waiting}}",
