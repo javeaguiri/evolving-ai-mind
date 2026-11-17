@@ -3,8 +3,9 @@
 // See LICENSE file in the project root for full license terms.
 // src/proc/runs.mjs
 //
-// /api/v1/proc/runs (docs/arch-web-app.md §2.4, §3.1):
+// /api/v1/proc/runs (docs/arch-web-app.md §2.4, §3.1, §4.3):
 //   GET   runs the principal may see, newest first, each named by its label
+//   GET   /runs/{runId} — one of them, by the same rule: the run drawer and run page's heading
 //   POST  start a named domain workflow for the principal — no intent classification
 //
 // A started run's callback is { provider: 'web', channel: <principal> }: every message it sends
@@ -36,6 +37,23 @@ export function parseRunsQuery(query = {}) {
 }
 
 /**
+ * One run as a list entry (RunSummary).
+ *
+ * @param {object} r     A PGC_WorkflowRun row (RUN_COLUMNS)
+ * @param {object} [wf]  Its workflow { name, display }
+ */
+export function toRunSummary(r, wf) {
+  return {
+    runId:         r.id,
+    workflowName:  wf?.name ?? null,
+    workflowLabel: wf?.display?.label ?? null,
+    label:         r.label ?? null,
+    status:        r.status,
+    startedAt:     r.started_at ?? r.created_at,
+  };
+}
+
+/**
  * Shape one page from up to limit + 1 runs, newest first. Runs the principal may not see are
  * dropped after the bound, so the cursor is the last run examined, not the last returned.
  *
@@ -44,17 +62,7 @@ export function parseRunsQuery(query = {}) {
  */
 export function toRunsPage(rows, workflows, principal, limit) {
   const examined = rows.slice(0, limit);
-  const runs = examined.filter(r => canSeeRun(principal, r)).map(r => {
-    const wf = workflows.get(r.workflow_id);
-    return {
-      runId:         r.id,
-      workflowName:  wf?.name ?? null,
-      workflowLabel: wf?.display?.label ?? null,
-      label:         r.label ?? null,
-      status:        r.status,
-      startedAt:     r.started_at ?? r.created_at,
-    };
-  });
+  const runs = examined.filter(r => canSeeRun(principal, r)).map(r => toRunSummary(r, workflows.get(r.workflow_id)));
   return { runs, cursor: examined.length ? examined[examined.length - 1].id : null, more: rows.length > limit };
 }
 
@@ -80,6 +88,20 @@ async function listRuns(principal, { workflow, domain, status, limit, before }) 
     : { rows: [] };
   const workflows = new Map((wfResp.rows ?? []).map(w => [w.id, w]));
   return toRunsPage(rows, workflows, principal, limit);
+}
+
+/**
+ * One run, checked against the principal as the list is.
+ *
+ * @returns {Promise<{ status: number, body: object }>}
+ */
+export async function getRun(principal, runId) {
+  const runResp = await getRows('PGC_WorkflowRun', [{ column: 'id', op: 'eq', value: runId }], undefined, 1, undefined, RUN_COLUMNS);
+  const run     = runResp.rows?.[0];
+  if (!run) return { status: 404, body: { error: 'run_not_found' } };
+  if (!canSeeRun(principal, run)) return { status: 403, body: { error: 'run_forbidden' } };
+  const wfResp = await getRows('PGC_Workflow', [{ column: 'id', op: 'eq', value: run.workflow_id }], undefined, 1, undefined, ['id', 'name', 'display']);
+  return { status: 200, body: toRunSummary(run, wfResp.rows?.[0]) };
 }
 
 /**
@@ -113,9 +135,18 @@ export async function startRun(principal, body = {}, traceId = randomUUID()) {
 }
 
 export async function handle(req) {
+  const segments = (req.proxy || '').split('/').filter(Boolean);
+  const runId    = /^[1-9][0-9]*$/.test(segments[1] ?? '') ? Number(segments[1]) : null;
+  const isOne    = req.method === 'GET' && segments.length === 2 && runId !== null;
+  if (segments.length > 1 && !isOne) return err(404, `runs route not found: ${req.method} /${req.proxy}`, req.correlationId);
+
   const principal = readPrincipal(req.headers);
   if (!principal) return respond(401, { success: false, error: 'principal_required' }, req.correlationId);
 
+  if (isOne) {
+    const { status, body } = await getRun(principal, runId);
+    return respond(status, { success: status === 200, ...body }, req.correlationId);
+  }
   if (req.method === 'GET') {
     const query = parseRunsQuery(req.query);
     if (query.error) return respond(400, { success: false, error: 'invalid_query', message: query.error }, req.correlationId);

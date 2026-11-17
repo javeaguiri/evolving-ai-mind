@@ -168,6 +168,33 @@ describe('/proc/runs — the principal, and starting a run', () => {
     assert.equal(JSON.parse(sent[0].MessageBody).workflowRunId, 77);
   });
 
+  it('GET /runs/{runId}: the list\'s entry for one run, checked against the principal', async () => {
+    process.env.HOUSEHOLD_PRINCIPALS = 'sub-a,sub-b';
+    const one = id => req('GET', { 'x-principal-user': 'sub-a' }, { proxy: `runs/${id}` });
+    const runRow = callback => ({ id: 12, workflow_id: 5, label: 'Nov', status: 'awaiting_human_gate', started_at: 's', created_at: 'c', callback });
+
+    let calls = stubServ(path => ({ rows: calls.length === 1 ? [runRow({ provider: 'slack', channel: 'C1' })] : [{ id: 5, name: 'w', display: { label: 'Do it' } }] }));
+    assert.deepEqual(out(await handle(one(12))), [200, { success: true, runId: 12, workflowName: 'w', workflowLabel: 'Do it', label: 'Nov', status: 'awaiting_human_gate', startedAt: 's' }]);
+    assert.deepEqual(calls[0].body.filters, [{ column: 'id', op: 'eq', value: 12 }]);
+    assert.ok(!calls[0].body.columns.includes('stack'));
+
+    calls = stubServ(() => ({ rows: [runRow({ provider: 'web', channel: 'sub-b' })] }));
+    assert.deepEqual(out(await handle(one(12))).map(x => x.error ?? x), [403, 'run_forbidden']);
+    assert.equal(calls.length, 1, 'refused before its workflow is read');
+
+    stubServ(() => ({ rows: [] }));
+    assert.deepEqual(out(await handle(one(13))).map(x => x.error ?? x), [404, 'run_not_found']);
+  });
+
+  it('runs/{runId} is a GET of a run id, or 404 before the principal is read', async () => {
+    const calls = stubServ(() => ({ rows: [] }));
+    for (const [method, proxy] of [['GET', 'runs/0'], ['GET', 'runs/x'], ['POST', 'runs/12'], ['GET', 'runs/12/steps']]) {
+      assert.equal((await handle(req(method, {}, { proxy }))).statusCode, 404, `${method} ${proxy}`);
+    }
+    assert.equal((await handle(req('GET', {}, { proxy: 'runs/12' }))).statusCode, 401);
+    assert.equal(calls.length, 0);
+  });
+
   it('lists with explicit columns — never the stack — newest first', async () => {
     process.env.HOUSEHOLD_PRINCIPALS = 'sub-a';
     const calls = stubServ(() => ({ rows: [] }));

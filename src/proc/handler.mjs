@@ -293,13 +293,14 @@ async function dispatch(req) {
   if ((req.proxy || '').split('/').filter(Boolean)[0] === 'sources') {
     return sources(req);
   }
+  // One run names its id in the path (/runs/{runId}); the list and a start are /runs alone.
+  if ((req.proxy || '').split('/').filter(Boolean)[0] === 'runs') {
+    return runs(req);
+  }
 
   switch (req.route) {
     case 'inbox':
       return inbox(req);
-
-    case 'runs':
-      return runs(req);
 
     case 'pages':
       return pages(req);

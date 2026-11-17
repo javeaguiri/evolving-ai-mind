@@ -3,7 +3,7 @@
 // See LICENSE file in the project root for full license terms.
 // src/ui/web/api/routes.mjs
 //
-// The web routes WebApiFunction forwards — the eleven operations of docs/openapi.yaml's UI-Web
+// The web routes WebApiFunction forwards — the twelve operations of docs/openapi.yaml's UI-Web
 // section, and nothing else (docs/arch-web-app.md §3.1). An allow-list, never a proxy: a method
 // or path not listed here, or a path parameter outside its pattern, never reaches PROC. Each
 // web path is its PROC path under /api/v1/proc/, and each route names the query parameters it
@@ -30,6 +30,7 @@ export const WEB_ROUTES = [
   { operationId: 'webGetOutput',      method: 'GET',  path: ['outputs', NAME] },
   { operationId: 'webListRuns',       method: 'GET',  path: ['runs'], query: ['workflow', 'domain', 'status', 'limit', 'before'] },
   { operationId: 'webStartRun',       method: 'POST', path: ['runs'], body: true },
+  { operationId: 'webGetRun',         method: 'GET',  path: ['runs', RUN_ID] },
   { operationId: 'webReadInbox',      method: 'GET',  path: ['inbox'], query: ['after', 'run', 'limit'] },
   { operationId: 'webListGates',      method: 'GET',  path: ['gates'] },
   { operationId: 'webGetGate',        method: 'GET',  path: ['gates', RUN_ID] },

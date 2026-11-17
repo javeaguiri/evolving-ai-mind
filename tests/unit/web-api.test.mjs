@@ -54,9 +54,9 @@ beforeEach(() => {
 afterEach(() => { globalThis.fetch = realFetch; });
 
 describe('routes — an allow-list of the spec, never a proxy', () => {
-  it('holds exactly the eleven UI-Web operations', () => {
+  it('holds exactly the twelve UI-Web operations', () => {
     assert.deepEqual(WEB_ROUTES.map(r => r.operationId).sort(), [
-      'webAnswerGate', 'webGetGate', 'webGetMe', 'webGetOutput', 'webListGates', 'webListPages',
+      'webAnswerGate', 'webGetGate', 'webGetMe', 'webGetOutput', 'webGetRun', 'webListGates', 'webListPages',
       'webListRuns', 'webListWorkflows', 'webReadInbox', 'webReadSourceRows', 'webStartRun',
     ]);
   });
