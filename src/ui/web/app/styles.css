@@ -315,6 +315,59 @@ table.grid .num { text-align: end; font-variant-numeric: tabular-nums; white-spa
   .settings nav { flex: none; border-inline-end: 0; border-block-end: 1px solid var(--line); }
 }
 
+/* ---------- workflow panels and runs ---------- */
+.btnrow { display: flex; flex-wrap: wrap; gap: 8px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { background: var(--accent-ink); }
+.btn:disabled { opacity: .5; cursor: default; }
+.runs { list-style: none; margin: 0; padding: 0; }
+.runs button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  inline-size: 100%;
+  border: 0;
+  border-block-start: 1px solid var(--soft);
+  background: transparent;
+  padding-block: 7px;
+  padding-inline: 4px;
+  text-align: start;
+}
+.runs button:hover { background: var(--ground); }
+.runs .lbl { flex: 1 1 auto; min-inline-size: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runs .when { flex: none; font-size: 12px; color: var(--muted); }
+.pill.wait { background: var(--warn-soft); color: var(--warn); }
+.pill.run { background: var(--accent-soft); color: var(--accent-ink); }
+.pill.bad { background: var(--warn-soft); color: var(--bad); }
+.pill.done { background: var(--soft); color: var(--muted); }
+.ptools { display: inline-flex; gap: 4px; margin: 0; }
+.iconbtn {
+  inline-size: 30px;
+  block-size: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 16px;
+}
+.iconbtn:hover { background: var(--soft); }
+
+.thread { display: flex; flex-direction: column; gap: 10px; border-inline-start: 3px solid var(--accent-soft); padding-inline-start: 12px; }
+.msg { background: var(--ground); border-radius: 8px; padding-block: 9px; padding-inline: 11px; }
+.msg.error { background: var(--warn-soft); color: var(--bad); }
+.msg.gate { background: var(--paper); border: 1px solid var(--line); }
+.msg.gate.waiting { border-color: var(--accent); }
+.msg .plain { margin: 0; white-space: pre-wrap; }
+.msg .hint { margin: 8px 0 0; font-size: 12px; color: var(--accent-ink); }
+.working { margin: 0; font-size: 13px; color: var(--accent-ink); }
+.reveal { margin-block-start: 8px; }
+.reveal summary { cursor: pointer; color: var(--accent-ink); font-weight: 500; }
+.reveal .md { margin-block-start: 6px; }
+
 /* ---------- markdown from /proc ---------- */
 .md { overflow-wrap: anywhere; }
 .md > :first-child { margin-block-start: 0; }

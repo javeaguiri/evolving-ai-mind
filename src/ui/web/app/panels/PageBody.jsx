@@ -9,13 +9,14 @@
 import { useTranslation }     from 'react-i18next';
 import { resolveLanguageMap } from '../../../../shared/language-map.mjs';
 import { RecordsPanel }       from './RecordsPanel.jsx';
+import { WorkflowPanel }      from './WorkflowPanel.jsx';
 import { PanelFrame }         from './PanelFrame.jsx';
 
 /**
  * @param {object} props
  * @param {string} props.pageKey
  * @param {object[]} props.panels   The page's panels, as GET /pages sends them
- * @param {object} props.context    { api, locale, timeZone, onSignInRequired }
+ * @param {object} props.context    { api, domains, locale, timeZone, onSignInRequired }
  */
 export function PageBody({ pageKey, panels, context }) {
   const { i18n } = useTranslation();
@@ -25,6 +26,9 @@ export function PageBody({ pageKey, panels, context }) {
         const title = resolveLanguageMap(panel.title ?? '', i18n.language);
         if (panel.kind === 'records') {
           return <RecordsPanel key={panel.id} pageKey={pageKey} panel={panel} title={title} context={context} />;
+        }
+        if (panel.kind === 'workflow') {
+          return <WorkflowPanel key={panel.id} panel={panel} title={title} context={context} />;
         }
         return <PanelFrame key={panel.id} title={title} width={panel.width} />;
       })}

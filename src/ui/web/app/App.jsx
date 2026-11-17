@@ -7,7 +7,8 @@
 // the route names, Settings and the run drawer over that. It reads who
 // the user is (GET /me), the household's pages (GET /pages) and its domains (GET /workflows) once,
 // retrying with the §9 banner while the backend can't be reached. A household page draws its
-// panels (§4.2); the other pages draw their title until their bodies arrive (Sprint 17 item 4).
+// panels (§4.2); a domain page its workflow panel (§4.4); a run page and the run drawer the run's
+// thread (§4.3).
 
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation }      from 'react-i18next';
@@ -21,6 +22,9 @@ import { NeedsYou }            from './shell/NeedsYou.jsx';
 import { GearIcon }            from './shell/icons.jsx';
 import { Settings, SETTINGS_ENTRIES } from './pages/Settings.jsx';
 import { PageBody }            from './panels/PageBody.jsx';
+import { WorkflowPanel }       from './panels/WorkflowPanel.jsx';
+import { RunThread }           from './runs/RunThread.jsx';
+import { runName }             from './runs/runs.mjs';
 import { domainItems, workflowLabels, pollDelay, HOME_PAGE_KEY } from './shell/nav.mjs';
 
 /**
@@ -118,8 +122,11 @@ export function Shell({ route, me, pages, domains, problem, api, onSignInRequire
   const labels   = useMemo(() => workflowLabels(domains ?? []), [domains]);
   const pageKey  = page.page === 'home' ? HOME_PAGE_KEY : page.page === 'householdPage' ? page.params.pageKey : null;
   const shown    = pageKey && pages?.find(p => p.pageKey === pageKey);
-  const context  = useMemo(() => ({ api, locale: me?.locale ?? i18n.language, timeZone: me?.timezone, onSignInRequired }),
-    [api, me, i18n.language, onSignInRequired]);
+  const context  = useMemo(() => ({ api, domains, locale: me?.locale ?? i18n.language, timeZone: me?.timezone, onSignInRequired }),
+    [api, domains, me, i18n.language, onSignInRequired]);
+  const [run, setRun] = useState(null);     // the run the run page or the run drawer shows
+  const where    = { language: i18n.language, locale: context.locale, timeZone: context.timeZone };
+  const runId    = page.page === 'run' ? Number(page.params.runId) : null;
 
   useEffect(() => {
     document.title = title ? `${title} · ${t('app.name')}` : t('app.name');
@@ -135,13 +142,23 @@ export function Shell({ route, me, pages, domains, problem, api, onSignInRequire
       </TopBar>
       {problem && <div className="banner" role="alert">{t('errors.retrying')}</div>}
       <main className="main">
-        {title === null
-          ? <p className="muted">{t('shell.loading')}</p>
-          : (
-            <div className="pagehead">
-              <h1>{title}</h1>
-            </div>
-          )}
+        {title === null && <p className="muted">{t('shell.loading')}</p>}
+        {title !== null && (
+          <div className="pagehead">
+            <h1>{runId && run?.runId === runId ? runName(run, where) : title}</h1>
+          </div>
+        )}
+        {runId && (
+          <div className="panel w-full">
+            <RunThread key={runId} runId={runId} context={context} onRun={setRun} />
+          </div>
+        )}
+        {page.page === 'domain' && domains?.some(d => d.domain === page.params.domain) && (
+          <div className="panels">
+            <WorkflowPanel key={page.params.domain} panel={{ id: 'workflows', width: 'full', config: { domain: page.params.domain } }}
+              title={t('workflow.domainPanel')} context={context} />
+          </div>
+        )}
         {shown && shown.panels.length > 0 && <PageBody pageKey={shown.pageKey} panels={shown.panels} context={context} />}
         {shown && shown.panels.length === 0 && page.page === 'home' && <p className="muted">{t('pages.homeEmpty')}</p>}
         {page.page === 'domains' && domains && (
@@ -152,7 +169,12 @@ export function Shell({ route, me, pages, domains, problem, api, onSignInRequire
         {page.page === 'notFound' && <p><Link to="/">{t('pages.goHome')}</Link></p>}
       </main>
       <PhoneTabs route={page} pages={pages} domains={domains} />
-      {page.run && <Drawer title={t('pages.run', { runId: page.run })} onClose={() => navigate(path)} />}
+      {page.run && (
+        <Drawer title={run?.runId === page.run ? runName(run, where) : t('pages.run', { runId: page.run })} onClose={() => navigate(path)}>
+          <p className="ptools"><Link to={`/runs/${page.run}`}>{t('run.openPage')}</Link></p>
+          <RunThread key={page.run} runId={page.run} context={context} onRun={setRun} />
+        </Drawer>
+      )}
       {settings && (
         <Settings entry={route.params.entry} me={me} from={route.from} onSignOut={onSignOut}
           onClose={() => (route.from ? back() : replace('/'))} />

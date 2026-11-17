@@ -21,6 +21,7 @@ import { createApiClient, ApiError } from '../../src/ui/web/app/api/client.mjs';
 import { matchPath, matchLocation }  from '../../src/ui/web/app/router.mjs';
 import { formatValue, isNumericColumn }   from '../../src/ui/web/app/records/format.mjs';
 import { rowsRequest, mergeColumns, listFields, initialView, viewKey } from '../../src/ui/web/app/records/query.mjs';
+import { runName, panelWorkflows, addMessages, threadDelay, isActive, isWorking, THREAD_POLL_MS, THREAD_POLL_MAX_MS } from '../../src/ui/web/app/runs/runs.mjs';
 import { pageItems, domainItems, sectionOf, currentItem, workflowLabels, gateHeadline, relativeAge, pollDelay, POLL_MS, POLL_MAX_MS } from '../../src/ui/web/app/shell/nav.mjs';
 
 const APP_DIR = new URL('../../src/ui/web/app/', import.meta.url).pathname;
@@ -395,6 +396,39 @@ describe('records — the read, the columns, the views (§4.2)', () => {
   });
 });
 
+describe('runs — names, workflows, the thread\'s messages and pace (§2.4, §4.3)', () => {
+  const where = { language: 'es', locale: 'es', timeZone: 'Europe/Madrid' };
+
+  it('runName: the label; else the workflow\'s label in the language, and the day it started', () => {
+    assert.equal(runName({ label: 'Noviembre' }, where), 'Noviembre');
+    assert.equal(runName({ label: null, workflowLabel: { en: 'Edit budget', es: 'Editar presupuesto' }, startedAt: '2026-11-01T23:30:00Z' }, where), 'Editar presupuesto · 2 nov');
+    assert.equal(runName({ label: null, workflowLabel: null, workflowName: 'edit_budget', startedAt: 'nonsense' }, where), 'edit_budget');
+  });
+
+  it('panelWorkflows: the domain\'s, or the one named — by its name when the menu does not list it', () => {
+    const domains = [{ domain: 'a', workflows: [{ name: 'x', label: 'X' }, { name: 'y', label: 'Y' }] }, { domain: 'b', workflows: [{ name: 'z', label: 'Z' }] }];
+    assert.deepEqual(panelWorkflows({ domain: 'a' }, domains).map(w => w.name), ['x', 'y']);
+    assert.deepEqual(panelWorkflows({ domain: 'gone' }, domains), []);
+    assert.deepEqual(panelWorkflows({ workflow: 'z' }, domains), [{ name: 'z', label: 'Z' }]);
+    assert.deepEqual(panelWorkflows({ workflow: 'hidden' }, domains), [{ name: 'hidden', label: 'hidden' }]);
+  });
+
+  it('addMessages: each once, in the order sent', () => {
+    assert.deepEqual(addMessages([{ id: 1 }, { id: 3 }], [{ id: 3 }, { id: 2 }, { id: 4 }]).map(m => m.id), [1, 2, 3, 4]);
+  });
+
+  it('a run is going until it finishes; it works only while pending or running', () => {
+    for (const s of ['pending', 'running', 'awaiting_human_gate', 'awaiting_llm_break']) assert.ok(isActive(s), s);
+    for (const s of ['completed', 'failed', 'cancelled']) assert.ok(!isActive(s), s);
+    assert.deepEqual(['pending', 'running', 'awaiting_human_gate'].map(isWorking), [true, true, false]);
+  });
+
+  it('threadDelay: steady, doubling per failure, to a ceiling', () => {
+    assert.deepEqual([0, 1, 2].map(threadDelay), [THREAD_POLL_MS, THREAD_POLL_MS * 2, THREAD_POLL_MS * 4]);
+    assert.equal(threadDelay(40), THREAD_POLL_MAX_MS);
+  });
+});
+
 describe('components and catalog', () => {
   let ui;
   before(async () => {
@@ -406,6 +440,8 @@ describe('components and catalog', () => {
                    export { RecordsBody, RecordDetail } from './panels/RecordsPanel.jsx';
                    export { Drawer } from './shell/Drawer.jsx';
                    export { Markdown } from './Markdown.jsx';
+                   export { WorkflowList } from './panels/WorkflowPanel.jsx';
+                   export { ThreadView } from './runs/RunThread.jsx';
                    export { initI18n } from './i18n.mjs';
                    export { createElement } from 'react';`,
         resolveDir: APP_DIR, loader: 'jsx',
@@ -534,14 +570,79 @@ describe('components and catalog', () => {
     assert.match(html, /Nothing is waiting for you\./);
   });
 
-  it('a household page draws its panels in their widths; a records panel loads, other kinds are their frame', () => {
+  it('a household page draws its panels in their widths; records and workflow panels load, a summary is its frame', () => {
+    const domains = [{ domain: 'pantry', label: 'Pantry', workflows: [{ name: 'restock', label: 'Restock' }, { name: 'count_up', label: 'Count up' }] }];
     const pages = [{ pageKey: 'home', title: 'Home', position: 0, panels: [
       { id: 'r', kind: 'records', width: 'full', title: { en: 'Things', es: 'Cosas' }, config: { source: 'PGD_Things' } },
-      { id: 'w', kind: 'workflow', width: '1/2', title: 'Flows', config: { domain: 'd' } },
+      { id: 'w', kind: 'workflow', width: '1/2', title: 'Flows', config: { domain: 'pantry' } },
+      { id: 's', kind: 'summary', width: '1/3', title: 'Report', config: { widget: 'report', workflow: 'restock' } },
     ] }];
-    const html = draw('/', { pages });
+    const html = draw('/', { pages, domains });
     assert.match(html, /<div class="panels"><section class="panel w-full" aria-label="Things"><div class="phead"><h2>Things<\/h2><\/div><div class="skeleton" aria-busy="true"/);
-    assert.match(html, /<section class="panel w-half" aria-label="Flows"><div class="phead"><h2>Flows<\/h2><\/div><\/section>/);
+    assert.match(html, /<section class="panel w-half" aria-label="Flows"><div class="phead"><h2>Flows<\/h2><\/div><div class="btnrow"><button type="button" class="btn">Restock<\/button><button type="button" class="btn">Count up<\/button><\/div><div class="skeleton"/);
+    assert.match(html, /<section class="panel w-third" aria-label="Report"><div class="phead"><h2>Report<\/h2><\/div><\/section>/);
+  });
+
+  it('a domain page draws its workflow panel; a run page its thread', () => {
+    const domains = [{ domain: 'pantry', label: 'Pantry', workflows: [{ name: 'restock', label: 'Restock' }] }];
+    assert.match(draw('/d/pantry', { domains }), /<h1>Pantry<\/h1><\/div><div class="panels"><section class="panel w-full" aria-label="Workflows"><div class="phead"><h2>Workflows<\/h2><\/div><div class="btnrow"><button type="button" class="btn primary">Restock<\/button>/);
+    assert.match(draw('/runs/42'), /<h1>Run 42<\/h1><\/div><div class="panel w-full"><p class="muted">Loading…<\/p><\/div>/);
+    assert.match(draw('/p/money?run=42'), /aria-label="Run 42"><div class="dh">.*<a href="\/runs\/42">Open as a page<\/a>.*Loading…/);
+  });
+
+  const WHERE = { language: 'en', locale: 'en', timeZone: 'Europe/Madrid', now: Date.parse('2026-11-17T12:00:00Z') };
+
+  it('the workflow list: Start per workflow, runs by name with their state and age', () => {
+    const runs = [
+      { runId: 9, label: 'November', status: 'awaiting_human_gate', startedAt: '2026-11-17T10:00:00Z' },
+      { runId: 8, label: null, workflowLabel: { en: 'Edit budget' }, workflowName: 'edit_budget', status: 'failed', startedAt: '2026-11-01T10:00:00Z' },
+      { runId: 7, label: 'October', status: 'completed', startedAt: '2026-11-03T10:00:00Z' },
+    ];
+    const html = ui.renderToString(ui.createElement(ui.WorkflowList, {
+      workflows: [{ name: 'edit_budget', label: 'Edit budget' }], runs, where: WHERE, onStart() {}, onOpen() {}, problem: null, starting: false,
+    })).replace(/<!-- -->/g, '');
+    assert.match(html, /<button type="button" class="btn primary">Edit budget<\/button>/);
+    assert.match(html, /<span class="lbl">November<\/span><span class="pill wait">Needs you<\/span><span class="when"><time dateTime="2026-11-17T10:00:00Z">2 hours ago<\/time>/);
+    assert.match(html, /<span class="lbl">Edit budget · Nov 1<\/span><span class="pill bad">Failed<\/span>/);
+    assert.match(html, /<span class="lbl">October<\/span><span class="when">/, 'a finished run says nothing of its state');
+  });
+
+  it('the workflow list, empty: one workflow named, or the domain\'s', () => {
+    const list = workflows => ui.renderToString(ui.createElement(ui.WorkflowList, { workflows, runs: [], where: WHERE, onStart() {}, onOpen() {}, problem: null, starting: true }));
+    assert.match(list([{ name: 'a', label: 'Restock' }]), /You don(’|&#x27;)t have any Restock runs yet — they will be shown here\./);
+    assert.match(list([{ name: 'a', label: 'A' }, { name: 'b', label: 'B' }]), /You don(’|&#x27;)t have any runs yet/);
+    assert.match(list([{ name: 'a', label: 'A' }]), /<button type="button" class="btn primary" disabled="">A<\/button>/, 'Start waits while a start is sent');
+  });
+
+  const message = (id, messageType, payload) => ({ id, messageType, payload });
+  const thread  = props => ui.renderToString(ui.createElement(ui.ThreadView, { run: null, messages: [], problem: null, ...props })).replace(/<!-- -->/g, '');
+
+  it('the thread: notifications as markdown or plain text, a failure by its summary, reveals folded', () => {
+    const html = thread({ run: { status: 'failed' }, messages: [
+      message(2, 'HUMAN_NOTIFICATION', { format: 'markdown', message: '## Done\n\n**3** saved', reveals: [{ button_label: 'Details', content: '| a |\n|---|\n| 1 |' }] }),
+      message(1, 'HUMAN_NOTIFICATION', { message: 'Line one\nLine *two*' }),
+      message(3, 'WORKFLOW_ERROR', { summary: 'Step 4 failed: the table is missing.' }),
+    ] });
+    assert.match(html, /<div class="msg"><div class="md"><h4>Done<\/h4><p><strong>3<\/strong> saved<\/p><\/div><details class="reveal"><summary>Details<\/summary>/);
+    assert.match(html, /<p class="plain">Line one\nLine \*two\*<\/p>/);
+    assert.match(html, /<div class="msg error" role="alert">Step 4 failed: the table is missing\.<\/div>/);
+    assert.doesNotMatch(html, /Working…/);
+  });
+
+  it('the thread: the question the run waits at is marked; Working… while it works', () => {
+    const gate = id => message(id, 'HUMAN_GATE', { dialog: { title: 'internal step note', fields: [{ type: 'typography', value: `Question ${id}` }, { type: 'button', value: 'x' }] } });
+    const waiting = thread({ run: { status: 'awaiting_human_gate' }, messages: [gate(1), gate(2)] });
+    assert.match(waiting, /<div class="msg gate"><div class="md"><p>Question 1<\/p><\/div><\/div><div class="msg gate waiting"><div class="md"><p>Question 2<\/p><\/div><p class="hint">Waiting for your answer\.<\/p>/);
+    assert.doesNotMatch(waiting, /internal step note/);
+    assert.match(thread({ run: { status: 'running' }, messages: [gate(1)] }), /<div class="msg gate">.*<p class="working" role="status">Working…<\/p>/);
+    assert.doesNotMatch(thread({ run: { status: 'completed' }, messages: [gate(1)] }), /waiting|Working/);
+  });
+
+  it('the thread: loading, a run that can\'t be shown, one that sent nothing, and the backend unreachable', () => {
+    assert.match(thread({}), /Loading…/);
+    assert.match(thread({ problem: 'gone' }), /This run can(’|&#x27;)t be shown\./);
+    assert.match(thread({ run: { status: 'completed' } }), /This run sent no messages\./);
+    assert.match(thread({ run: { status: 'running' }, problem: 'unreachable' }), /Working….*Can(’|&#x27;)t reach the home brain — retrying/);
   });
 
   it('a Home with no panels says how to go on', () => {

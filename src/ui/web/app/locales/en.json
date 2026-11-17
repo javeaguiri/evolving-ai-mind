@@ -29,6 +29,27 @@
     "missing": "“{source}” can’t be found.",
     "failed": "This panel couldn’t be read."
   },
+  "workflow": {
+    "domainPanel": "Workflows",
+    "emptyOne": "You don’t have any {workflow} runs yet — they will be shown here.",
+    "empty": "You don’t have any runs yet — they will be shown here.",
+    "failed": "That didn’t work — try again in a moment."
+  },
+  "run": {
+    "openPage": "Open as a page",
+    "working": "Working…",
+    "waiting": "Waiting for your answer.",
+    "reveal": "Show",
+    "noMessages": "This run sent no messages.",
+    "gone": "This run can’t be shown.",
+    "unreachable": "Can’t reach the home brain — retrying",
+    "status": {
+      "needsYou": "Needs you",
+      "running": "Running",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    }
+  },
   "needsYou": {
     "title": "Needs you",
     "button": "{count, plural, =0 {Needs you, nothing waiting} one {Needs you, # waiting} other {Needs you, # waiting}}",
