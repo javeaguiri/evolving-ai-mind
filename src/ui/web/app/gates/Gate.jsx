@@ -25,7 +25,7 @@ export function Reveal({ label, content }) {
   return (
     <details className="reveal">
       <summary>{label || t('run.reveal')}</summary>
-      {shown.kind === 'table' ? <RecordTable records={shown.records} />
+      {shown.kind === 'table' ? <div className="tablewrap"><RecordTable records={shown.records} /></div>
         : <Markdown text={shown.kind === 'list' ? shown.items.map(line => `- ${line}`).join('\n') : shown.text} />}
     </details>
   );
@@ -137,9 +137,11 @@ export function Gate({ gate, context, onAnswered, onMoved }) {
             );
           case 'review_object':
             return (
-              <table key={i} className="kv">
-                <tbody>{f.items.map((item, j) => <tr key={j}><th scope="row">{item.key}</th><td><ReviewValue value={item.value} /></td></tr>)}</tbody>
-              </table>
+              <div key={i} className="tablewrap">
+                <table className="kv">
+                  <tbody>{f.items.map((item, j) => <tr key={j}><th scope="row">{item.key}</th><td><ReviewValue value={item.value} /></td></tr>)}</tbody>
+                </table>
+              </div>
             );
           case 'textbox':
             return (

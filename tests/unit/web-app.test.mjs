@@ -903,8 +903,12 @@ describe('components and catalog', () => {
 
     it('reveal: an array of records is a table headed as Slack heads it, never JSON (run 1042)', () => {
       const html = draw(gateOf('confirm', [{ type: 'reveal', button_label: 'View items (1)', content: [{ name_en: 'Monitor Stand', unit_price: 19.99 }] }, actions({ action: 'confirm', label: 'OK' })]));
-      assert.match(html, /<details class="reveal"><summary>View items \(1\)<\/summary><table class="kv nested"><thead><tr><th>Name En<\/th><th>Unit Price<\/th><\/tr><\/thead><tbody><tr><td>Monitor Stand<\/td><td>19.99<\/td><\/tr>/);
+      assert.match(html, /<details class="reveal"><summary>View items \(1\)<\/summary><div class="tablewrap"><table class="kv nested"><thead><tr><th>Name En<\/th><th>Unit Price<\/th><\/tr><\/thead><tbody><tr><td>Monitor Stand<\/td><td>19.99<\/td><\/tr>/);
       assert.doesNotMatch(html, /\{&quot;/);
+    });
+
+    it('a table wider than its pane scrolls sideways inside it', () => {
+      assert.match(readFileSync(join(APP_DIR, 'styles.css'), 'utf8'), /^\.tablewrap \{[^}]*overflow-x: auto;/m);
     });
 
     it('list_selection: a table, each row\'s own action button in place of typing its id', () => {
