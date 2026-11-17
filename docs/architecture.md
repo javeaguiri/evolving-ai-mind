@@ -868,6 +868,7 @@ Any high/critical CVE blocks the addition unless a patch is available and pinned
 | `react`, `react-dom` | 19.3.1 (dev) | ~250M | MIT | The web app's components (`docs/arch-web-app.md` §1) — bundled into the site by `deploy-web.mjs`, imported by no Lambda; `react-dom` brings `scheduler` | Sprint 17 |
 | `i18next`, `react-i18next` | 27.1.3, 18.0.2 (dev) | ~35M, ~26M | MIT | The web app's catalogs (§13); `react-i18next` brings `html-parse-stringify` | Sprint 17 |
 | `i18next-icu`, `intl-messageformat` | 2.7.0, 12.1.5 (dev) | ~1.4M, ~31M | MIT, BSD-3-Clause | ICU MessageFormat — plurals and parameters in the catalogs; brings three `@formatjs` parsers | Sprint 17 |
+| `marked` | 18.1.3 (dev, exact) | ~130M | MIT | The web app's markdown (`docs/arch-web-app.md` §11) — its lexer only: `Markdown.jsx` draws the tokens as React elements, so raw HTML is shown as text, an image as its description, never inserted; no dependencies. Pinned to a release two weeks old | Sprint 17 |
 
 ### Candidates approved for future addition
 

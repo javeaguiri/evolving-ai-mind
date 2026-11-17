@@ -315,6 +315,26 @@ table.grid .num { text-align: end; font-variant-numeric: tabular-nums; white-spa
   .settings nav { flex: none; border-inline-end: 0; border-block-end: 1px solid var(--line); }
 }
 
+/* ---------- markdown from /proc ---------- */
+.md { overflow-wrap: anywhere; }
+.md > :first-child { margin-block-start: 0; }
+.md > :last-child { margin-block-end: 0; }
+.md p, .md ul, .md ol, .md blockquote, .md pre { margin-block: 0 8px; }
+.md h3, .md h4, .md h5 { margin-block: 12px 6px; font-size: 14px; font-weight: 600; }
+.md h3 { font-size: 15px; }
+.md ul, .md ol { padding-inline-start: 20px; }
+.md blockquote { margin-inline: 0; padding-inline-start: 10px; border-inline-start: 3px solid var(--line); color: var(--muted); }
+.md code { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; background: var(--soft); border-radius: 4px; padding-inline: 4px; }
+.md pre { overflow-x: auto; background: var(--soft); border-radius: 8px; padding: 8px 10px; }
+.md pre code { background: transparent; padding: 0; }
+.md hr { border: 0; border-block-start: 1px solid var(--line); margin-block: 10px; }
+.mdtable { overflow-x: auto; margin-block: 0 8px; }
+.mdtable table { border-collapse: collapse; }
+.mdtable th, .mdtable td { padding-block: 4px; padding-inline: 8px 14px; border-block-end: 1px solid var(--soft); text-align: start; }
+.mdtable th { font-size: 12px; color: var(--muted); font-weight: 500; border-block-end-color: var(--line); white-space: nowrap; }
+.mdtable .al-right { text-align: end; font-variant-numeric: tabular-nums; }
+.mdtable .al-center { text-align: center; }
+
 /* ---------- sign-in problem ---------- */
 .signin { padding-block: 24px; padding-inline: 16px; }
 .signin h1 { font-size: 1.5rem; font-weight: 600; }

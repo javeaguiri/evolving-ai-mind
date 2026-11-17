@@ -405,6 +405,7 @@ describe('components and catalog', () => {
                    export { WaitingList } from './shell/NeedsYou.jsx';
                    export { RecordsBody, RecordDetail } from './panels/RecordsPanel.jsx';
                    export { Drawer } from './shell/Drawer.jsx';
+                   export { Markdown } from './Markdown.jsx';
                    export { initI18n } from './i18n.mjs';
                    export { createElement } from 'react';`,
         resolveDir: APP_DIR, loader: 'jsx',
@@ -599,6 +600,41 @@ describe('components and catalog', () => {
       row: BODY.rows[0], where: { locale: 'en', timeZone: 'Europe/Madrid' },
     }));
     assert.match(html, /<dt>Id<\/dt><dd>1<\/dd>.*<dt>Title<\/dt><dd>Shop A<\/dd>.*<dt>Amount<\/dt><dd>€62.40<\/dd>.*<dt>Currency<\/dt><dd>EUR<\/dd>/);
+  });
+
+  describe('Markdown — /proc\'s markdown as elements, never as HTML (§11)', () => {
+    const md = text => ui.renderToString(ui.createElement(ui.Markdown, { text }));
+
+    it('raw HTML is shown as text; nothing is inserted', () => {
+      const html = md('Hi <b>there</b>\n\n<script>alert(1)</script>\n\n<img src=x onerror=alert(1)>');
+      assert.doesNotMatch(html, /<script|<img|<b>/);
+      assert.match(html.replace(/<!-- -->/g, ''), /Hi &lt;b&gt;there&lt;\/b&gt;/);
+      assert.match(html, /<p>&lt;script&gt;alert\(1\)&lt;\/script&gt;\n?<\/p>/);
+    });
+
+    it('an image is its description, never fetched', () => {
+      const html = md('Look ![the receipt](https://example.test/r.png?leak=1)');
+      assert.doesNotMatch(html, /<img|example\.test/);
+      assert.match(html, /<span>the receipt<\/span>/);
+    });
+
+    it('links only to http, https and mailto, in a new tab with noopener noreferrer', () => {
+      const html = md('[ok](https://a.example) [mail](mailto:x@a.example) [bad](javascript:alert(1)) [data](data:text/html,x)');
+      assert.match(html, /<a href="https:\/\/a.example" target="_blank" rel="noopener noreferrer">ok<\/a>/);
+      assert.match(html, /<a href="mailto:x@a.example" target="_blank" rel="noopener noreferrer">mail<\/a>/);
+      assert.doesNotMatch(html, /javascript:|data:text/);
+      assert.match(html, /<span>bad<\/span>.*<span>data<\/span>/);
+    });
+
+    it('a table with its alignment as classes; lists, tasks, headings, emphasis and code', () => {
+      const html = md('## Month\n\n| Category | Spent |\n|---|--:|\n| Food | 12,40 € |\n\n- [x] **done** & dusted\n- `code`\n\n3. third\n4. fourth');
+      assert.match(html, /<h4>Month<\/h4>/);
+      assert.match(html, /<div class="mdtable"><table><thead><tr><th>Category<\/th><th class="al-right">Spent<\/th><\/tr><\/thead><tbody><tr><td>Food<\/td><td class="al-right">12,40 €<\/td><\/tr><\/tbody><\/table><\/div>/);
+      assert.match(html, /<li><span aria-hidden="true">☑ <\/span><strong>done<\/strong> &amp; dusted<\/li>/);
+      assert.match(html, /<li><code>code<\/code><\/li>/);
+      assert.match(html, /<ol start="3"><li>third<\/li><li>fourth<\/li><\/ol>/);
+      assert.doesNotMatch(html, /style=/);
+    });
   });
 
   it('a refused sign-in says so and offers to sign in again', () => {
