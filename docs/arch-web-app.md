@@ -352,7 +352,8 @@ belongs to the data rather than to a view — column labels, `format`, `total`, 
 | `report` | A workflow's latest output (§2.6) | The markdown that workflow produced, with when and from which run; **↻ Refresh** runs the workflow again (§4.3) | `workflow` | 0 |
 
 A column named in a view's or widget's options is a name, or `{ name, label, format }` with
-`format` as §6.3 defines it. In Phase 0 that is where labels and formats come from; once the
+`format` as §6.3 defines it — `currency` with the row's own `currency_column` or a fixed ISO 4217
+`currency`, one of the two; `percent`; `date`. In Phase 0 that is where labels and formats come from; once the
 registry carries `display` metadata (§6.3, Phase 1) it supplies them, and a panel names only what
 it changes.
 

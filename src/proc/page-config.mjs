@@ -10,7 +10,9 @@
 //
 //   workflow  workflow | domain, limit?, show_output?
 //   records   source (a table or view) | entity, view? (the one it opens on), the views' options —
-//             the viewer switches between the views that fit, so the config names no widget
+//             the viewer switches between the views that fit, so the config names no widget.
+//             A column is a name, or { name, label?, format? } — format as §6.3: currency (with
+//             the row's own currency_column, or a fixed ISO 4217 currency), percent, date
 //   summary   widget: chart | metric (over a source) or report (over a workflow), and its options
 //   novia     topic
 //
@@ -22,6 +24,8 @@ export const PANEL_WIDTHS = ['1/3', '1/2', '2/3', 'full'];
 export const VIEWS        = ['grid', 'list', 'document'];
 export const WIDGETS      = ['chart', 'metric', 'report'];
 const CHART_KINDS = ['bar', 'line', 'pie'];
+export const COLUMN_FORMATS = ['currency', 'percent', 'date'];
+const COLUMN_KEYS = ['name', 'label', 'format', 'currency_column', 'currency'];
 
 const KIND_KEYS = {
   workflow: ['workflow', 'domain', 'limit', 'show_output'],
@@ -127,6 +131,32 @@ function columnProblems(names, source, report) {
   }
 }
 
+/** A records panel's `columns`: each a name, or { name, label?, format? } as §4.2 and §6.3 define. */
+function columnSpecProblems(columns, source, report) {
+  if (!Array.isArray(columns)) { report('columns is an array'); return; }
+  for (const column of columns) {
+    if (typeof column === 'string') { columnProblems([column], source, report); continue; }
+    if (!column || typeof column !== 'object' || !isText(column.name)) { report('a column is a name, or { name, label?, format? }'); continue; }
+    const where = `column "${column.name}"`;
+    const unknown = Object.keys(column).filter(k => !COLUMN_KEYS.includes(k));
+    if (unknown.length) report(`${where}: unknown key${unknown.length > 1 ? 's' : ''} ${unknown.join(', ')}`);
+    columnProblems([column.name], source, report);
+    if (column.label !== undefined && !isLabel(column.label)) report(`${where}: label is a string or a language map`);
+    if (column.format !== undefined && !COLUMN_FORMATS.includes(column.format)) report(`${where}: format is one of ${COLUMN_FORMATS.join(', ')}`);
+    const currencyKeys = ['currency_column', 'currency'].filter(k => column[k] !== undefined);
+    if (column.format === 'currency') {
+      if (currencyKeys.length !== 1) report(`${where}: a currency names its currency_column or its currency, one of the two`);
+      if (column.currency_column !== undefined) {
+        if (!isText(column.currency_column)) report(`${where}: currency_column is a column name`);
+        else columnProblems([column.currency_column], source, report);
+      }
+      if (column.currency !== undefined && !/^[A-Z]{3}$/.test(column.currency)) report(`${where}: currency is an ISO 4217 code, such as EUR`);
+    } else if (currencyKeys.length) {
+      report(`${where}: ${currencyKeys.join(' and ')} only with format currency`);
+    }
+  }
+}
+
 function filterProblems(filter, source, report) {
   if (filter === undefined) return;
   if (!Array.isArray(filter) || filter.some(f => !f || typeof f !== 'object' || !isText(f.column) || !isText(f.op))) {
@@ -145,10 +175,7 @@ function recordsProblems(config, registry, report) {
   if (view !== undefined && !viewsFor(source.type).includes(view)) {
     report(`view is one of ${viewsFor(source.type).join(', ')} for a ${source.type}`);
   }
-  if (columns !== undefined) {
-    if (!Array.isArray(columns)) report('columns is an array');
-    else columnProblems(columns.map(c => (typeof c === 'string' ? c : c?.name)), source, report);
-  }
+  if (columns !== undefined) columnSpecProblems(columns, source, report);
   filterProblems(config.filter, source, report);
   if (limit !== undefined && !isWhole(limit, 1, 500)) report('limit is a whole number from 1 to 500');
   for (const [key, value] of [['title_column', titleColumn], ['picker_column', pickerColumn]]) {
