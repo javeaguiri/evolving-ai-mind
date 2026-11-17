@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: evolving-mind-ai
-  version: 3.7.2
+  version: 3.7.3
   description: >
     Self-evolving cognitive automation system.
     Slack → Lambda → PostgreSQL → LLM pipeline.
@@ -1769,7 +1769,7 @@ paths:
         - { name: order_by, in: query, required: false, schema: { type: string } }
         - { name: limit,    in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
       responses:
-        '200': { description: "{ columns: [{ name, type }], rows, more, totalMatching? }" }
+        '200': { description: "{ columns: [{ name, type, label, labelFallback }], rows, more, totalMatching? } — as GET /proc/sources/{source}/rows" }
         '400': { description: invalid_query, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '401': { description: The Cognito authorizer refused the token. }
         '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
@@ -2348,8 +2348,11 @@ paths:
         table or view, or an entity name (its root table is read); a PGC_ system table is never
         a source. Read-only in Phase 0. Columns default to every non-vector column; a named
         column, or one a filter names, must be registered. The page is bounded and says so:
-        `more` is true when SERV withheld rows past `limit`, with `totalMatching`. The household
-        role is required — domain data belongs to the household.
+        `more` is true when SERV withheld rows past `limit`, with `totalMatching`. Each column
+        carries the `label` a person reads (docs/arch-web-app.md §13): the registry's, once it
+        holds column labels (§6.3, Phase 1); until then the humanised name, marked
+        `labelFallback: true`. The household role is required — domain data belongs to the
+        household.
       operationId: readSourceRows
       tags: [PROC]
       parameters:
@@ -2362,7 +2365,7 @@ paths:
         - { name: limit,    in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
       responses:
         '200':
-          description: "{ columns: [{ name, type }], rows, more, totalMatching? }"
+          description: "{ columns: [{ name, type, label, labelFallback }], rows, more, totalMatching? }"
         '400': { description: "invalid_query — a malformed filter, an unregistered column, or limit out of range." }
         '401': { description: principal_required }
         '403': { description: household_required }
