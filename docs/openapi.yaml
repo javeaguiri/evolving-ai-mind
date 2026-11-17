@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: evolving-mind-ai
-  version: 3.9.0
+  version: 3.10.0
   description: >
     Self-evolving cognitive automation system.
     Slack → Lambda → PostgreSQL → LLM pipeline.
@@ -133,7 +133,8 @@ components:
       properties:
         runId:         { type: integer }
         workflowName:  { type: string }
-        workflowLabel: { type: string, nullable: true, description: "The workflow's display.label — a string or a language map, as stored." }
+        workflowLabel: { type: string, nullable: true, description: "What a person reads for the workflow, resolved as GET /proc/workflows resolves it (docs/arch-web-app.md §13): its display.label in the household's language, else the humanised name — a system workflow's too. Null only when the run's workflow is gone." }
+        labelFallback: { type: boolean, description: "True when workflowLabel is the humanised name, not a stored label." }
         label:         { type: string, nullable: true }
         status:        { type: string }
         startedAt:     { type: string, format: date-time }
@@ -2215,7 +2216,8 @@ paths:
         and those the principal may not see are dropped, so a page can hold fewer than `limit`;
         `cursor` is the id of the last run examined, and `more` is true when runs past it remain.
         `label` is the run's own label (its workflow's display.run_label, resolved once every token
-        has a value) or null; the app then shows `workflowLabel` and `startedAt`.
+        has a value) or null; the app then shows `workflowLabel` and `startedAt`. `workflowLabel`
+        is resolved as a waiting gate's is, so a run and its gate name the workflow alike.
       operationId: listRuns
       tags: [PROC]
       parameters:
