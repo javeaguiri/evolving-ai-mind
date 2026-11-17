@@ -104,6 +104,24 @@ export function gridOf(inputs) {
 }
 
 /**
+ * A grid's sections (§5.2): each run of rows under one `group`, drawn as that group's subheading
+ * over its own table. Rows keep their index in the whole grid, so keyboard movement runs on from
+ * one section into the next.
+ *
+ * @param {{ rows: object[] }} grid
+ * @returns {{ group: string|null, rows: { row: object, r: number }[] }[]}
+ */
+export function gridSections(grid) {
+  const sections = [];
+  grid.rows.forEach((row, r) => {
+    const last = sections.at(-1);
+    if (last && last.group === row.group) last.rows.push({ row, r });
+    else sections.push({ group: row.group, rows: [{ row, r }] });
+  });
+  return sections;
+}
+
+/**
  * The cell keyboard movement lands on (§5.2): Enter and the arrow keys move between cells; past
  * an edge it stays.
  *

@@ -415,7 +415,13 @@ table.grid.edit tbody tr { cursor: default; }
 table.grid.edit tbody tr:hover { background: transparent; }
 table.grid.edit tbody th { text-align: start; font-weight: 500; padding-inline: 8px 16px; white-space: nowrap; }
 table.grid.edit td { padding-block: 2px; padding-inline: 4px; }
-table.grid.edit tr.grp th { background: var(--ground); font-weight: 600; font-size: 12.5px; padding-block: 6px; padding-inline: 8px; }
+.grids.one { max-inline-size: 30rem; }
+.grids section + section { margin-block-start: 14px; }
+.gridgroup { margin: 0 0 4px; padding-inline: 8px; font-size: 14px; font-weight: 600; }
+.grids table.grid.edit { table-layout: fixed; inline-size: 100%; }
+.grids table.grid.edit thead th:first-child { inline-size: 40%; }
+.grids.one table.grid.edit thead th:first-child { inline-size: 60%; }
+.grids table.grid.edit tbody th { white-space: normal; overflow-wrap: anywhere; }
 .cell {
   inline-size: 100%;
   min-inline-size: 7rem;

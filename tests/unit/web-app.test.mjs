@@ -21,7 +21,7 @@ import { createApiClient, ApiError } from '../../src/ui/web/app/api/client.mjs';
 import { matchPath, matchLocation }  from '../../src/ui/web/app/router.mjs';
 import { formatValue, isNumericColumn }   from '../../src/ui/web/app/records/format.mjs';
 import { rowsRequest, mergeColumns, listFields, initialView, viewKey } from '../../src/ui/web/app/records/query.mjs';
-import { inputsOf, initialValues, isChanged, fieldProblems, formValues, answerFor, gridOf, moveCell, listColumns } from '../../src/ui/web/app/gates/gate.mjs';
+import { inputsOf, initialValues, isChanged, fieldProblems, formValues, answerFor, gridOf, gridSections, moveCell, listColumns } from '../../src/ui/web/app/gates/gate.mjs';
 import { liveScript, isNewBuild } from '../../src/ui/web/app/shell/version.mjs';
 import { runName, panelWorkflows, foldPoint, addMessages, threadDelay, isActive, isWorking, THREAD_POLL_MS, THREAD_POLL_MAX_MS } from '../../src/ui/web/app/runs/runs.mjs';
 import { pageItems, domainItems, sectionOf, currentItem, gateHeadline, relativeAge, pollDelay, POLL_MS, POLL_MAX_MS } from '../../src/ui/web/app/shell/nav.mjs';
@@ -498,6 +498,14 @@ describe('gates — the answer Slack sends, checked before it is sent (§5)', ()
     assert.equal(gridOf([]), null);
   });
 
+  it('gridSections: each run of rows under one group, rows keeping their index in the whole grid', () => {
+    const row = (key, group) => ({ key, label: key, group, cells: {} });
+    const sections = gridSections({ rows: [row('a', null), row('b', 'Income'), row('c', 'Income'), row('d', 'Fixed'), row('e', 'Income')] });
+    assert.deepEqual(sections.map(s => [s.group, s.rows.map(x => `${x.row.key}${x.r}`)]), [
+      [null, ['a0']], ['Income', ['b1', 'c2']], ['Fixed', ['d3']], ['Income', ['e4']],
+    ]);
+  });
+
   it('moveCell: Enter and arrows move, stopping at the edges', () => {
     const size = { rows: 3, columns: 2 };
     assert.deepEqual(moveCell({ r: 0, c: 0 }, 'Enter', size), { r: 1, c: 0 });
@@ -900,13 +908,13 @@ describe('components and catalog', () => {
       assert.match(html, /<input id="f-on" type="date" name="on" value=""\/>/);
     });
 
-    it('form with grid hints: one grid — row headers, group rows, a blank where a row has no cell', () => {
+    it('form with grid hints: each group a subheading over its own table — row headers, a blank where a row has no cell', () => {
       const cell = (row, column, label, group, initial) => ({ type: 'input', name: `${row}_${column}`, input_type: 'number', label, optional: false, row, column, group, initial });
       const html = draw(gateOf('form', [cell('1', 'Amount', 'Food', 'Monthly', 400), cell('1', 'Limit', 'Food', 'Monthly', 500), cell('2', 'Amount', 'Gifts', 'Annual', 300), actions({ action: 'save', label: 'Save' })]));
-      assert.match(html, /<table class="grid edit"><thead><tr><th scope="col" aria-hidden="true"><\/th><th scope="col">Amount<\/th><th scope="col">Limit<\/th><\/tr><\/thead>/);
-      assert.match(html, /<tr class="grp"><th colSpan="3" scope="colgroup">Monthly<\/th><\/tr><tr><th scope="row">Food<\/th><td><input id="f-1_Amount" aria-label="Food — Amount" data-cell="0:0" type="text" inputMode="decimal" class="cell num" name="1_Amount" value="400"\/><\/td>/);
-      assert.match(html, /<tr class="grp"><th colSpan="3" scope="colgroup">Annual<\/th><\/tr><tr><th scope="row">Gifts<\/th><td>.*data-cell="1:0".*<\/td><td><\/td><\/tr>/);
-      assert.equal((html.match(/<table class="grid edit">/g) ?? []).length, 1);
+      assert.match(html, /<div class="grids"><section><h4 class="gridgroup">Monthly<\/h4><div class="tablewrap"><table class="grid edit"><thead><tr><th scope="col" aria-hidden="true"><\/th><th scope="col">Amount<\/th><th scope="col">Limit<\/th><\/tr><\/thead>/);
+      assert.match(html, /<tbody><tr><th scope="row">Food<\/th><td><input id="f-1_Amount" aria-label="Food — Amount" data-cell="0:0" type="text" inputMode="decimal" class="cell num" name="1_Amount" value="400"\/><\/td>/);
+      assert.match(html, /<section><h4 class="gridgroup">Annual<\/h4>.*<tr><th scope="row">Gifts<\/th><td>.*data-cell="1:0".*<\/td><td><\/td><\/tr>/);
+      assert.equal((html.match(/<table class="grid edit">/g) ?? []).length, 2);
     });
 
     it('a button that opens a modal on Slack waits for its text in place', () => {

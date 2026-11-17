@@ -533,7 +533,9 @@ their layout comes from the registry.
 
 When **every** input field carries `row` and `column`, the web lays the form out as a grid: rows
 in first-appearance order, columns in first-appearance order, the field `label` of a row's first
-field as its row header, `group` as a heading row. A missing cell is blank. Slack ignores `row` and
+field as its row header. Each run of rows under one `group` is that group's subheading over its own
+table, the tables laid out alike so their columns line up, one Save under them all; keyboard
+movement runs on from one table into the next. A missing cell is blank. Slack ignores `row` and
 `column`, renders `group` as a header between fields, and stacks the inputs as today. The encoding
 of a record id inside a field `name` stays workflow-local.
 
@@ -707,7 +709,8 @@ shape.
         │
         └── provider 'web' ────► <Form>: every input carries row + column
                                   → <Grid>: rows by row, columns by column,
-                                  group as a heading row; no block ceiling
+                                  each group a subheading over its own table;
+                                  no block ceiling
 
  Both answer the same way:
    { action:'save', formValues:{ amt_17:'420', amt_18:'95', … } }
