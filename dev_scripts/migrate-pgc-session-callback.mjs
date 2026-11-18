@@ -3,88 +3,125 @@
 // See LICENSE file in the project root for full license terms.
 // dev_scripts/migrate-pgc-session-callback.mjs
 //
-// Migration: Sprint 18 item 1 (docs/sprints/sprint-18.md, decisions O and Q) — data only.
-// The columns are added with SERV addColumn and slack_thread_ts dropped with dropColumn, so the
-// registry stays in step; this script fills the new columns from what the database already holds:
+// Migration: Sprint 18 item 1 (decisions O, Q, S) — brings a PGC database bootstrapped before
+// the change up to its templates. A database bootstrapped after it already has this shape, from
+// PGC_Session.json / PGC_UiMessage.json and seed_PGC_Schema.json, and needs nothing.
 //
-//   PGC_Session.callback    ← { provider: 'slack', channel, threadId: slack_thread_ts } for every
-//                             session with a thread and no callback. channel is taken from an
-//                             inbox row on the same Slack thread when one exists (the inbox began
-//                             2026-11-15), else null — a Slack message carries its own channel,
-//                             and the session's callback is only the fallback.
-//   PGC_UiMessage.session_id ← payload.sessionId, for every row that carries one and has none.
+// Everything goes through SERV, so the PGC_Schema registry moves with each DDL change and the
+// script needs only SERV_API_URL and INTERNAL_API_KEY — never a database connection.
 //
-// Idempotent: only rows still unfilled are written. Run it before the deploy and again after it,
-// to catch sessions the old code created in between; then drop slack_thread_ts.
+//   1. Columns   addColumn PGC_Session.callback (jsonb), .topic (text), .label (text) and
+//                PGC_UiMessage.session_id (integer). A column already there is left alone.
+//   2. Backfill  PGC_Session.callback ← { provider: 'slack', channel, threadId: slack_thread_ts }
+//                for each session with a thread and no callback; channel from an inbox row on the
+//                same Slack thread when one exists, else null (a Slack message carries its own
+//                channel — the session's callback is only the fallback).
+//                PGC_UiMessage.session_id ← payload.sessionId, for each row that has none.
+//                Only unfilled rows are written; skipped once slack_thread_ts is gone.
+//   3. Drop      (--drop only) dropColumn PGC_Session.slack_thread_ts. Run after the code that
+//                reads callback is deployed, with the backfill rerun just before it.
 //
-// Usage:
-//   node dev_scripts/migrate-pgc-session-callback.mjs           # report, then write
+// Then the registry is checked against the database (upsert-schema-registry.mjs --check). With
+// --drop every table must match, or the script fails; before the drop PGC_Session is expected to
+// differ by slack_thread_ts alone.
+//
+// Usage — an instance bootstrapped before Sprint 18:
 //   node dev_scripts/migrate-pgc-session-callback.mjs --check   # report only, writes nothing
+//   node dev_scripts/migrate-pgc-session-callback.mjs           # phases 1 and 2
+//   (deploy)
+//   node dev_scripts/migrate-pgc-session-callback.mjs --drop    # phases 1, 2 and 3
 
-import pg from 'pg';
+import { spawnSync }                        from 'child_process';
+import { fileURLToPath }                    from 'url';
+import { servPost, updateRows }             from '../src/shared/serv-client.mjs';
 
-const { Client } = pg;
-
-const PGC_DATABASE_URL = process.env.PGC_DATABASE_URL;
-if (!PGC_DATABASE_URL) {
-  console.error('ERROR: PGC_DATABASE_URL env var not set');
+if (!process.env.SERV_API_URL) {
+  console.error('ERROR: SERV_API_URL env var not set');
   process.exit(1);
 }
-const check = process.argv.includes('--check');
+const CHECK = process.argv.includes('--check');
+const DROP  = process.argv.includes('--drop');
 
-// A session's Slack channel, from any inbox row on its thread.
-const SESSION_CALLBACK_FROM = `
-  FROM "PGC_Session" s
-  LEFT JOIN LATERAL (
-    SELECT m.channel FROM "PGC_UiMessage" m
-     WHERE m.provider = 'slack' AND m.thread_id = s.slack_thread_ts AND m.channel IS NOT NULL
-     LIMIT 1
-  ) ch ON true
-  WHERE s.slack_thread_ts IS NOT NULL AND s.callback IS NULL`;
+const NEW_COLUMNS = [
+  { tableName: 'PGC_Session',   column: { name: 'callback',   type: 'jsonb',   nullable: true } },
+  { tableName: 'PGC_Session',   column: { name: 'topic',      type: 'text',    nullable: true } },
+  { tableName: 'PGC_Session',   column: { name: 'label',      type: 'text',    nullable: true } },
+  { tableName: 'PGC_UiMessage', column: { name: 'session_id', type: 'integer', nullable: true } },
+];
 
-const SESSION_CALLBACK_COUNT = `
-  SELECT count(*)::int AS sessions, count(ch.channel)::int AS with_channel ${SESSION_CALLBACK_FROM}`;
+const select = async sql => (await servPost('/api/v1/serv/table/runSql', { target: 'pgc', selectSql: sql })).rows;
 
-const SESSION_CALLBACK_UPDATE = `
-  UPDATE "PGC_Session" t
-     SET callback = jsonb_build_object('provider', 'slack', 'channel', f.channel, 'threadId', f.thread_ts)
-    FROM (SELECT s.id, s.slack_thread_ts AS thread_ts, ch.channel ${SESSION_CALLBACK_FROM}) f
-   WHERE t.id = f.id`;
+const liveColumns = async () => new Set((await select(
+  `SELECT table_name || '.' || column_name AS col FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name IN ('PGC_Session', 'PGC_UiMessage')`)).map(r => r.col));
 
-const INBOX_WHERE = `
-  WHERE session_id IS NULL AND payload ? 'sessionId' AND (payload->>'sessionId') ~ '^[0-9]+$'`;
+// ── 1. Columns ──────────────────────────────────────────────────────────────
+let live = await liveColumns();
+for (const { tableName, column } of NEW_COLUMNS) {
+  const name = `${tableName}.${column.name}`;
+  if (live.has(name))  { console.log(`  ${name}  already exists`); continue; }
+  if (CHECK)           { console.log(`  ${name}  would add`);      continue; }
+  const r = await servPost('/api/v1/serv/schema/addColumn', { tableName, column });
+  console.log(`  ${name}  ${r.action}`);
+}
+live = await liveColumns();
 
-const INBOX_COUNT  = `SELECT count(*)::int AS rows FROM "PGC_UiMessage" ${INBOX_WHERE}`;
-const INBOX_UPDATE = `UPDATE "PGC_UiMessage" SET session_id = (payload->>'sessionId')::int ${INBOX_WHERE}`;
-
-const client = new Client({
-  connectionString: PGC_DATABASE_URL,
-  connectionTimeoutMillis: 5000,
-  ssl: { rejectUnauthorized: false },
-});
-
-try {
-  await client.connect();
-  const { rows: [sess] }  = await client.query(SESSION_CALLBACK_COUNT);
-  const { rows: [inbox] } = await client.query(INBOX_COUNT);
-  console.log(`PGC_Session:   ${sess.sessions} to fill (${sess.with_channel} with a channel from the inbox)`);
-  console.log(`PGC_UiMessage: ${inbox.rows} to fill`);
-
-  if (check) {
-    console.log('--check: nothing written');
-  } else if (sess.sessions === 0 && inbox.rows === 0) {
-    console.log('no changes — already current');
-  } else {
-    await client.query('BEGIN');
-    const s = await client.query(SESSION_CALLBACK_UPDATE);
-    const m = await client.query(INBOX_UPDATE);
-    await client.query('COMMIT');
-    console.log(`written: ${s.rowCount} sessions, ${m.rowCount} inbox rows`);
+// ── 2. Backfill ─────────────────────────────────────────────────────────────
+if (!live.has('PGC_Session.slack_thread_ts')) {
+  console.log('  PGC_Session.callback  nothing to fill — slack_thread_ts is gone');
+} else if (!live.has('PGC_Session.callback')) {
+  console.log('  PGC_Session.callback  would fill once the column exists');
+} else {
+  const sessions = await select(`
+    SELECT s.id, s.slack_thread_ts AS thread_ts, ch.channel
+      FROM "PGC_Session" s
+      LEFT JOIN LATERAL (
+        SELECT m.channel FROM "PGC_UiMessage" m
+         WHERE m.provider = 'slack' AND m.thread_id = s.slack_thread_ts AND m.channel IS NOT NULL
+         LIMIT 1
+      ) ch ON true
+     WHERE s.slack_thread_ts IS NOT NULL AND s.callback IS NULL`);
+  const withChannel = sessions.filter(s => s.channel).length;
+  console.log(`  PGC_Session.callback  ${sessions.length} to fill (${withChannel} with a channel from the inbox)`);
+  if (!CHECK) {
+    for (const s of sessions) {
+      await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: s.id }],
+        { callback: { provider: 'slack', channel: s.channel ?? null, threadId: s.thread_ts } });
+    }
   }
-} catch (error) {
-  await client.query('ROLLBACK').catch(() => {});
-  console.error('ERROR:', error.message);
-  process.exitCode = 1;
-} finally {
-  await client.end();
+}
+
+if (!live.has('PGC_UiMessage.session_id')) {
+  console.log('  PGC_UiMessage.session_id  would fill once the column exists');
+} else {
+  const rows = await select(`
+    SELECT id, (payload->>'sessionId')::int AS session_id FROM "PGC_UiMessage"
+     WHERE session_id IS NULL AND payload ? 'sessionId' AND (payload->>'sessionId') ~ '^[0-9]+$'`);
+  console.log(`  PGC_UiMessage.session_id  ${rows.length} to fill`);
+  if (!CHECK) {
+    const bySession = Map.groupBy(rows, r => r.session_id);
+    for (const [sessionId, group] of bySession) {
+      await updateRows('PGC_UiMessage', [{ column: 'id', op: 'in', value: group.map(r => r.id) }],
+        { session_id: sessionId });
+    }
+  }
+}
+
+// ── 3. Drop ─────────────────────────────────────────────────────────────────
+if (DROP) {
+  if (!live.has('PGC_Session.slack_thread_ts')) console.log('  PGC_Session.slack_thread_ts  already dropped');
+  else if (CHECK)                               console.log('  PGC_Session.slack_thread_ts  would drop');
+  else {
+    const r = await servPost('/api/v1/serv/schema/dropColumn', { tableName: 'PGC_Session', columnName: 'slack_thread_ts' });
+    console.log(`  PGC_Session.slack_thread_ts  ${r.action}`);
+  }
+}
+
+// ── The registry against the database ───────────────────────────────────────
+console.log('\nRegistry check:');
+const registry = fileURLToPath(new URL('./upsert-schema-registry.mjs', import.meta.url));
+const result   = spawnSync(process.execPath, [registry, '--check'], { stdio: 'inherit' });
+if (DROP && !CHECK && result.status !== 0) {
+  console.error('ERROR: the registry and the database still disagree after the drop');
+  process.exit(1);
 }
