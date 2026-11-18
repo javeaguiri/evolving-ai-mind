@@ -255,6 +255,19 @@ async function loadSessionEntries(sessionId) {
   return rows;
 }
 
+/**
+ * The callback a session keeps (PGC_Session.callback): the incoming one when it names a thread,
+ * else the one the session already has — so a reply arriving without a thread never loses it.
+ * Pure — exported for test.
+ *
+ * @param {object|null} stored    The session's callback
+ * @param {object|null} incoming  The callback the current message carries
+ * @returns {object|null}
+ */
+export function keptCallback(stored, incoming) {
+  return incoming?.threadId ? incoming : (stored ?? incoming ?? null);
+}
+
 export async function handle(req) {
   const body     = req.body ?? {};
   const callback = req.callback ?? body.callback ?? null;
@@ -265,7 +278,7 @@ export async function handle(req) {
     return handleGateResume(body, callback, traceId, req);
   }
 
-  const { prompt: typed, answers, note, sessionId: existingSessionId, slackUser } = body;
+  const { prompt: typed, answers, note, sessionId: existingSessionId, user } = body;
 
   // A reply is either typed text or answers to the questions her last respond asked.
   if (!typed?.trim() && !Array.isArray(answers)) {
@@ -273,7 +286,7 @@ export async function handle(req) {
     return;
   }
 
-  console.info('proc/minds-eye: received', { traceId, slackUser, existingSessionId });
+  console.info('proc/minds-eye: received', { traceId, user, existingSessionId });
 
   const { prefs, systemPrompt } = await loadPrefsAndPrompt();
 
@@ -296,7 +309,7 @@ export async function handle(req) {
   } else {
     const sessResp = await insertRow('PGC_Session', {
       session_type:           'minds_eye',
-      slack_thread_ts:        threadTs,
+      callback,
       minds_eye_turn_count:   0,
       minds_eye_action_count: 0,
     });
@@ -338,7 +351,7 @@ export async function handle(req) {
     currentTurnCount:   session.minds_eye_turn_count   ?? 0,
     currentActionCount: session.minds_eye_action_count ?? 0,
     currentSeq:         nextSeq + 1,
-    threadTs:           threadTs ?? session.slack_thread_ts,
+    threadTs:           threadTs ?? session.callback?.threadId,
   });
 
   if (req.source === 'http') {
@@ -511,7 +524,7 @@ async function handleGateResume(body, callback, traceId, req) {
       currentTurnCount:             session.minds_eye_turn_count ?? 0,
       currentActionCount:           0,
       currentSeq:                   newSeq + 1,
-      threadTs:                     callback?.threadId ?? session.slack_thread_ts,
+      threadTs:                     callback?.threadId ?? session.callback?.threadId,
       postContinueGateAfterRespond: true,
     });
     if (req?.source === 'http') return ok({ success: true, sessionId: session.id }, req.correlationId);
@@ -555,7 +568,7 @@ async function handleGateResume(body, callback, traceId, req) {
       currentTurnCount:   session.minds_eye_turn_count ?? 0,
       currentActionCount: 0,
       currentSeq:         nextSeq,
-      threadTs:           callback?.threadId ?? session.slack_thread_ts,
+      threadTs:           callback?.threadId ?? session.callback?.threadId,
     });
     if (req?.source === 'http') return ok({ success: true, sessionId: session.id }, req.correlationId);
     return;
@@ -651,7 +664,7 @@ async function handleGateResume(body, callback, traceId, req) {
     currentTurnCount:   session.minds_eye_turn_count ?? 0,
     currentActionCount: newActionCount,
     currentSeq:         currentSeq + 1,
-    threadTs:           callback?.threadId ?? session.slack_thread_ts,
+    threadTs:           callback?.threadId ?? session.callback?.threadId,
   });
 
   if (req?.source === 'http') {
@@ -721,7 +734,7 @@ async function handleRunEvent({ session, entries, runEvent, callback, traceId, r
     currentTurnCount:   session.minds_eye_turn_count ?? 0,
     currentActionCount: session.minds_eye_action_count ?? 0,
     currentSeq:         seq + 1,
-    threadTs:           callback?.threadId ?? session.slack_thread_ts,
+    threadTs:           callback?.threadId ?? session.callback?.threadId,
   });
   if (req?.source === 'http') return ok({ success: true, sessionId: session.id }, req.correlationId);
 }
@@ -1049,7 +1062,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
 
         await updateRows('PGC_Session',
           [{ column: 'id', op: 'eq', value: session.id }],
-          { minds_eye_turn_count: turnCount, slack_thread_ts: threadTs ?? session.slack_thread_ts }
+          { minds_eye_turn_count: turnCount, callback: keptCallback(session.callback, callback) }
         );
 
         if (callback) {
@@ -1289,7 +1302,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
     // breaks with earlyExit before turnCount could exceed the DB constraint.
     await updateRows('PGC_Session',
       [{ column: 'id', op: 'eq', value: session.id }],
-      { minds_eye_turn_count: turnCount, slack_thread_ts: threadTs ?? session.slack_thread_ts }
+      { minds_eye_turn_count: turnCount, callback: keptCallback(session.callback, callback) }
     );
 
     if (turnCount >= prefs.max_lifetime_turns) {
@@ -2642,7 +2655,7 @@ async function executeTriggerTool(action, params, callback, traceId, threadTs, t
 
         // Ensure the workflow runs in the Novia session thread. The raw SQS
         // callback may have threadId null (e.g. first-message invocation), but
-        // threadTs is resolved from session.slack_thread_ts by the caller.
+        // threadTs is resolved from the session's callback by the caller.
         const workflowCallback = (callback && threadTs)
           ? { ...callback, threadId: threadTs }
           : callback;

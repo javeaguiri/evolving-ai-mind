@@ -17,7 +17,7 @@
 //      step, even when there's only one) and stop. The question is only ever
 //      collected via modal after a specific step is chosen — see interactive.mjs.
 //   1. Look up PGC_Session by query_id (UUID)
-//   2. Store slack_thread_ts on session if not yet set (first /explain invocation)
+//   2. Store the callback on the session if it names no thread yet (first /explain invocation)
 //   3. Load existing PGC_SessionEntry rows — llm-harness.mjs seeds 3 (system:
 //      the original llm_call's full prompt_text, user: its resolved input,
 //      assistant: its raw output) before any explain Q&A is appended
@@ -128,11 +128,11 @@ export async function handle(req) {
 
   // Establish thread on first invocation; use stored thread on subsequent calls
   // so all explain responses for a session always land in the same thread.
-  let effectiveThreadId = session.slack_thread_ts ?? threadTs ?? null;
-  if (!session.slack_thread_ts && threadTs) {
+  let effectiveThreadId = session.callback?.threadId ?? threadTs ?? null;
+  if (!session.callback?.threadId && threadTs) {
     await updateRows('PGC_Session',
       [{ column: 'id', op: 'eq', value: session.id }],
-      { slack_thread_ts: threadTs }
+      { callback }
     );
     effectiveThreadId = threadTs;
   }

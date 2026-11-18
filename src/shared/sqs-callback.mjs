@@ -67,6 +67,7 @@ export async function enqueueCallback(callback, payload) {
       channel:         callback.channel ?? null,
       thread_id:       callback.threadId ?? null,
       workflow_run_id: payload.workflowRunId ?? null,
+      session_id:      payload.sessionId ?? null,
       message_type:    payload.type,
       payload:         message,
     });

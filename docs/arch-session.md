@@ -38,7 +38,7 @@ CREATE TABLE "PGC_Session" (
   id              SERIAL PRIMARY KEY,
   session_type    VARCHAR(30)   NOT NULL,          -- 'general_chat' | 'llm_call_diagnostic'
   query_id        UUID          NOT NULL UNIQUE DEFAULT gen_random_uuid(),
-  slack_thread_ts VARCHAR(50)   NULL,              -- general_chat lookup key (Slack thread_ts)
+  callback        JSONB         NULL,              -- where the session's messages go (as PGC_WorkflowRun.callback)
   workflow_name   VARCHAR(100)  NULL,              -- llm_call_diagnostic: PGC_Workflow.name
   run_id          UUID          NULL,              -- llm_call_diagnostic: FK ref to PGC_WorkflowRun.id
   trace_id        VARCHAR(100)  NULL,              -- llm_call_diagnostic; matches Slack trace
@@ -47,14 +47,13 @@ CREATE TABLE "PGC_Session" (
   created_at      TIMESTAMP     NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX ON "PGC_Session" (slack_thread_ts);
 CREATE INDEX ON "PGC_Session" (query_id);
 CREATE INDEX ON "PGC_Session" (run_id);
 ```
 
 **Field notes:**
 - `query_id` is the user-facing reference. It appears in the Slack diagnostic notification and is the argument to `/explain`
-- `slack_thread_ts` is only populated for `general_chat` sessions; it is the Slack-assigned thread timestamp and serves as the follow-up lookup key
+- `callback` is where the session's messages go, the shape of `PGC_WorkflowRun.callback` — Slack `{ provider, channel, threadId }`, web `{ provider: 'web', channel: <principal> }`. A message's own callback wins; the session's fills in a thread the message lacks
 - `trace_id` corresponds to the trace ID already shown in certain Slack message replies, creating a consistent reference across the UI
 - `workflow_name` stores `PGC_Workflow.name` (not ID) to remain human-readable without a join
 - All `llm_call_diagnostic` fields are NULL for `general_chat` sessions and vice versa
@@ -241,7 +240,7 @@ Posted to the workflow's Slack channel (not as a thread reply) when diagnostics 
 **Thread Continuation:**
 
 When the user replies in the same Slack thread, the callback handler:
-1. Looks up PGC_Session by `slack_thread_ts`
+1. Finds the PGC_Session by the `sessionId` the reply's button carries
 2. Reconstructs messages array from PGC_SessionEntry rows
 3. Appends new user message
 4. Calls LLM
@@ -292,7 +291,7 @@ Two new intent categories are required:
 | `explain_query` | `/explain` command | New `explain` processor |
 | `explain_run` | `/explain-run` command | Deferred |
 
-Thread reply routing (for session continuation) is handled by the callback endpoint, not the intent preprocessor. The callback handler checks for `slack_thread_ts` match in `PGC_Session` before falling through to normal intent processing.
+Thread reply routing (for session continuation) is handled by the callback endpoint, not the intent preprocessor. A reply's button carries its session's `sessionId`, which routes it to that session rather than to intent processing.
 
 ---
 
@@ -331,7 +330,7 @@ Both new tables must be registered in `PGC_Schema` following the existing patter
   },
   {
     "table_name": "PGC_Session",
-    "column_name": "slack_thread_ts","data_type": "varchar",  "is_system": true
+    "column_name": "callback",       "data_type": "jsonb",    "is_system": true
   },
   {
     "table_name": "PGC_Session",

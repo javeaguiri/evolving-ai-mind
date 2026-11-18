@@ -60,7 +60,7 @@ New SQS message types:
 - **`MINDS_EYE`** — fire-and-forget entry (no workflowRunId); new session or thread continuation
 - **`MINDS_EYE_RESUME`** — resume after a human gate (Continue/Pause/Cancel at turn limit, or action tool approval); routes to `minds-eye.mjs` separately from workflow `resume_gate`
 
-Thread continuation works identically to `general_chat`: the callback handler matches `slack_thread_ts` → `PGC_Session` → resumes the agent session.
+Thread continuation works identically to `general_chat`: the reply's button carries the `sessionId` → `PGC_Session` → resumes the agent session. The session keeps its `callback` (`PGC_Session.callback`) — a message's own wins, the session's fills in a thread the message lacks.
 
 The agent creates its own `PGC_Session` row (`session_type = 'minds_eye'`) on first invocation and appends `PGC_SessionEntry` rows per turn, exactly as designed in `arch-session.md`.
 
@@ -620,7 +620,7 @@ Nothing is written to the DB before a call — the components above are pure rea
 
 | Decision | Row written | Other side effects |
 |---|---|---|
-| `respond` | `{role: 'assistant', content: {action:'respond', message, reasoning, advisory}}` | `minds_eye_turn_count` (cumulative) + `slack_thread_ts` updated on `PGC_Session` |
+| `respond` | `{role: 'assistant', content: {action:'respond', message, reasoning, advisory}}` | `minds_eye_turn_count` (cumulative) + `callback` updated on `PGC_Session` |
 | Read tool | `{role: 'tool', content: {tool, params, result}}` | none |
 | `write_memory` | `{role: 'tool', content: {tool, params, result}}` | separately writes a row to `PGC_Memory` (not `SessionEntry`) |
 | Inline write (`update_data`/`insert_data`/`upsert_data`) | `{role: 'tool', content: {tool, params, result}}` | `minds_eye_action_count` incremented |

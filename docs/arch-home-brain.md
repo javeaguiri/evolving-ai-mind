@@ -57,7 +57,7 @@ Small and enumerable. Each becomes a provider-neutral name:
 
 | Leak | Becomes |
 |---|---|
-| `PGC_Session.slack_thread_ts` | A provider-neutral thread reference plus the provider |
+| `PGC_Session.slack_thread_ts` | `PGC_Session.callback` — provider, channel and thread, as a run's (Sprint 18) |
 | `slackUser` in `/chat` and `/novia` request bodies | The authenticated user, from the experience layer |
 | `SQS_SLACK_RESULTS_URL` in `sqs-callback.mjs` and `proc/handler.mjs` | Results routed by `callback.provider` (§4.6) |
 | `explain.mjs` prompt text "rendered in Slack" | "rendered as markdown" |

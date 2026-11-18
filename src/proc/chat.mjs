@@ -7,7 +7,7 @@
 //
 // Flow:
 //   1. Read general_chat_system_prompt from PGC_SystemContext
-//   2. INSERT PGC_Session (general_chat, slack_thread_ts from callback)
+//   2. INSERT PGC_Session (general_chat, with the callback its replies go to)
 //   3. INSERT PGC_SessionEntry seq=1 (system), seq=2 (user)
 //   4. Call LLM (lightweight model)
 //   5. INSERT PGC_SessionEntry seq=3 (assistant)
@@ -33,7 +33,6 @@ export async function handle(req) {
   const { prompt, slackUser } = req.body ?? {};
   const callback = req.callback ?? req.body?.callback ?? null;
   const traceId  = req.traceId  ?? req.correlationId;
-  const threadTs = callback?.threadId ?? null;
 
   if (!prompt?.trim()) {
     if (req.source === 'http') return err(400, 'prompt is required', req.correlationId);
@@ -51,8 +50,8 @@ export async function handle(req) {
 
   // INSERT PGC_Session
   const sessionResp = await insertRow('PGC_Session', {
-    session_type:    'general_chat',
-    slack_thread_ts: threadTs,
+    session_type: 'general_chat',
+    callback,
   });
   if (!sessionResp.success) throw new Error(`PGC_Session insert failed: ${sessionResp.error}`);
   const sessionId = sessionResp.row.id;

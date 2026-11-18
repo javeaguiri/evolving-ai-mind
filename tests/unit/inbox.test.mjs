@@ -161,7 +161,7 @@ describe('enqueueCallback — the inbox is the single delivery point', () => {
     assert.equal(inserts.length, 1);
     assert.equal(inserts[0].path, '/api/v1/serv/table/insertRow');
     assert.deepEqual(inserts[0].body, { tableName: 'PGC_UiMessage', row: {
-      provider: 'web', channel: 'sub-a', thread_id: '9', workflow_run_id: 9, message_type: 'HUMAN_GATE',
+      provider: 'web', channel: 'sub-a', thread_id: '9', workflow_run_id: 9, session_id: null, message_type: 'HUMAN_GATE',
       payload: { type: 'HUMAN_GATE', workflowRunId: 9, dialog: { gate_id: 'g' }, traceId: 't' },
     } });
   });
@@ -173,6 +173,13 @@ describe('enqueueCallback — the inbox is the single delivery point', () => {
     assert.equal(inserts[0].body.row.provider, 'slack');
     assert.equal(sent.length, 1);
     assert.equal(sent[0].QueueUrl, 'results-queue');
+  });
+
+  it('a minds-eye message is written with its session, so the session conversation can be read', async () => {
+    const { inserts } = capture();
+    await enqueueCallback({ provider: 'web', channel: 'sub-a' }, { type: 'HUMAN_NOTIFICATION', format: 'markdown', message: 'Hi', sessionId: 42, traceId: 't' });
+    assert.equal(inserts[0].body.row.session_id, 42);
+    assert.equal(inserts[0].body.row.workflow_run_id, null);
   });
 
   it('a Slack-only message (explain buttons, pings) goes to Slack and not the inbox', async () => {
