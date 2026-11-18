@@ -9,7 +9,7 @@
 import { describe, it } from 'node:test';
 import assert           from 'node:assert/strict';
 
-import { keptCallback } from '../../src/proc/minds-eye.mjs';
+import { keptCallback, buildFailureNotification } from '../../src/proc/minds-eye.mjs';
 
 describe('keptCallback — the callback a minds-eye session keeps', () => {
   const thread = { provider: 'slack', channel: 'C1', threadId: '1.2' };
@@ -33,5 +33,13 @@ describe('keptCallback — the callback a minds-eye session keeps', () => {
 
   it('is null when there is nothing to keep', () => {
     assert.equal(keptCallback(null, null), null);
+  });
+});
+
+describe('buildFailureNotification — a failed round stays reachable', () => {
+  it('invites a reply, so Slack draws the follow-up button under it', () => {
+    const n = buildFailureNotification(7, 't', new Error('boom'));
+    assert.equal(n.sessionId, 7);
+    assert.equal(n.invitesReply, true);
   });
 });

@@ -526,8 +526,47 @@ export function noviaQuestionBlocks(questions, room) {
 // producing human-readable content before enqueuing.
 // ---------------------------------------------------------------------------
 
+/**
+ * The blocks under a minds-eye message that invites a reply (`invitesReply`, set by /proc): her
+ * questions, each with an answer box, and the buttons that answer or continue. A message from a
+ * session that invites none — a progress line — carries its sessionId for the record only, and
+ * gets nothing. Her questions sit under the message so they are answered in place: the follow-up
+ * modal covers the message it replies to, and a list in it cannot be copied apart from the rest.
+ * Pure — exported for test.
+ *
+ * @param {{ invitesReply?: boolean, sessionId?: number, questions?: Array }} message
+ * @returns {{ asked: object[], actions: object } | null}
+ */
+export function mindsEyeReplyBlocks({ invitesReply, sessionId, questions }) {
+  if (!invitesReply || !sessionId) return null;
+  const asked = Array.isArray(questions) && questions.length > 0
+    ? noviaQuestionBlocks(questions, QUESTION_BLOCK_ROOM)
+    : [];
+  return {
+    asked,
+    actions: {
+      type:     'actions',
+      elements: [
+        ...(asked.length ? [{
+          type:      'button',
+          text:      { type: 'plain_text', text: 'Send answers' },
+          style:     'primary',
+          action_id: 'minds_eye_answers',
+          value:     JSON.stringify({ action: 'minds_eye_answers', sessionId }),
+        }] : []),
+        {
+          type:      'button',
+          text:      { type: 'plain_text', text: 'Continue with Novia' },
+          action_id: 'minds_eye_followup',
+          value:     JSON.stringify({ action: 'minds_eye_followup', sessionId }),
+        },
+      ],
+    },
+  };
+}
+
 async function postHumanNotification(message) {
-  const { callback, traceId, workflowRunId, queryId, format, sessionId, reveals, breakActions, questions } = message;
+  const { callback, traceId, workflowRunId, queryId, format, reveals, breakActions } = message;
   const text = message.message ?? 'No message provided.';
   const contextText = workflowRunId
     ? `runId: ${workflowRunId} | traceId: ${traceId}`
@@ -549,32 +588,10 @@ async function postHumanNotification(message) {
   const suffixBlocks = [
     { type: 'context', elements: [{ type: 'mrkdwn', text: contextText }] },
   ];
-  if (format === 'markdown' && sessionId) {
-    // Her questions sit under the message with an answer box each, so they are answered in
-    // place: the follow-up modal covers the message it replies to, and a list in it cannot
-    // be copied apart from the rest. They ride on the last chunk, with the button that sends them.
-    const asked = Array.isArray(questions) && questions.length > 0
-      ? noviaQuestionBlocks(questions, QUESTION_BLOCK_ROOM)
-      : [];
-    suffixBlocks.unshift(...asked);
-    suffixBlocks.push({
-      type:     'actions',
-      elements: [
-        ...(asked.length ? [{
-          type:      'button',
-          text:      { type: 'plain_text', text: 'Send answers' },
-          style:     'primary',
-          action_id: 'minds_eye_answers',
-          value:     JSON.stringify({ action: 'minds_eye_answers', sessionId }),
-        }] : []),
-        {
-          type:      'button',
-          text:      { type: 'plain_text', text: 'Continue with Novia' },
-          action_id: 'minds_eye_followup',
-          value:     JSON.stringify({ action: 'minds_eye_followup', sessionId }),
-        },
-      ],
-    });
+  const reply = mindsEyeReplyBlocks(message);
+  if (reply) {
+    suffixBlocks.unshift(...reply.asked);
+    suffixBlocks.push(reply.actions);
   } else if (queryId) {
     suffixBlocks.push({
       type:     'actions',

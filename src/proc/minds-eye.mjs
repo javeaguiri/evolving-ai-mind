@@ -401,7 +401,7 @@ export function staleGateRefusal({ entries = [], kind, atSeq = null, pendingEntr
 
 async function refuseStaleGate(message, session, callback, traceId) {
   console.warn('proc/minds-eye: stale gate click refused', { sessionId: session.id, traceId });
-  if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', format: 'markdown', traceId, message, sessionId: session.id });
+  if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', format: 'markdown', traceId, message, sessionId: session.id, invitesReply: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -583,7 +583,7 @@ async function handleGateResume(body, callback, traceId, req) {
 
   if (!pendingEntry) {
     console.warn('proc/minds-eye: no pending action found for resume', { sessionId, traceId });
-    if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: 'No pending action to resume.' });
+    if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: 'No pending action to resume.', sessionId: session.id });
     return;
   }
 
@@ -617,6 +617,7 @@ async function handleGateResume(body, callback, traceId, req) {
         traceId,
         message:   'Action cancelled.',
         sessionId: session.id,
+        invitesReply: true,
       });
     }
     console.info('proc/minds-eye: action cancelled', { sessionId, action, traceId });
@@ -753,16 +754,17 @@ async function handleRunEvent({ session, entries, runEvent, callback, traceId, r
  *
  * A failure exit skips the loop-exit block, so no continue gate is posted and the thread
  * ends on an error with no way back in — twice the user has had to hunt an older message to
- * resume. `format: 'markdown'` plus a `sessionId` is all the renderer needs to attach the
- * follow-up button it already builds (`callback.mjs:437`), so the session stays reachable
- * without a second gate type or a new mechanism. The session itself was never damaged: every
+ * resume. `invitesReply` is all the renderer needs to attach the follow-up button it already
+ * builds (`mindsEyeReplyBlocks`), so the session stays reachable without a second gate type or
+ * a new mechanism. The session itself was never damaged: every
  * completed turn is already written to PGC_SessionEntry.
  */
-function buildFailureNotification(sessionId, traceId, llmError) {
+export function buildFailureNotification(sessionId, traceId, llmError) {
   return {
     type:      'HUMAN_NOTIFICATION',
     format:    'markdown',
     sessionId,
+    invitesReply: true,
     traceId,
     message:   `Agent reasoning failed: ${llmError.message}\n\nEverything up to this point is saved — use **Ask follow-up** to pick the session back up.`,
   };
@@ -1080,6 +1082,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
             message:   replyText,
             queryId:   session.query_id,
             sessionId: session.id,
+            invitesReply: true,
             ...(questions.length ? { questions } : {}),
           });
         }
@@ -1097,7 +1100,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         recordToolOutput(sbResult);
         workingHistory.push({ role: 'tool', content: sbEntry, sequence_number: seq });
         seq += 1;
-        await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: sbResult });
+        await notifyTurnProgress({ callback, sessionId: session.id, traceId, turn: turnCount, action, reasoning, result: sbResult });
         console.info('proc/minds-eye: sandbox tool executed', { action, sessionId: session.id, traceId });
 
       } else if (TEST_TOOLS.has(action)) {
@@ -1107,7 +1110,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         recordToolOutput(testResult);
         workingHistory.push({ role: 'tool', content: testEntry, sequence_number: seq });
         seq += 1;
-        await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: testResult });
+        await notifyTurnProgress({ callback, sessionId: session.id, traceId, turn: turnCount, action, reasoning, result: testResult });
         console.info('proc/minds-eye: test tool executed', { action, sessionId: session.id, traceId });
 
       } else if (WAITING_TOOLS.has(action) && (action !== 'run_workflow' || params.test === true)) {
@@ -1131,7 +1134,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
 
         if (started.waiting) {
           await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: session.id }], { minds_eye_turn_count: turnCount });
-          await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: started });
+          await notifyTurnProgress({ callback, sessionId: session.id, traceId, turn: turnCount, action, reasoning, result: started });
           console.info('proc/minds-eye: waiting on test run', { action, sessionId: session.id, traceId });
           earlyExit = true;
           control = 'break';
@@ -1161,7 +1164,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         workingHistory.push({ role: 'tool', content: toolEntry, sequence_number: seq });
         seq += 1;
 
-        await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: toolResult });
+        await notifyTurnProgress({ callback, sessionId: session.id, traceId, turn: turnCount, action, reasoning, result: toolResult });
         console.info('proc/minds-eye: read tool executed', { action, sessionId: session.id, traceId });
 
       } else if (HOUSEKEEPING_TOOLS.has(action)) {
@@ -1182,7 +1185,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         workingHistory.push({ role: 'tool', content: hkEntry, sequence_number: seq });
         seq += 1;
 
-        await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: hkResult });
+        await notifyTurnProgress({ callback, sessionId: session.id, traceId, turn: turnCount, action, reasoning, result: hkResult });
         console.info('proc/minds-eye: housekeeping tool executed', { action, sessionId: session.id, traceId });
 
       } else if (INLINE_WRITE_TOOLS.has(action)) {
@@ -1213,7 +1216,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         workingHistory.push({ role: 'tool', content: writeEntry, sequence_number: seq });
         seq += 1;
 
-        await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: writeResult });
+        await notifyTurnProgress({ callback, sessionId: session.id, traceId, turn: turnCount, action, reasoning, result: writeResult });
         console.info('proc/minds-eye: write tool executed', { action, sessionId: session.id, traceId });
 
       } else if (GATED_WRITE_TOOLS.has(action)) {
@@ -1272,7 +1275,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         workingHistory.push({ role: 'tool', content: triggerEntry, sequence_number: seq });
         seq += 1;
 
-        await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: triggerResult });
+        await notifyTurnProgress({ callback, sessionId: session.id, traceId, turn: turnCount, action, reasoning, result: triggerResult });
         console.info('proc/minds-eye: trigger tool executed', { action, sessionId: session.id, traceId });
 
       } else {
@@ -1282,6 +1285,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
             type:    'HUMAN_NOTIFICATION',
             traceId,
             message: `Agent returned unknown action: ${action}. Reasoning: ${reasoning ?? '(none)'}`,
+            sessionId: session.id,
           });
         }
         earlyExit = true;
@@ -1355,7 +1359,7 @@ export function describeTurnAction(action, result) {
   return `\`${action}\` · ${what} (entry ${result.sequence}), characters ${n(result.offset)}–${n(end)} of ${n(result.total_chars)}`;
 }
 
-async function notifyTurnProgress({ callback, traceId, turn, action, reasoning, result }) {
+async function notifyTurnProgress({ callback, sessionId, traceId, turn, action, reasoning, result }) {
   if (!callback) return;
   if (!turnSucceeded(result)) {
     console.info('proc/minds-eye: turn not reported — tool returned an error', { action, turn, traceId });
@@ -1369,10 +1373,11 @@ async function notifyTurnProgress({ callback, traceId, turn, action, reasoning, 
     : `_Turn ${turn} · ${label}_`;
 
   await enqueueCallback(callback, {
-    type:    'HUMAN_NOTIFICATION',
-    format:  'markdown',
+    type:      'HUMAN_NOTIFICATION',
+    format:    'markdown',
     traceId,
-    message: line,
+    message:   line,
+    sessionId,
   });
 }
 

@@ -180,6 +180,6 @@ describe('the respond contract — tool schema and the loop', () => {
 
   it('stores the questions on the respond entry and sends them with the reply', () => {
     assert.match(loop, /\.\.\.\(questions\.length \? \{ questions \} : \{\}\), items: entryItems/);
-    assert.match(loop, /sessionId: session\.id,\n\s*\.\.\.\(questions\.length \? \{ questions \} : \{\}\),/);
+    assert.match(loop, /sessionId: session\.id,\n\s*invitesReply: true,\n\s*\.\.\.\(questions\.length \? \{ questions \} : \{\}\),/);
   });
 });

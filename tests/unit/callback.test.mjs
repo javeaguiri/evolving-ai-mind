@@ -14,7 +14,8 @@
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { oversizedGateMessage, isPermanentRenderFailure, toSlackMrkdwn, dialogToBlocks,
-         buildRevealBlock, makeTableBudget, buildListSections, markdownToBlocks } from '../../src/ui/slackbot/callback.mjs';
+         buildRevealBlock, makeTableBudget, buildListSections, markdownToBlocks,
+         mindsEyeReplyBlocks } from '../../src/ui/slackbot/callback.mjs';
 import { listIdBlockId } from '../../src/ui/slackbot/form-fields.mjs';
 import { formatColumnHeader } from '../../src/ui/shared/column-header.mjs';
 
@@ -1835,5 +1836,26 @@ describe('dialogToBlocks — choice option_source', () => {
     }, 906, 'confirm');
     assert.equal(selects(blocks).length, 0);
     assert.equal(buttonLabels(blocks).length, 8);
+  });
+});
+
+describe('mindsEyeReplyBlocks — buttons on a message that invites a reply, and only then', () => {
+  const ids = r => r.actions.elements.map(e => e.action_id);
+
+  it('a reply that invites one gets Continue, and Send answers when it asks questions', () => {
+    assert.deepEqual(ids(mindsEyeReplyBlocks({ invitesReply: true, sessionId: 7 })), ['minds_eye_followup']);
+    const asked = mindsEyeReplyBlocks({ invitesReply: true, sessionId: 7, questions: [{ id: 'q1', text: 'Which?' }] });
+    assert.deepEqual(ids(asked), ['minds_eye_answers', 'minds_eye_followup']);
+    assert.ok(asked.asked.length > 0);
+    assert.equal(JSON.parse(asked.actions.elements[1].value).sessionId, 7);
+  });
+
+  it('a progress line carries its session for the record and gets no buttons', () => {
+    assert.equal(mindsEyeReplyBlocks({ sessionId: 7 }), null);
+    assert.equal(mindsEyeReplyBlocks({ invitesReply: false, sessionId: 7 }), null);
+  });
+
+  it('nothing without a session to reply to', () => {
+    assert.equal(mindsEyeReplyBlocks({ invitesReply: true }), null);
   });
 });

@@ -16,7 +16,10 @@
 //                for each session with a thread and no callback; channel from an inbox row on the
 //                same Slack thread when one exists, else null (a Slack message carries its own
 //                channel — the session's callback is only the fallback).
-//                PGC_UiMessage.session_id ← payload.sessionId, for each row that has none.
+//                PGC_UiMessage.session_id ← payload.sessionId, for each row that has none; then,
+//                for a row written before every session message carried its sessionId (a
+//                progress line), the one session already linked on its Slack thread — rows of a
+//                workflow run, or on a thread shared by two sessions, are left alone.
 //                Only unfilled rows are written; skipped once slack_thread_ts is gone.
 //   3. Drop      (--drop only) dropColumn PGC_Session.slack_thread_ts. Run after the code that
 //                reads callback is deployed, with the backfill rerun just before it.
@@ -102,6 +105,24 @@ if (!live.has('PGC_UiMessage.session_id')) {
   if (!CHECK) {
     const bySession = Map.groupBy(rows, r => r.session_id);
     for (const [sessionId, group] of bySession) {
+      await updateRows('PGC_UiMessage', [{ column: 'id', op: 'in', value: group.map(r => r.id) }],
+        { session_id: sessionId });
+    }
+  }
+}
+
+if (live.has('PGC_UiMessage.session_id')) {
+  const threadRows = await select(`
+    WITH thread_session AS (
+      SELECT thread_id, min(session_id) AS session_id FROM "PGC_UiMessage"
+       WHERE provider = 'slack' AND thread_id IS NOT NULL AND session_id IS NOT NULL
+       GROUP BY thread_id HAVING count(DISTINCT session_id) = 1
+    )
+    SELECT m.id, t.session_id FROM "PGC_UiMessage" m JOIN thread_session t USING (thread_id)
+     WHERE m.provider = 'slack' AND m.session_id IS NULL AND m.workflow_run_id IS NULL`);
+  console.log(`  PGC_UiMessage.session_id  ${threadRows.length} to fill from their thread's session${CHECK ? ' (after the fill above)' : ''}`);
+  if (!CHECK) {
+    for (const [sessionId, group] of Map.groupBy(threadRows, r => r.session_id)) {
       await updateRows('PGC_UiMessage', [{ column: 'id', op: 'in', value: group.map(r => r.id) }],
         { session_id: sessionId });
     }
