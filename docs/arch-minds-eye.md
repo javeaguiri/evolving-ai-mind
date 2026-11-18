@@ -234,6 +234,14 @@ Continue on a gate under one of her replies is delivered as the user's answer to
 (`CONTINUE_AFTER_REPLY`), so she carries on rather than answering again. Sending a gate's
 Follow-up closes that gate in Slack (`followupClosedBlocks`).
 
+**A continue gate says why it was posted** (Sprint 18). /proc sends its `reason` —
+`turn_limit`, `action_limit`, `round_budget`, or `after_followup` when it is re-posted after her
+reply to a follow-up so the earlier task can be resumed — and the experience layer chooses the
+words from it (`CONTINUE_GATE_TEXT` in Slack). A round whose time ran out after a turn was cut
+off at the output ceiling, before the re-ask, carries `afterTruncation` on the gate and its
+Continue and Follow-up buttons; the next round opens with the truncation notice, so she does not
+write the same over-long response again.
+
 **`register_workflow`** (Sprint 9, AC4) — `{ name, domain?, description, steps, intentPhrases?,
 intentKeywords? }`. Creates a workflow: one `PGC_Workflow` row at version 1, and one
 `PGC_IntentMap` row per invocation phrase plus one for the workflow's own name (`source`

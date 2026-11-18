@@ -118,7 +118,7 @@ describe('the wiring', () => {
   const slack = readFileSync('src/ui/slackbot/interactive.mjs', 'utf8');
 
   it('every continue gate is posted with the latest entry\'s sequence', () => {
-    assert.equal((proc.match(/postTurnLimitGate\(session\.id, callback, traceId, [^)]*seq - 1\)/g) ?? []).length, 3);
+    assert.equal((proc.match(/postContinueGate\(\{\s*sessionId: session\.id, callback, traceId, atSeq: seq - 1[,\s]/g) ?? []).length, 3);
     assert.match(proc, /gate_type:    'minds_eye_gate',\n\s*sessionId:    session\.id,\n\s*atSeq:        currentSeq,/);
   });
 

@@ -473,7 +473,7 @@ export function composeAnswersPrompt(questions = [], answers = [], note = null) 
 // ---------------------------------------------------------------------------
 
 async function handleGateResume(body, callback, traceId, req) {
-  const { sessionId, approved, resumeType, test, atSeq } = body;
+  const { sessionId, approved, resumeType, test, atSeq, afterTruncation = false } = body;
 
   const sessResp = await getRows('PGC_Session', [{ column: 'id', op: 'eq', value: sessionId }]);
   const session  = sessResp.rows?.[0] ?? null;
@@ -526,6 +526,7 @@ async function handleGateResume(body, callback, traceId, req) {
       currentSeq:                   newSeq + 1,
       threadTs:                     callback?.threadId ?? session.callback?.threadId,
       postContinueGateAfterRespond: true,
+      afterTruncation,
     });
     if (req?.source === 'http') return ok({ success: true, sessionId: session.id }, req.correlationId);
     return;
@@ -569,6 +570,7 @@ async function handleGateResume(body, callback, traceId, req) {
       currentActionCount: 0,
       currentSeq:         nextSeq,
       threadTs:           callback?.threadId ?? session.callback?.threadId,
+      afterTruncation,
     });
     if (req?.source === 'http') return ok({ success: true, sessionId: session.id }, req.correlationId);
     return;
@@ -837,7 +839,7 @@ async function notifyLifetimeCeiling(session, callback, traceId, count) {
   }
 }
 
-async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, layer2Context, workingHistory, callback, traceId, currentTurnCount, currentActionCount, currentSeq, threadTs, postContinueGateAfterRespond = false }) {
+async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, layer2Context, workingHistory, callback, traceId, currentTurnCount, currentActionCount, currentSeq, threadTs, postContinueGateAfterRespond = false, afterTruncation = false }) {
   if (currentTurnCount >= prefs.max_lifetime_turns) {
     await notifyLifetimeCeiling(session, callback, traceId, currentTurnCount);
     return;
@@ -876,7 +878,9 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
   let seq             = currentSeq;
   let responded       = false;
   let earlyExit       = false;
-  let truncationNotice = null;            // carried into the next message when a turn was cut off
+  // Carried into the next message when a turn was cut off — across a round boundary too: a round
+  // that ended before the re-ask hands it to the next through its continue gate (afterTruncation).
+  let truncationNotice = afterTruncation ? TRUNCATION_NOTICE : null;
   let lastTurnTruncated = false;
   const roundStart   = Date.now();
   let longestTurnMs  = 0;
@@ -1190,7 +1194,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
 
       } else if (INLINE_WRITE_TOOLS.has(action)) {
         if (actionCount >= prefs.max_actions_per_session) {
-          await postTurnLimitGate(session.id, callback, traceId, true, false, seq - 1);
+          await postContinueGate({ sessionId: session.id, callback, traceId, atSeq: seq - 1, reason: 'action_limit' });
           earlyExit = true;
           control = 'break';
           break;
@@ -1249,7 +1253,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         }
 
         if (actionCount >= prefs.max_actions_per_session) {
-          await postTurnLimitGate(session.id, callback, traceId, true, false, seq - 1);
+          await postContinueGate({ sessionId: session.id, callback, traceId, atSeq: seq - 1, reason: 'action_limit' });
           earlyExit = true;
           control = 'break';
           break;
@@ -1312,7 +1316,11 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
     if (turnCount >= prefs.max_lifetime_turns) {
       await notifyLifetimeCeiling(session, callback, traceId, turnCount);
     } else {
-      await postTurnLimitGate(session.id, callback, traceId, false, budgetExhausted, seq - 1);
+      await postContinueGate({
+        sessionId: session.id, callback, traceId, atSeq: seq - 1,
+        reason:    continueGateReason({ responded, budgetExhausted }),
+        afterTruncation: truncationNotice !== null,
+      });
     }
   }
 }
@@ -4024,20 +4032,36 @@ async function executeReadTool(action, params, traceId, session) {
 // Post a turn-limit notification
 // ---------------------------------------------------------------------------
 
-async function postTurnLimitGate(sessionId, callback, traceId, resetActionCount = false, budgetExhausted = false, atSeq = null) {
+/**
+ * Why a round ended on a continue gate, for the experience layer to say so: after a reply to a
+ * follow-up (the gate is re-posted so the earlier task can be resumed), on the round's time
+ * budget, or on the turn limit. The action limit is decided where it is hit. Pure — exported
+ * for test.
+ */
+export function continueGateReason({ responded, budgetExhausted }) {
+  if (responded)       return 'after_followup';
+  if (budgetExhausted) return 'round_budget';
+  return 'turn_limit';
+}
+
+/**
+ * The continue gate (`minds_eye_continue_gate`). `reason` is why it was posted —
+ * `turn_limit`, `action_limit`, `round_budget` or `after_followup` — and only what the user is
+ * told differs; a round that stopped on time means nothing is wrong. `afterTruncation` says the
+ * round ended before a cut-off response was asked for again, so the next round must open with
+ * the notice. `atSeq` is the entry it was posted after: a click is refused once the session has
+ * moved past it (staleGateRefusal).
+ */
+async function postContinueGate({ sessionId, callback, traceId, reason, atSeq = null, afterTruncation = false }) {
   if (!callback) return;
   await enqueueCallback(callback, {
     type:             'HUMAN_GATE',
     gate_type:        'minds_eye_continue_gate',
     sessionId,
-    // The session entry the gate was posted after. A click is refused once the session has
-    // moved past it (staleGateRefusal).
     atSeq,
     traceId,
-    resetActionCount,
-    // Which limit was hit. The gate is identical either way — only what the user is told
-    // differs, and a round that stopped on time reads very differently from one that ran
-    // out of turns: it means nothing is wrong and continuing costs nothing but a click.
-    budgetExhausted,
+    reason,
+    resetActionCount: reason === 'action_limit',
+    ...(afterTruncation ? { afterTruncation: true } : {}),
   });
 }

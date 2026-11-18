@@ -833,6 +833,7 @@ async function handleMindsEyeContinueGate(buttonValue, payload, correlationId) {
         approved:         !!approved,
         resetActionCount: !!buttonValue.resetActionCount,
         ...(buttonValue.atSeq != null ? { atSeq: buttonValue.atSeq } : {}),
+        ...(buttonValue.afterTruncation ? { afterTruncation: true } : {}),
         user:             payload.user?.id,
         callback:         { provider: 'slack', channel, threadId: threadTs },
         traceId,
@@ -854,7 +855,7 @@ async function handleMindsEyeContinueGate(buttonValue, payload, correlationId) {
 // ---------------------------------------------------------------------------
 
 async function handleMindsEyeContinueFollowupButton(buttonValue, payload, correlationId) {
-  const { sessionId } = buttonValue;
+  const { sessionId, afterTruncation = false } = buttonValue;
   const triggerId     = payload.trigger_id;
   const channel       = payload.channel?.id;
   const threadTs      = payload.container?.message_ts ?? payload.message?.ts;
@@ -873,7 +874,7 @@ async function handleMindsEyeContinueFollowupButton(buttonValue, payload, correl
           type:             'modal',
           callback_id:      'minds_eye_continue_followup_modal',
           notify_on_close:  false,
-          private_metadata: buildPrivateMetadata({ sessionId, channel, threadTs, traceId }, preservedContentBlocks(payload.message?.blocks)),
+          private_metadata: buildPrivateMetadata({ sessionId, channel, threadTs, traceId, ...(afterTruncation ? { afterTruncation: true } : {}) }, preservedContentBlocks(payload.message?.blocks)),
           title:  { type: 'plain_text', text: 'Ask Novia' },
           submit: { type: 'plain_text', text: 'Send' },
           close:  { type: 'plain_text', text: 'Cancel' },
@@ -923,7 +924,7 @@ async function handleMindsEyeContinueFollowupSubmission(payload, traceId) {
     return err(400, 'Invalid private_metadata', traceId);
   }
 
-  const { sessionId, channel, threadTs, traceId: metaTraceId, contentBlocks } = meta;
+  const { sessionId, channel, threadTs, traceId: metaTraceId, contentBlocks, afterTruncation = false } = meta;
   if (!sessionId || !channel) {
     console.warn('interactive: minds_eye_continue_followup_modal missing sessionId or channel', { meta, traceId });
     return err(400, 'minds_eye_continue_followup_modal private_metadata must contain sessionId and channel', traceId);
@@ -976,6 +977,7 @@ async function handleMindsEyeContinueFollowupSubmission(payload, traceId) {
         resumeType:   'followup',
         sessionId,
         followupText: inputValue,
+        ...(afterTruncation ? { afterTruncation: true } : {}),
         user:         payload.user?.id,
         callback:     { provider: 'slack', channel, threadId: threadTs },
         traceId:      effectiveTrace,

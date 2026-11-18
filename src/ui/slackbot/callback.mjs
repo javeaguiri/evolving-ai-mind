@@ -768,11 +768,25 @@ export function mindsEyeGateButtons({ sessionId, confirmLabel = 'Approve', confi
 }
 
 /**
- * A Novia continue gate's buttons: Continue, Follow-up, Cancel, each carrying atSeq as the
- * action gate's do. Exported for tests.
+ * What a minds-eye continue gate says, by the reason /proc gives for posting it. Exported for tests.
  */
-export function mindsEyeContinueButtons({ sessionId, resetActionCount = false, atSeq }) {
-  const at = atSeq != null ? { atSeq } : {};
+export const CONTINUE_GATE_TEXT = {
+  action_limit:   "I've reached my action limit. Continue to keep going (resets the limit), ask a Follow-up question, or Cancel to end the session.",
+  round_budget:   "I've used up this round's time — nothing has gone wrong, and everything so far is saved. Continue to pick up where I left off, ask a Follow-up question, or Cancel to end the session.",
+  turn_limit:     "I've reached my turn limit. Continue to keep reasoning, ask a Follow-up question, or Cancel to end the session.",
+  after_followup: 'Continue the earlier task, ask another Follow-up question, or Cancel to end the session.',
+};
+
+/**
+ * A Novia continue gate's buttons: Continue, Follow-up, Cancel, each carrying atSeq as the
+ * action gate's do, and afterTruncation when the next round must open with the cut-off notice.
+ * Exported for tests.
+ */
+export function mindsEyeContinueButtons({ sessionId, resetActionCount = false, atSeq, afterTruncation = false }) {
+  const at = {
+    ...(atSeq != null ? { atSeq } : {}),
+    ...(afterTruncation ? { afterTruncation: true } : {}),
+  };
   return [
     {
       type:      'button',
@@ -916,26 +930,23 @@ async function postHumanGate(message) {
     return;
   }
 
-  // minds_eye_continue_gate \u2014 Novia turn-limit gate. Three options: Continue resumes the loop,
-  // Follow-up opens a modal for the user to ask a question, Cancel ends the session.
+  // minds_eye_continue_gate \u2014 Novia continue gate. Three options: Continue resumes the loop,
+  // Follow-up opens a modal for the user to ask a question, Cancel ends the session. What it
+  // says is chosen by the reason /proc gives.
   if (gateType === 'minds_eye_continue_gate') {
-    const { sessionId, resetActionCount = false, budgetExhausted = false, atSeq } = message;
-    const gateText = resetActionCount
-      ? "I've reached my action limit. Continue to keep going (resets the limit), ask a Follow-up question, or Cancel to end the session."
-      : budgetExhausted
-        ? "I've used up this round's time — nothing has gone wrong, and everything so far is saved. Continue to pick up where I left off, ask a Follow-up question, or Cancel to end the session."
-        : "I've reached my turn limit. Continue to keep reasoning, ask a Follow-up question, or Cancel to end the session.";
+    const { sessionId, reason, resetActionCount = false, afterTruncation = false, atSeq } = message;
+    const gateText = CONTINUE_GATE_TEXT[reason];
     const sessionContextBlock = { type: 'context', elements: [{ type: 'mrkdwn', text: `sessionId: ${sessionId} | traceId: ${traceId}` }] };
     const gateBlocks = [
       ...markdownToBlocks(gateText),
       sessionContextBlock,
       {
         type: 'actions',
-        elements: mindsEyeContinueButtons({ sessionId, resetActionCount, atSeq }),
+        elements: mindsEyeContinueButtons({ sessionId, resetActionCount, atSeq, afterTruncation }),
       },
     ];
     await routeCallback(callback, gateText, gateBlocks);
-    console.info('callback: minds_eye_continue_gate posted', { sessionId, resetActionCount, traceId });
+    console.info('callback: minds_eye_continue_gate posted', { sessionId, reason, afterTruncation, traceId });
     return;
   }
 
