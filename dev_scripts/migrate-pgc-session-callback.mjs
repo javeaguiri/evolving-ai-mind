@@ -21,9 +21,10 @@
 //   3. Drop      (--drop only) dropColumn PGC_Session.slack_thread_ts. Run after the code that
 //                reads callback is deployed, with the backfill rerun just before it.
 //
-// Then the registry is checked against the database (upsert-schema-registry.mjs --check). With
-// --drop every table must match, or the script fails; before the drop PGC_Session is expected to
-// differ by slack_thread_ts alone.
+// Then the registry rows are written from the seed (upsert-schema-registry.mjs, --check when
+// this script has it), which refuses any table the database disagrees with. With --drop every
+// table must pass, or the script fails; before the drop PGC_Session is refused for
+// slack_thread_ts alone.
 //
 // Usage — an instance bootstrapped before Sprint 18:
 //   node dev_scripts/migrate-pgc-session-callback.mjs --check   # report only, writes nothing
@@ -117,10 +118,10 @@ if (DROP) {
   }
 }
 
-// ── The registry against the database ───────────────────────────────────────
-console.log('\nRegistry check:');
+// ── The registry, from the seed ─────────────────────────────────────────────
+console.log('\nRegistry:');
 const registry = fileURLToPath(new URL('./upsert-schema-registry.mjs', import.meta.url));
-const result   = spawnSync(process.execPath, [registry, '--check'], { stdio: 'inherit' });
+const result   = spawnSync(process.execPath, [registry, ...(CHECK ? ['--check'] : [])], { stdio: 'inherit' });
 if (DROP && !CHECK && result.status !== 0) {
   console.error('ERROR: the registry and the database still disagree after the drop');
   process.exit(1);
