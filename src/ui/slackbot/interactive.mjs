@@ -593,6 +593,20 @@ export function answersEcho(answers, note) {
   return `🧠 ${lines.join('\n')}`;
 }
 
+// Send answers clicked with every box empty sends nothing. Only the person who clicked is told
+// why, in the thread: a reply typed in Slack's own thread box never reaches Novia.
+export const EMPTY_ANSWERS_TEXT = 'Nothing to send — fill in an answer, or use *Continue with Novia* to write a reply.';
+
+/** The private notice for an empty Send answers click. Pure — exported for test. */
+export function emptyAnswersNotice(payload) {
+  return {
+    channel: payload.channel?.id,
+    user:    payload.user?.id,
+    text:    EMPTY_ANSWERS_TEXT,
+    ...(payload.message?.thread_ts ? { thread_ts: payload.message.thread_ts } : {}),
+  };
+}
+
 async function handleMindsEyeAnswers(buttonValue, payload, correlationId) {
   const { sessionId } = buttonValue;
   const channel  = payload.channel?.id;
@@ -607,6 +621,11 @@ async function handleMindsEyeAnswers(buttonValue, payload, correlationId) {
   const { answers, note } = collectNoviaAnswers(payload.state?.values ?? {}, payload.message?.blocks ?? []);
   if (answers.length === 0 && !note) {
     console.info('interactive: minds_eye_answers clicked with nothing filled in', { sessionId, traceId });
+    try {
+      await slack.chat.postEphemeral(emptyAnswersNotice(payload));
+    } catch (error) {
+      console.error('interactive: postEphemeral failed', { error: error.message, sessionId, traceId });
+    }
     return { statusCode: 200, body: '' };
   }
 

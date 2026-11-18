@@ -20,7 +20,7 @@ import { readFileSync } from 'node:fs';
 import { normaliseQuestions, lastQuestions, composeAnswersPrompt } from '../../src/proc/minds-eye.mjs';
 import { noviaQuestionBlocks } from '../../src/ui/slackbot/callback.mjs';
 import { collectNoviaAnswers, NOVIA_ANSWER_PREFIX, NOVIA_COMMENT_PREFIX, NOVIA_NOTE_BLOCK } from '../../src/ui/slackbot/form-fields.mjs';
-import { answersEcho } from '../../src/ui/slackbot/interactive.mjs';
+import { answersEcho, emptyAnswersNotice, EMPTY_ANSWERS_TEXT } from '../../src/ui/slackbot/interactive.mjs';
 
 const questions = [
   { id: 'names', text: 'Are the three type names right?', options: ['Yes', 'No'] },
@@ -181,5 +181,20 @@ describe('the respond contract — tool schema and the loop', () => {
   it('stores the questions on the respond entry and sends them with the reply', () => {
     assert.match(loop, /\.\.\.\(questions\.length \? \{ questions \} : \{\}\), items: entryItems/);
     assert.match(loop, /sessionId: session\.id,\n\s*invitesReply: true,\n\s*\.\.\.\(questions\.length \? \{ questions \} : \{\}\),/);
+  });
+});
+
+describe('emptyAnswersNotice — Send answers with nothing filled in says why', () => {
+  it('tells only the person who clicked, in the thread of the message', () => {
+    const notice = emptyAnswersNotice({ channel: { id: 'C1' }, user: { id: 'U1' }, message: { thread_ts: '1.2' } });
+    assert.deepEqual(notice, { channel: 'C1', user: 'U1', text: EMPTY_ANSWERS_TEXT, thread_ts: '1.2' });
+  });
+
+  it('names the way to write a reply', () => {
+    assert.match(EMPTY_ANSWERS_TEXT, /Continue with Novia/);
+  });
+
+  it('a message outside a thread is answered in the channel', () => {
+    assert.equal('thread_ts' in emptyAnswersNotice({ channel: { id: 'C1' }, user: { id: 'U1' }, message: {} }), false);
   });
 });
