@@ -25,18 +25,24 @@ answers given.
 | **Where a web-started session replies** | The web only — the surface that starts a session owns its callback, as decision J (Sprint 17) for runs |
 | **Ask Novia about this** | Later — it touches every panel; not this sprint |
 | **Custom domain** | Not this sprint; stays in the backlog |
+| **O — a session's address** | `PGC_Session.callback` jsonb, the shape of `PGC_WorkflowRun.callback`, replaces `slack_thread_ts` for every session type (`minds_eye`, `general_chat`, `llm_call_diagnostic`): Slack `{provider, channel, threadId}`, web `{provider: 'web', channel: <principal>}`. A message's own callback wins, the session's is the fallback, as today. Ownership is one check on a callback, for runs and sessions alike. Migrated add → backfill → deploy → backfill → drop |
+| **P — `slackUser`** | Becomes `user` on the minds-eye path only (slackbot command, PROC body, log); the other commands keep theirs — no defect asks |
+| **Q — a session's conversation** | `PGC_UiMessage.session_id` (integer, no FK, as `workflow_run_id`), from `payload.sessionId`. The conversation is the session's inbox rows with the person's own entries from `PGC_SessionEntry`, by time — what Slack showed, never her tool calls; sessions before the inbox (2026-11-15) say her replies were not kept |
+| **R — names in code** | minds-eye, never Novia: `/proc/minds-eye/sessions…`, `/minds-eye/sessions…`, the `minds_eye` panel kind, `canSeeSession`; `arch-web-app.md` corrected to match |
+| **S — a session's name** (Javear, 2026-11-18, added in session) | `PGC_Session.label` text, nullable, edited from the web — in her region and in a `minds_eye` panel. A session is named by its `label`, else its first message. Separate from `topic`, which files it under a panel. Added with item 1's migration |
 
 ## Scope
 
 | # | Item |
 |---|---|
-| **1** | ⬜ **Novia's Slack leaks removed** (`arch-home-brain.md` §3.2): `PGC_Session.slack_thread_ts` becomes a thread reference plus its provider; `slackUser` in the `/novia` body becomes the principal from the experience layer. `PGC_Session.topic` added (§2.5). Schema through the template, `seed_PGC_Schema.json` and `addColumn`/`modifyColumn` — never bootstrap |
-| **2** | ⬜ **Novia's resources** (§3.2, `arch-home-brain.md` §4.7), spec first, each its own commit: `GET /novia/sessions[?topic=]`, `GET /novia/sessions/{id}/messages`, `POST /novia/sessions`, `POST /novia/sessions/{id}/messages`, and answering her questions. PROC and `WebApiFunction`'s allow-list; every route checks the principal; test sessions left out of every read |
-| **3** | ⬜ **Her region** (§4.1, §4.5): left, « collapses it (remembered on the device); sessions newest first, named by topic or first message; the open conversation as markdown; `?novia=<sessionId>`; polled while open; the *Novia* tab on a phone |
-| **4** | ⬜ **Her questions:** `minds_eye_gate` and `minds_eye_continue_gate` added to §5.2 and drawn with the existing gate components — parity with what Slack draws today |
-| **5** | ⬜ **Novia panels** (§4.2): the `novia` panel kind — a topic's sessions, *New* starts one on the topic; at least one on a household page (`household/pages.json`) |
+| **1** | 🟡 **Novia's Slack leaks removed** (`arch-home-brain.md` §3.2): `PGC_Session.slack_thread_ts` becomes `callback` (O); `slackUser` becomes `user` (P); `PGC_UiMessage.session_id` (Q). `PGC_Session.topic` (§2.5) and `label` (S) added. Schema through the template, `seed_PGC_Schema.json` and `addColumn`/`modifyColumn` — never bootstrap |
+| **2** | ⬜ **Novia's resources** (§3.2, `arch-home-brain.md` §4.7), spec first, each its own commit: `GET /minds-eye/sessions[?topic=]`, `GET /minds-eye/sessions/{id}/messages`, `POST /minds-eye/sessions`, `POST /minds-eye/sessions/{id}/messages`, and answering her questions. PROC and `WebApiFunction`'s allow-list; every route checks the principal and reads `minds_eye` sessions only |
+| **3** | ⬜ **Her region** (§4.1, §4.5): left, « collapses it (remembered on the device); sessions newest first, named by topic or first message; the open conversation as markdown; `?minds-eye=<sessionId>` (R); polled while open; the *Novia* tab on a phone |
+| **4** | ⬜ **Her questions:** `minds_eye_gate`, `minds_eye_continue_gate`, and a reply's `questions` with *Answer* and *Follow-up*, added to §5.2 and drawn with the existing gate components — parity with what Slack draws today |
+| **5** | ⬜ **Novia panels** (§4.2): the `minds_eye` panel kind — a topic's sessions, *New* starts one on the topic; at least one on a household page (`household/pages.json`) |
 | **6** | ⬜ **`GATE_RESOLVED`** (§8): a Slack-started gate answered on the web updates the Slack message, so its buttons disappear rather than refuse |
 | **7** | ⬜ **A run's thread keeps its answers** (backlog, decision L): `resumeGate` writes a `GATE_ANSWERED` inbox row — the action's label, a form's change count — and both surfaces draw it |
+| **8** | ⬜ **Renaming a session** (S): `label` on the session reads; a write route to set or clear it (spec first; principal-checked, `minds_eye` only); rename in her region and in a `minds_eye` panel |
 
 ## Acceptance Criteria
 
@@ -46,15 +52,16 @@ answers given.
 | **AC2** | ⬜ | Every Novia gate type is answered in the browser, a gated action (e.g. `propose_workflow_fix`) included | 2, 4 | One live session per gate type |
 | **AC3** | ⬜ | A Novia panel on a household page lists its topic's sessions; *New* starts one on that topic | 1, 2, 5 | Shown live |
 | **AC4** | ⬜ | A Slack-started gate answered on the web loses its buttons in Slack, and the answer shows in the run's thread after a reload | 6, 7 | Shown live |
-| **AC5** | ⬜ | Each new endpoint is in `openapi.yaml` before it is built, as its own commit; every Novia read checks the principal and leaves out test sessions | all | Review as each lands, and tests |
+| **AC5** | ⬜ | Each new endpoint is in `openapi.yaml` before it is built, as its own commit; every minds-eye session read checks the principal and returns `minds_eye` sessions only — a `general_chat` or `llm_call_diagnostic` id is a 404 | all | Review as each lands, and tests |
+| **AC6** | ⬜ | Javear renames a session on the web; the new name shows in her region and its panel, and survives a reload | 1, 2, 8 | Shown live |
 
 ## Retro lessons to apply (sprint-17)
 
 - **Confirm which build a tab is running** before diagnosing a web defect.
 - **Parity with Slack is the baseline:** a deferral in the web design is checked against what Slack
   draws today.
-- **Every read a person sees excludes test runs and sessions**, applied to every sibling read in the
-  same change.
+- **Every read a person sees excludes what is not theirs to see** — test runs, and sessions that are
+  not `minds_eye` — applied to every sibling read in the same change.
 - **Map a helper's result to named fields;** don't spread an object whose keys you don't own.
 - **When a write fails strangely, check `df` first.**
 

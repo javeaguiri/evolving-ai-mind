@@ -1294,7 +1294,7 @@
     "table_name": "PGC_Session",
     "target": "pgc",
     "domain": null,
-    "description": "One row per LLM session. Tracks general_chat and llm_call_diagnostic sessions. query_id is the user-facing reference used with /explain.",
+    "description": "One row per LLM session: minds_eye, general_chat and llm_call_diagnostic sessions. query_id is the user-facing reference used with /explain. callback is where the session's messages go, the shape of PGC_WorkflowRun.callback; topic is set only from the minds_eye panel that starts the session; label is the session's name as the person set it (null: named by its first message).",
     "columns": [
       {
         "name": "id",
@@ -1312,11 +1312,6 @@
         "nullable": false,
         "unique": true,
         "default": "gen_random_uuid()"
-      },
-      {
-        "name": "slack_thread_ts",
-        "type": "varchar(50)",
-        "nullable": true
       },
       {
         "name": "workflow_name",
@@ -1377,6 +1372,21 @@
       {
         "name": "replayed_from_session_id",
         "type": "integer",
+        "nullable": true
+      },
+      {
+        "name": "callback",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "topic",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "label",
+        "type": "text",
         "nullable": true
       }
     ],
@@ -1584,7 +1594,7 @@
     "table_name": "PGC_UiMessage",
     "target": "pgc",
     "domain": null,
-    "description": "The inbox: every message PROC sends a person, for every provider. Written by enqueueCallback before it enqueues to Slack; for the web the row is the delivery. id is the inbox cursor. workflow_run_id has no FK \u2014 runs are purged independently.",
+    "description": "The inbox: every message PROC sends a person, for every provider. Written by enqueueCallback before it enqueues to Slack; for the web the row is the delivery. id is the inbox cursor. workflow_run_id and session_id have no FK \u2014 runs and sessions are purged independently.",
     "columns": [
       {
         "name": "id",
@@ -1626,6 +1636,11 @@
         "type": "timestamptz",
         "nullable": false,
         "default": "now()"
+      },
+      {
+        "name": "session_id",
+        "type": "integer",
+        "nullable": true
       }
     ],
     "foreign_keys": [],

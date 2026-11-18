@@ -564,15 +564,14 @@ flows are specified in `docs/arch-session.md`.
 
 ##### PGC_Session
 One row per session, regardless of session type. Created at the start of any `/novia`, `/chat`,
-or `/explain` command, or by the `llm_call` step handler when diagnostics are enabled
-for the current workflow.
+or `/explain` command, a minds-eye session started on the web, or by the `llm_call` step handler
+when diagnostics are enabled for the current workflow.
 
 ```sql
 CREATE TABLE "PGC_Session" (
   id                    SERIAL PRIMARY KEY,
   session_type          VARCHAR(30)   NOT NULL,   -- 'minds_eye' | 'general_chat' | 'llm_call_diagnostic'
   query_id              UUID          NOT NULL UNIQUE DEFAULT gen_random_uuid(),
-  slack_thread_ts       VARCHAR(50)   NULL,        -- session lookup key (Slack thread_ts)
   workflow_name         VARCHAR(100)  NULL,        -- llm_call_diagnostic: PGC_Workflow.name
   run_id                UUID          NULL,        -- llm_call_diagnostic
   trace_id              VARCHAR(100)  NULL,        -- llm_call_diagnostic; matches Slack trace
@@ -584,7 +583,10 @@ CREATE TABLE "PGC_Session" (
   fingerprint_hash      TEXT          NULL,        -- replay harness: composite lookup key (indexed)
   response_source       TEXT          NULL,        -- replay harness: 'live' | 'replayed' | 'recorded'
   replayed_from_session_id INTEGER    NULL,        -- replay harness: which recording was served (provenance)
-  created_at            TIMESTAMP     NOT NULL DEFAULT NOW()
+  created_at            TIMESTAMP     NOT NULL DEFAULT NOW(),
+  callback              JSONB         NULL,        -- where the session's messages go (as PGC_WorkflowRun.callback)
+  topic                 TEXT          NULL,        -- minds_eye: the panel topic it is filed under
+  label                 TEXT          NULL         -- minds_eye: its name, as the person set it
 );
 ```
 
@@ -593,7 +595,6 @@ CREATE TABLE "PGC_Session" (
 | id | serial PK | |
 | session_type | varchar(30) NOT NULL | `minds_eye` \| `general_chat` \| `llm_call_diagnostic` |
 | query_id | uuid UNIQUE NOT NULL | User-facing reference; appears in Slack diagnostic notifications and is the `/explain` argument |
-| slack_thread_ts | varchar(50) NULL | Session follow-up lookup key (Slack thread_ts); used by Novia thread continuation and /chat |
 | workflow_name | varchar(100) NULL | `llm_call_diagnostic` only: `PGC_Workflow.name` — stored without ID join for readability |
 | run_id | uuid NULL | `llm_call_diagnostic` only |
 | trace_id | varchar(100) NULL | `llm_call_diagnostic` only; consistent with trace shown in Slack replies |
@@ -606,8 +607,11 @@ CREATE TABLE "PGC_Session" (
 | response_source | text NULL | `live` \| `replayed` \| `recorded` — where this call's response came from |
 | replayed_from_session_id | integer NULL | Provenance — the `PGC_Session.id` whose recording was served on a replayed call |
 | created_at | timestamp | |
+| callback | jsonb NULL | Where the session's messages go — the shape of `PGC_WorkflowRun.callback`: Slack `{ provider, channel, threadId }`, web `{ provider: 'web', channel: <principal> }` (the session is its own thread). A message's own callback wins; this is the fallback, field by field. Ownership: a web session belongs to its `channel`, a Slack one to the household (`principal.mjs`). Replaced `slack_thread_ts` (Sprint 18) |
+| topic | text NULL | `minds_eye` only — the subject a `minds_eye` panel lists sessions by; set only from the panel that starts the session (`arch-web-app.md` §2.5) |
+| label | text NULL | `minds_eye` only — the session's name, set or cleared from the web; null means it is named by its first message |
 
-Indexes: `(slack_thread_ts)`, `(query_id)`, `(run_id)`, `(fingerprint_hash)`
+Indexes: `(query_id)`, `(run_id)`, `(fingerprint_hash)`
 
 **`chk_pgc_session_type` constraint:** `session_type IN ('minds_eye', 'general_chat', 'llm_call_diagnostic')`
 **`chk_pgc_session_response_source` constraint:** `response_source IS NULL OR response_source IN ('live', 'replayed', 'recorded')`
@@ -710,6 +714,7 @@ the browser through `GET /inbox?after=<id>` (`arch-web-app.md` §2.1, §7.2).
 | message_type | text | `HUMAN_GATE`, `HUMAN_NOTIFICATION`, `WORKFLOW_ERROR` |
 | payload | jsonb | The message exactly as enqueued — markdown text, or `gate_type` + `dialog` |
 | created_at | timestamptz | |
+| session_id | integer | Nullable, **no FK** — the minds-eye session the message belongs to, from `payload.sessionId`; a session's conversation is its rows with the person's own `PGC_SessionEntry` entries, by time (Sprint 18) |
 
 **Written by** `enqueueCallback` (`sqs-callback.mjs`), through SERV, before it enqueues to Slack —
 the single delivery point for every provider. A run with no callback (a scheduled run) writes
@@ -760,7 +765,7 @@ are proposed and settled at the Phase 1 build.
 
 | Table | Change | Phase | Design |
 |---|---|---|---|
-| `PGC_Session` | `topic` text, nullable — the subject a Novia panel lists sessions by; set only from the Novia panel that starts the session | 1 | `arch-web-app.md` §2.5 |
+| `PGC_Session` | `topic` text, nullable — the subject a `minds_eye` panel lists sessions by; set only from the panel that starts the session. `label` text, nullable — the session's name, edited from the web. `callback` jsonb replaces `slack_thread_ts` | 1 (Sprint 18) | `arch-web-app.md` §2.5 |
 | `PGC_WorkflowRun` | `label` text, nullable — the run's name in lists, resolved from its workflow's `display.run_label` once every token resolves, then not again | 0 | `arch-web-app.md` §2.4 |
 | `PGC_WorkflowRun` | No column. A `human_gate` frame in `stack` gains `gate_id` (UUID), set when the frame is pushed; `resumeGate` refuses an answer whose `gate_id` differs from the top frame's. An answer carrying none (a Slack button posted before the change) is accepted as today | 0 | `arch-web-app.md` §2.2 |
 | `PGC_Schema`, `PGC_EntitySchema` | `display` jsonb, nullable — how a table or entity is shown: `view`, `label`, `columns` (order, label, hidden, width), `format`, `total`, `soft_delete`, `order_by`, `default_filter`. Every key optional; absent means the default | 1 | `arch-web-app.md` §6.3 |
