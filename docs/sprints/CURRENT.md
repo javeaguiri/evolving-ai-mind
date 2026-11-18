@@ -77,3 +77,24 @@ answers given.
 | Managing a session's topic (delete, move, adopt) | Backlog, after Phase 1 |
 | The custom domain | Decided at scoping: not this sprint |
 | WebSocket | Polling first, until it's felt (§10) |
+
+## Session notes
+
+**2026-11-18 (session 1).** Sprint started; item 1 done and deployed. Found live in Novia's
+session 1367 and fixed the same day: progress lines without a session (`invitesReply`), an empty
+*Send answers* click ignored silently, a continue gate claiming a turn limit it never hit
+(`reason`), and a truncation notice lost at a round boundary (`afterTruncation`).
+**Output ceiling left as is** (Javear): the two cut-off turns were 10,240 tokens of mostly
+thinking (`max_output_tokens` counts her reasoning); with the notice now carried across rounds a
+cut-off costs one attempt. Revisit only if cut-offs recur — capping reasoning per turn first,
+after checking what the gateway accepts.
+
+**Session 1367 (process_receipt units) — her work, not sprint scope:** v21 (unit-aware 12a/12b)
+and v22 (12c guard, 13g *Units* line) live; v22's sandbox test was running at close (replay of
+run 1036 as run 1053). Piece 3 — an 11-step weight form with an LLM estimate (prompt 128, saved,
+unused) — is simulated, not built; Javear to decide whether to stop at v22. On v21 she did not act
+on *Apply and test*; on v22 she did.
+
+**Next:** item 2 — the minds-eye session routes, spec first (`openapi.yaml`, its own commit); route
+shapes to Javear before writing them.
+
