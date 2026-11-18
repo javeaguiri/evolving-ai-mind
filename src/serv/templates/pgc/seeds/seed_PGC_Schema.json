@@ -277,7 +277,7 @@
     "table_name": "PGC_DomainHelp",
     "target": "pgc",
     "domain": null,
-    "description": "User-facing command aliases and help text per domain. Populated at runtime when a domain is created. Powers /help {domain} responses.",
+    "description": "User-facing command aliases and help text per domain. Populated at runtime when a domain is created. Powers /help {domain} responses and semantic domain resolution.",
     "columns": [
       {
         "name": "id",
@@ -498,7 +498,7 @@
     "table_name": "PGC_WorkflowRun",
     "target": "pgc",
     "domain": null,
-    "description": "One row per workflow execution. Holds the execution stack, accumulated state, callback routing, and runtime safety counters.",
+    "description": "One row per workflow execution. Holds the execution stack, accumulated state, callback routing, and runtime safety counters. Status tracks the full lifecycle from pending through completion or failure.",
     "columns": [
       {
         "name": "id",
@@ -972,7 +972,7 @@
     "table_name": "PGC_WorkflowRunLock",
     "target": "pgc",
     "domain": null,
-    "description": "Reserved for future parallel execution \u2014 optimistic locking. NOT used in sequential mode. Bootstrapped empty.",
+    "description": "Reserved for future parallel execution \u2014 optimistic locking. NOT used in sequential mode. Bootstrapped empty. run_id is unique \u2014 one lock row per active run.",
     "columns": [
       {
         "name": "id",
@@ -1038,7 +1038,7 @@
     "table_name": "PGC_SystemContext",
     "target": "pgc",
     "domain": null,
-    "description": "Compact runtime self-description of the system. Injected into heavy-lift LLM prompts so the model knows what it is operating inside, what it can do, and what the rules are.",
+    "description": "Compact runtime self-description of the system. Injected into heavy-lift LLM prompts so the model knows what it is operating inside, what it can do, and what the rules are. Replaces architecture.md at runtime. Seeded on bootstrap.",
     "columns": [
       {
         "name": "id",
@@ -1105,7 +1105,7 @@
     "table_name": "PGC_StepType",
     "target": "pgc",
     "domain": null,
-    "description": "Canonical catalogue of all valid workflow step types with their input/output contracts. Seeded on bootstrap.",
+    "description": "Canonical catalogue of all valid workflow step types with their input/output contracts. Seeded on bootstrap. Injected into workflow generation and improvement prompts so the LLM produces valid step definitions.",
     "columns": [
       {
         "name": "id",

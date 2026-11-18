@@ -1,7 +1,7 @@
 {
   "table_name": "PGC_EntitySchema",
   "target": "pgc",
-  "description": "Defines business entities that span multiple PGD tables. SERV-Entity reads this to build jsonb_agg queries. Example: a Recipe entity spans PGD_Recipes, PGD_Ingredients, PGD_Steps.",
+  "description": "Defines business entities that span multiple PGD tables. SERV-Entity reads this to build jsonb_agg queries.",
   "columns": [
     { "name": "id",            "type": "serial",                         "primaryKey": true },
     { "name": "entity_name",   "type": "text",    "nullable": false,     "unique": true },
