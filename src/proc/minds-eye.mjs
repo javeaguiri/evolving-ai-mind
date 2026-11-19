@@ -1380,12 +1380,17 @@ async function notifyTurnProgress({ callback, sessionId, traceId, turn, action, 
     ? `_Turn ${turn} · ${label}_ — ${detail}`
     : `_Turn ${turn} · ${label}_`;
 
+  // The line for a reader, and its parts as facts beside it (decision T): the web groups a
+  // turn's calls by `turn` and never parses the text; Slack draws `message` alone.
   await enqueueCallback(callback, {
     type:      'HUMAN_NOTIFICATION',
     format:    'markdown',
     traceId,
     message:   line,
     sessionId,
+    turn,
+    call:      label,
+    ...(detail ? { detail } : {}),
   });
 }
 
