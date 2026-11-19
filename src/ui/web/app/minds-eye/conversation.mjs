@@ -166,3 +166,23 @@ export function answersFrom(questions, values, note) {
   const kept = note?.trim() || null;
   return answers.length || kept ? { answers, note: kept } : null;
 }
+
+/** How long after a send the conversation reads at the working pace, waiting for her round to show. */
+export const EXPECT_MS = 60_000;
+
+/**
+ * Whether the conversation is still waiting for its first sign of the round a send started: the
+ * person's message stored, or the session working. Until then it reads at the working pace, so
+ * what was sent shows within seconds; it gives up after EXPECT_MS.
+ *
+ * @param {{ since: number, persons: number }|null} expecting   When the send was, and the person's
+ *                                                               messages held then
+ * @param {{ persons: number, state: string|undefined, now: number }} seen
+ */
+export function stillExpecting(expecting, { persons, state, now }) {
+  if (!expecting) return false;
+  return persons <= expecting.persons && state !== 'working' && now - expecting.since < EXPECT_MS;
+}
+
+/** The person's messages a conversation holds. */
+export const personCount = messages => messages.filter(m => m.kind === 'person').length;

@@ -504,3 +504,11 @@ td.bad .cell { border-color: var(--bad); }
 .questions > li + li { margin-block-start: 10px; }
 .questions .fld { margin-block-start: 6px; }
 .answers { display: flex; flex-direction: column; gap: 8px; margin-block-start: 10px; }
+.msg.mine.pending { opacity: .75; }
+.msg .sent { margin: 4px 0 0; font-size: 11px; color: var(--muted); text-align: end; }
+
+/* iOS Safari zooms into a text box whose text is under 16px, and leaves the page wider than the
+   screen. A phone's controls are 16px; pinch-zoom stays allowed. */
+@media (max-width: 640px), (pointer: coarse) {
+  input, select, textarea, .fld input, .fld select, .fld textarea, .composer textarea, .cell { font-size: 16px; }
+}

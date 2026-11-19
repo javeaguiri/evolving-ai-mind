@@ -21,7 +21,7 @@ import { Input }               from '../gates/Input.jsx';
 import { relativeAge }         from '../shell/nav.mjs';
 import {
   sessionName, addConversation, groupTurns, repliesMissing, conversationDelay, LIST_POLL_MS,
-  answerable, answerField, answersFrom,
+  answerable, answerField, answersFrom, stillExpecting, personCount,
 } from './conversation.mjs';
 
 /** Her sessions, read when the region opens, after the person sends, and now and then. */
@@ -56,7 +56,11 @@ export function useSessions(api, active, onSignInRequired) {
   return { ...state, refresh };
 }
 
-/** One session's conversation, read from its start and then past its cursors while it is open. */
+/**
+ * One session's conversation, read from its start and then past its cursors while it is open.
+ * `refresh` is called after a send: the conversation then reads at the working pace until the
+ * round it started shows, so what was sent is never left unanswered for a waiting interval.
+ */
 export function useConversation(api, sessionId, onSignInRequired) {
   const [state, setState] = useState({ session: null, messages: [], repliesKeptFrom: null, problem: null });
   const readNow = useRef(() => {});
@@ -64,6 +68,7 @@ export function useConversation(api, sessionId, onSignInRequired) {
   useEffect(() => {
     if (!sessionId) return undefined;
     let alive = true, timer = null, failures = 0, cursor = { after: 0, afterSeq: 0 }, messages = [], session = null;
+    let expecting = null;      // a send not yet seen: { since, persons }
     setState({ session: null, messages: [], repliesKeptFrom: null, problem: null });
     async function read() {
       clearTimeout(timer);
@@ -86,9 +91,10 @@ export function useConversation(api, sessionId, onSignInRequired) {
         failures += 1;
         setState(s => ({ ...s, problem: 'unreachable' }));
       }
-      if (alive && document.visibilityState === 'visible') timer = setTimeout(read, conversationDelay(failures, session?.state));
+      if (!stillExpecting(expecting, { persons: personCount(messages), state: session?.state, now: Date.now() })) expecting = null;
+      if (alive && document.visibilityState === 'visible') timer = setTimeout(read, conversationDelay(failures, expecting ? 'working' : session?.state));
     }
-    readNow.current = read;
+    readNow.current = () => { expecting = { since: Date.now(), persons: personCount(messages) }; read(); };
     const onVisible = () => { if (document.visibilityState === 'visible') read(); };
     document.addEventListener('visibilitychange', onVisible);
     read();
@@ -300,21 +306,25 @@ function HerMessage({ message, live, onGate, onAnswers }) {
  * @param {'gone'|'unreachable'|null} props.problem
  * @param {(atSeq: number, action: string) => Promise<void>} [props.onGate]
  * @param {(answers: object[], note: string|null) => Promise<void>} [props.onAnswers]
+ * @param {string|null} [props.pending]   What the person just sent, until the stored copy arrives
  */
-export function ConversationView({ session, messages, repliesKeptFrom, problem, onGate, onAnswers }) {
+export function ConversationView({ session, messages, repliesKeptFrom, problem, onGate, onAnswers, pending = null }) {
   const { t } = useTranslation();
   if (problem === 'gone') return <p className="muted">{t('mindsEye.gone')}</p>;
-  if (!session) return <p className="muted">{problem ? t('errors.retrying') : t('shell.loading')}</p>;
-  const live = answerable(session, messages);
+  if (!session && !pending) return <p className="muted">{problem ? t('errors.retrying') : t('shell.loading')}</p>;
+  const live = pending ? null : answerable(session, messages);
   return (
     <div className="convo">
-      {repliesMissing(session, repliesKeptFrom) && <p className="muted notkept">{t('mindsEye.notKept')}</p>}
+      {session && repliesMissing(session, repliesKeptFrom) && <p className="muted notkept">{t('mindsEye.notKept')}</p>}
       {groupTurns(messages).map(item => {
         if (item.kind === 'turn')   return <TurnLine key={item.key} item={item} />;
         if (item.kind === 'person') return <div key={`p${item.seq}`} className="msg mine"><p className="plain">{item.text}</p></div>;
         return <HerMessage key={`i${item.id}`} message={item} live={item === live} onGate={onGate} onAnswers={onAnswers} />;
       })}
-      {session.state === 'working' && <p className="working" role="status">{t('mindsEye.working')}</p>}
+      {pending && (
+        <div className="msg mine pending"><p className="plain">{pending}</p><p className="sent">{t('mindsEye.sent')}</p></div>
+      )}
+      {(pending || session?.state === 'working') && <p className="working" role="status">{t('mindsEye.working')}</p>}
       {problem === 'unreachable' && <p className="muted">{t('errors.retrying')}</p>}
     </div>
   );
@@ -381,21 +391,28 @@ export function MindsEyeRegion({ context, sessionId, onOpen, active = true }) {
   const list  = useSessions(api, active, onSignInRequired);
   const convo = useConversation(api, sessionId, onSignInRequired);
   const [composing, setComposing] = useState(false);
-  const now = Date.now();
+  const [sent, setSent]           = useState(null);   // { sessionId, text, persons } until the stored copy arrives
+  const now     = Date.now();
+  const persons = personCount(convo.messages);
+  const pending = sent && sent.sessionId === sessionId && persons <= sent.persons ? sent.text : null;
+  const hold    = (id, text) => setSent({ sessionId: id, text, persons: id === sessionId ? persons : 0 });
 
   const start = async text => {
     const { sessionId: started } = await api.post('minds-eye/sessions', { text });
+    hold(started, text);
     setComposing(false);
     onOpen(started);
     list.refresh();
   };
   const send = async text => {
     await api.post(`minds-eye/sessions/${sessionId}/messages`, { text });
+    hold(sessionId, text);
     convo.refresh();
     list.refresh();
   };
   const answers = async (given, note) => {
     await api.post(`minds-eye/sessions/${sessionId}/messages`, { answers: given, note });
+    hold(sessionId, t('mindsEye.answersSent'));
     convo.refresh();
     list.refresh();
   };
@@ -420,8 +437,8 @@ export function MindsEyeRegion({ context, sessionId, onOpen, active = true }) {
         <button type="button" className="fold" onClick={() => onOpen(null)}>{t('mindsEye.back')}</button>
         {name && <h3 className="convo-title">{name}</h3>}
         <ConversationView session={convo.session} messages={convo.messages} repliesKeptFrom={convo.repliesKeptFrom} problem={convo.problem}
-          onGate={gate} onAnswers={answers} />
-        {convo.problem !== 'gone' && <Composer blocked={blockedReason(convo.session, t)} onSend={send} />}
+          onGate={gate} onAnswers={answers} pending={pending} />
+        {convo.problem !== 'gone' && <Composer blocked={pending ? t('mindsEye.session_busy') : blockedReason(convo.session, t)} onSend={send} />}
       </div>
     );
   }

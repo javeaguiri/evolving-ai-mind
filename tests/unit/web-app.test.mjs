@@ -25,7 +25,7 @@ import { inputsOf, initialValues, isChanged, fieldProblems, formValues, answerFo
 import { liveScript, isNewBuild } from '../../src/ui/web/app/shell/version.mjs';
 import { runName, panelWorkflows, foldPoint, addMessages, threadDelay, isActive, isWorking, THREAD_POLL_MS, THREAD_POLL_MAX_MS } from '../../src/ui/web/app/runs/runs.mjs';
 import { pageItems, domainItems, sectionOf, currentItem, gateHeadline, relativeAge, pollDelay, POLL_MS, POLL_MAX_MS } from '../../src/ui/web/app/shell/nav.mjs';
-import { sessionName, addConversation, groupTurns, repliesMissing, conversationDelay, readCollapsed, writeCollapsed, withSession, answerable, answerField, answersFrom, RADIO_LIMIT, COLLAPSED_KEY, WORKING_POLL_MS, WAITING_POLL_MS, POLL_MAX_MS as CONVO_MAX_MS, ROUND_CEILING_MS } from '../../src/ui/web/app/minds-eye/conversation.mjs';
+import { sessionName, addConversation, groupTurns, repliesMissing, conversationDelay, readCollapsed, writeCollapsed, withSession, answerable, answerField, answersFrom, RADIO_LIMIT, stillExpecting, personCount, EXPECT_MS, COLLAPSED_KEY, WORKING_POLL_MS, WAITING_POLL_MS, POLL_MAX_MS as CONVO_MAX_MS, ROUND_CEILING_MS } from '../../src/ui/web/app/minds-eye/conversation.mjs';
 
 const APP_DIR = new URL('../../src/ui/web/app/', import.meta.url).pathname;
 const CONFIG  = { userPoolId: 'us-east-2_pool', clientId: 'client123', authDomain: 'https://auth.example', siteUrl: 'https://site.example', region: 'us-east-2' };
@@ -1122,6 +1122,14 @@ describe('components and catalog', () => {
       });
     });
 
+    it('what the person just sent shows at once, marked Sent, with Working… — before the session is even read', () => {
+      const html = convo({ session: null, pending: 'Plan the beds' });
+      assert.match(html, /<div class="msg mine pending"><p class="plain">Plan the beds<\/p><p class="sent">Sent<\/p><\/div><p class="working" role="status">Working…<\/p>/);
+      const waiting = convo({ messages: [her(13, { message: 'Two?', format: 'markdown', invitesReply: true, questions: [{ id: 'q1', text: 'x' }] }, '2026-11-19T11:00:05.000Z')],
+        pending: 'Answers sent.', onGate: async () => {}, onAnswers: async () => {} });
+      assert.doesNotMatch(waiting, /Send answers/);
+    });
+
     it('the shell draws her region at the left, headed by her name, with a Novia tab for a phone', () => {
       const html = strip(draw('/p/money?minds-eye=7'));
       assert.match(html, /<div class="body"><aside class="region" aria-label="Novia"><div class="region-head"><h2>Novia<\/h2><button type="button" class="ib" aria-label="Collapse Novia"/);
@@ -1213,6 +1221,17 @@ describe('her region — the decisions, pure', () => {
       { answers: [{ id: 'q1', answer: 'Yes', comment: null }, { id: 'q3', answer: null, comment: 'later' }], note: null });
     assert.deepEqual(answersFrom(qs, {}, ' just this '), { answers: [], note: 'just this' });
     assert.equal(answersFrom(qs, { q1: { answer: '' } }, ''), null);
+  });
+
+  it('stillExpecting: until the person\'s message is stored, she is working, or a minute passes', () => {
+    const since = 1_000_000;
+    const e = { since, persons: 2 };
+    assert.equal(stillExpecting(e, { persons: 2, state: 'waiting', now: since + 5_000 }), true);
+    assert.equal(stillExpecting(e, { persons: 3, state: 'waiting', now: since + 5_000 }), false);
+    assert.equal(stillExpecting(e, { persons: 2, state: 'working', now: since + 5_000 }), false);
+    assert.equal(stillExpecting(e, { persons: 2, state: 'waiting', now: since + EXPECT_MS }), false);
+    assert.equal(stillExpecting(null, { persons: 0, state: 'waiting', now: since }), false);
+    assert.equal(personCount([{ kind: 'person' }, { kind: 'inbox' }, { kind: 'person' }]), 2);
   });
 
   it('withSession: sets or clears ?minds-eye=, keeping the rest of the location', () => {

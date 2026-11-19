@@ -103,6 +103,8 @@
     "comment": "Comment",
     "anythingElse": "Anything else",
     "sendAnswers": "Send answers",
+    "sent": "Sent",
+    "answersSent": "Answers sent.",
     "turn": "Turn {turn}",
     "turnCalls": "Turn {turn} · {count, plural, one {# call} other {# calls}}",
     "paused": {
