@@ -1,6 +1,6 @@
 # Sprint 18 — Novia in the browser
 
-**Status: ACTIVE — started 2026-11-18.** Scope and ACs agreed with Javear at "start sprint". The
+**Status: ACTIVE — started 2026-11-18; session 2 closed 2026-11-19.** Scope and ACs agreed with Javear at "start sprint". The
 first slice of `docs/arch-web-app.md` (v0.10) §10 Phase 1. The prior sprint's retro is
 `docs/sprints/sprint-17.md`.
 
@@ -96,6 +96,19 @@ run 1036 as run 1053). Piece 3 — an 11-step weight form with an LLM estimate (
 unused) — is simulated, not built; On v21 she did not act on *Apply and test*; on v22 she did. Javear
 continues it with Novia (2026-11-19) — not tracked here.
 
-**Next:** item 2 — the minds-eye session routes, spec first (`openapi.yaml`, its own commit); route
-shapes to Javear before writing them.
+**2026-11-19 (session 2).** Items 2, 3 and 4 built and deployed; AC1 met (session 1381).
+Decision U agreed (session_busy, one responses route, sessions by last activity). Last activity
+needed `PGC_Session.last_active_at` kept by a trigger, and SERV had no route to add a trigger to
+a live table: `POST /serv/schema/addTrigger` built, trigger functions now a catalogue in
+`trigger-functions.mjs`, and `createTable` checks its triggers the same way. Migration run
+(1,380 sessions; a rerun first found a millisecond shortfall from a JS `Date` — fixed, now a
+no-op). Her region, her gates and questions live on the web. From Javear's first try: a reply
+seemed lost for a few seconds after Send (the session read *waiting* until her round spoke —
+also let a second send through) and an iPhone zoomed into 14 px text boxes; both fixed and
+deployed (`06cea4f`, `4d03d5c`), not yet seen live. `process_receipt` is Javear's with Novia.
+
+**Next:** AC2 live (one session per gate type, on the web) and a look at the Send fix and the
+iPhone width; then item 5 (`minds_eye` panels — the panel kind `novia` renamed `minds_eye` in
+`page-config.mjs` and the `Page` schema), item 8's rename in the UI (the route is built), then 6
+and 7.
 
