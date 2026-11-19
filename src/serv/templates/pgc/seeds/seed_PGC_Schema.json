@@ -1294,7 +1294,7 @@
     "table_name": "PGC_Session",
     "target": "pgc",
     "domain": null,
-    "description": "One row per LLM session: minds_eye, general_chat and llm_call_diagnostic sessions. query_id is the user-facing reference used with /explain. callback is where the session's messages go, the shape of PGC_WorkflowRun.callback; topic is set only from the minds_eye panel that starts the session; label is the session's name as the person set it (null: named by its first message).",
+    "description": "One row per LLM session: minds_eye, general_chat and llm_call_diagnostic sessions. query_id is the user-facing reference used with /explain. callback is where the session's messages go, the shape of PGC_WorkflowRun.callback; topic is set only from the minds_eye panel that starts the session; label is the session's name as the person set it (null: named by its first message). last_active_at is its latest entry's time, kept by PGC_SessionEntry's trigger; minds_eye sessions are listed by it.",
     "columns": [
       {
         "name": "id",
@@ -1388,6 +1388,12 @@
         "name": "label",
         "type": "text",
         "nullable": true
+      },
+      {
+        "name": "last_active_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
       }
     ],
     "foreign_keys": [],
@@ -1414,7 +1420,7 @@
     "table_name": "PGC_SessionEntry",
     "target": "pgc",
     "domain": null,
-    "description": "One row per turn in a session. Reconstructs the LLM messages array by ordering on sequence_number. Append-only \u2014 never updated after insert. reasoning is diagnostic metadata, never included in messages array reconstruction.",
+    "description": "One row per turn in a session. Reconstructs the LLM messages array by ordering on sequence_number. Append-only \u2014 never updated after insert. reasoning is diagnostic metadata, never included in messages array reconstruction. Each insert sets its session's last_active_at (touch_session_last_active).",
     "columns": [
       {
         "name": "id",
@@ -1484,7 +1490,13 @@
         "expression": "role IN ('system', 'user', 'assistant', 'tool')"
       }
     ],
-    "triggers": []
+    "triggers": [
+      {
+        "name": "trg_pgc_sessionentry_last_active",
+        "timing": "AFTER INSERT",
+        "function": "touch_session_last_active()"
+      }
+    ]
   },
   {
     "table_name": "PGC_Memory",

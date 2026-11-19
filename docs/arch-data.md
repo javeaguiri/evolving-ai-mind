@@ -586,7 +586,8 @@ CREATE TABLE "PGC_Session" (
   created_at            TIMESTAMP     NOT NULL DEFAULT NOW(),
   callback              JSONB         NULL,        -- where the session's messages go (as PGC_WorkflowRun.callback)
   topic                 TEXT          NULL,        -- minds_eye: the panel topic it is filed under
-  label                 TEXT          NULL         -- minds_eye: its name, as the person set it
+  label                 TEXT          NULL,        -- minds_eye: its name, as the person set it
+  last_active_at        TIMESTAMPTZ   NOT NULL DEFAULT NOW()  -- its latest entry's time (trigger on PGC_SessionEntry)
 );
 ```
 
@@ -610,6 +611,7 @@ CREATE TABLE "PGC_Session" (
 | callback | jsonb NULL | Where the session's messages go — the shape of `PGC_WorkflowRun.callback`: Slack `{ provider, channel, threadId }`, web `{ provider: 'web', channel: <principal> }` (the session is its own thread). A message's own callback wins; this is the fallback, field by field. Ownership: a web session belongs to its `channel`, a Slack one to the household (`principal.mjs`). Replaced `slack_thread_ts` (Sprint 18) |
 | topic | text NULL | `minds_eye` only — the subject a `minds_eye` panel lists sessions by; set only from the panel that starts the session (`arch-web-app.md` §2.5) |
 | label | text NULL | `minds_eye` only — the session's name, set or cleared from the web; null means it is named by its first message |
+| last_active_at | timestamptz NOT NULL DEFAULT now() | The latest entry's `created_at`, set by `trg_pgc_sessionentry_last_active` on every `PGC_SessionEntry` insert (`touch_session_last_active()`, `src/serv/trigger-functions.mjs`); never written by code. `minds_eye` sessions are listed by it, newest first (Sprint 18) |
 
 Indexes: `(query_id)`, `(run_id)`, `(fingerprint_hash)`
 
@@ -648,6 +650,8 @@ CREATE TABLE "PGC_SessionEntry" (
 | created_at | timestamp | |
 
 **`chk_pgc_sessionentry_role` constraint:** `role IN ('system', 'user', 'assistant', 'tool')`
+
+**`trg_pgc_sessionentry_last_active` trigger:** `AFTER INSERT`, `touch_session_last_active()` — sets the session's `last_active_at` to the entry's `created_at`.
 
 **Messages array reconstruction:**
 ```sql
