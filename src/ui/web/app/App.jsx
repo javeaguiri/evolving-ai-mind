@@ -3,14 +3,15 @@
 // See LICENSE file in the project root for full license terms.
 // src/ui/web/app/App.jsx
 //
-// The shell (docs/arch-web-app.md §4.1): the top bar — 🏠, Pages, Domains, 🔔, ⚙ — over the page
-// the route names, Settings and the run drawer over that. It reads who
+// The shell (docs/arch-web-app.md §4.1): the top bar — 🏠, Pages, Domains, 🔔, ⚙ — over her region
+// on the left and the page the route names, Settings and the run drawer over that. On a phone her
+// region is a tab at the foot that opens over the page. It reads who
 // the user is (GET /me), the household's pages (GET /pages) and its domains (GET /workflows) once,
 // retrying with the §9 banner while the backend can't be reached. A household page draws its
 // panels (§4.2); a domain page its workflow panel (§4.4); a run page and the run drawer the run's
 // thread (§4.3).
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useTranslation }      from 'react-i18next';
 import { SignInRequired }      from './auth/session.mjs';
 import { useRoute, matchLocation, navigate, replace, back } from './router.mjs';
@@ -27,6 +28,24 @@ import { WorkflowPanel }       from './panels/WorkflowPanel.jsx';
 import { RunThread }           from './runs/RunThread.jsx';
 import { runName }             from './runs/runs.mjs';
 import { domainItems, pollDelay, HOME_PAGE_KEY } from './shell/nav.mjs';
+import { MindsEyeRegion }      from './minds-eye/Region.jsx';
+import { readCollapsed, writeCollapsed, withSession } from './minds-eye/conversation.mjs';
+
+const PHONE = '(max-width: 640px)';
+const storage = () => { try { return globalThis.localStorage ?? null; } catch { return null; } };
+
+/** Whether the screen is a phone's — her region is then a tab, not a column. False off a browser. */
+function useIsPhone() {
+  return useSyncExternalStore(
+    listener => {
+      const query = globalThis.matchMedia?.(PHONE);
+      query?.addEventListener('change', listener);
+      return () => query?.removeEventListener('change', listener);
+    },
+    () => globalThis.matchMedia?.(PHONE).matches ?? false,
+    () => false,
+  );
+}
 
 /**
  * The three reads the shell needs, with retries. `me` may already be in hand — main.jsx reads it
@@ -127,6 +146,14 @@ export function Shell({ route, me, pages, domains, problem, api, onSignInRequire
   const [run, setRun] = useState(null);     // the run the run page or the run drawer shows
   const where    = { language: i18n.language, locale: context.locale, timeZone: context.timeZone };
   const runId    = page.page === 'run' ? Number(page.params.runId) : null;
+  const phone    = useIsPhone();
+  const session  = route.mindsEye ?? page.mindsEye ?? null;   // the session her region is open on
+  const [collapsed, setCollapsed] = useState(() => readCollapsed(storage()));
+  const [phoneOpen, setPhoneOpen] = useState(false);
+  const openSession = sessionId => replace(withSession(route.location, sessionId));
+  const collapse    = value => { setCollapsed(value); writeCollapsed(storage(), value); };
+
+  useEffect(() => { if (session) setCollapsed(false); }, [session]);
 
   useEffect(() => {
     document.title = title ? `${title} · ${t('app.name')}` : t('app.name');
@@ -142,6 +169,20 @@ export function Shell({ route, me, pages, domains, problem, api, onSignInRequire
       </TopBar>
       {problem && <div className="banner" role="alert">{t('errors.retrying')}</div>}
       <NewBuild />
+      <div className="body">
+      {!phone && (collapsed ? (
+        <aside className="region collapsed">
+          <button type="button" className="ib" onClick={() => collapse(false)} aria-label={t('mindsEye.expand')} title={t('mindsEye.expand')}>»</button>
+        </aside>
+      ) : (
+        <aside className="region" aria-label={t('mindsEye.name')}>
+          <div className="region-head">
+            <h2>{t('mindsEye.name')}</h2>
+            <button type="button" className="ib" onClick={() => collapse(true)} aria-label={t('mindsEye.collapse')} title={t('mindsEye.collapse')}>«</button>
+          </div>
+          <MindsEyeRegion context={context} sessionId={session} onOpen={openSession} />
+        </aside>
+      ))}
       <main className="main">
         {title === null && <p className="muted">{t('shell.loading')}</p>}
         {title !== null && (
@@ -169,7 +210,15 @@ export function Shell({ route, me, pages, domains, problem, api, onSignInRequire
         )}
         {page.page === 'notFound' && <p><Link to="/">{t('pages.goHome')}</Link></p>}
       </main>
-      <PhoneTabs route={page} pages={pages} domains={domains} />
+      </div>
+      <PhoneTabs route={page} pages={pages} domains={domains}>
+        <button type="button" aria-current={phone && (phoneOpen || session) ? 'true' : undefined} onClick={() => setPhoneOpen(true)}>{t('mindsEye.name')}</button>
+      </PhoneTabs>
+      {phone && (phoneOpen || session) && (
+        <Drawer title={t('mindsEye.name')} onClose={() => { setPhoneOpen(false); if (session) openSession(null); }}>
+          <MindsEyeRegion context={context} sessionId={session} onOpen={openSession} />
+        </Drawer>
+      )}
       {page.run && (
         <Drawer title={run?.runId === page.run ? runName(run, where) : t('pages.run', { runId: page.run })} onClose={() => navigate(path)}>
           <p className="ptools"><Link to={`/runs/${page.run}`}>{t('run.openPage')}</Link></p>

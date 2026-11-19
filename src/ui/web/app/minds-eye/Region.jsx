@@ -1,0 +1,322 @@
+// Copyright (c) 2026 Javea Guiri. All rights reserved.
+// Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+// See LICENSE file in the project root for full license terms.
+// src/ui/web/app/minds-eye/Region.jsx
+//
+// Her region (docs/arch-web-app.md §4.1, §4.5): the left of the page, where only she answers. Her
+// sessions at its head, most recently active first, each named by its label or first message;
+// opening one shows the conversation — the person's own messages and hers, a turn's tool calls on
+// one line (decision T) — with a box to write in. *New* starts a session. « collapses the region to
+// a strip, remembered on this device. The session open is in the location (`?minds-eye=`), so it
+// is a deep link and survives a reload. An open conversation is read again while it is open and
+// the tab visible: often while she works, less while she waits; the list less often still.
+
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation }      from 'react-i18next';
+import { SignInRequired }      from '../auth/session.mjs';
+import { Markdown }            from '../Markdown.jsx';
+import { Message }             from '../runs/RunThread.jsx';
+import { relativeAge }         from '../shell/nav.mjs';
+import {
+  sessionName, addConversation, groupTurns, repliesMissing, conversationDelay, LIST_POLL_MS,
+} from './conversation.mjs';
+
+/** Her sessions, read when the region opens, after the person sends, and now and then. */
+export function useSessions(api, active, onSignInRequired) {
+  const [state, setState] = useState({ sessions: null, problem: false });
+  const readNow = useRef(() => {});
+
+  useEffect(() => {
+    if (!active) return undefined;
+    let alive = true, timer = null;
+    async function read() {
+      clearTimeout(timer);
+      try {
+        const page = await api.get('minds-eye/sessions');
+        if (!alive) return;
+        setState({ sessions: page.sessions, problem: false });
+      } catch (e) {
+        if (!alive) return;
+        if (e instanceof SignInRequired) { onSignInRequired(); return; }
+        setState(s => ({ ...s, problem: true }));
+      }
+      if (alive && document.visibilityState === 'visible') timer = setTimeout(read, LIST_POLL_MS);
+    }
+    readNow.current = read;
+    const onVisible = () => { if (document.visibilityState === 'visible') read(); };
+    document.addEventListener('visibilitychange', onVisible);
+    read();
+    return () => { alive = false; clearTimeout(timer); document.removeEventListener('visibilitychange', onVisible); };
+  }, [api, active, onSignInRequired]);
+
+  const refresh = useCallback(() => readNow.current(), []);
+  return { ...state, refresh };
+}
+
+/** One session's conversation, read from its start and then past its cursors while it is open. */
+export function useConversation(api, sessionId, onSignInRequired) {
+  const [state, setState] = useState({ session: null, messages: [], repliesKeptFrom: null, problem: null });
+  const readNow = useRef(() => {});
+
+  useEffect(() => {
+    if (!sessionId) return undefined;
+    let alive = true, timer = null, failures = 0, cursor = { after: 0, afterSeq: 0 }, messages = [], session = null;
+    setState({ session: null, messages: [], repliesKeptFrom: null, problem: null });
+    async function read() {
+      clearTimeout(timer);
+      try {
+        let page;
+        for (let more = true; more;) {
+          page     = await api.get(`minds-eye/sessions/${sessionId}/messages`, cursor);
+          messages = addConversation(messages, page.messages);
+          cursor   = page.cursor;
+          more     = page.more === true && page.messages.length > 0;
+        }
+        if (!alive) return;
+        session  = page.session;
+        failures = 0;
+        setState({ session, messages, repliesKeptFrom: page.repliesKeptFrom, problem: null });
+      } catch (e) {
+        if (!alive) return;
+        if (e instanceof SignInRequired) { onSignInRequired(); return; }
+        if (e.code === 'session_not_found' || e.code === 'session_forbidden') { setState(s => ({ ...s, problem: 'gone' })); return; }
+        failures += 1;
+        setState(s => ({ ...s, problem: 'unreachable' }));
+      }
+      if (alive && document.visibilityState === 'visible') timer = setTimeout(read, conversationDelay(failures, session?.state));
+    }
+    readNow.current = read;
+    const onVisible = () => { if (document.visibilityState === 'visible') read(); };
+    document.addEventListener('visibilitychange', onVisible);
+    read();
+    return () => { alive = false; clearTimeout(timer); document.removeEventListener('visibilitychange', onVisible); };
+  }, [api, sessionId, onSignInRequired]);
+
+  const refresh = useCallback(() => readNow.current(), []);
+  return { ...state, refresh };
+}
+
+/**
+ * Her sessions, most recently active first.
+ *
+ * @param {object} props
+ * @param {object[]|null} props.sessions
+ * @param {number|null} props.currentId
+ * @param {boolean} props.problem
+ * @param {number} props.now
+ * @param {string} props.locale
+ * @param {(sessionId: number) => void} props.onOpen
+ */
+export function SessionList({ sessions, currentId, problem, now, locale, onOpen }) {
+  const { t } = useTranslation();
+  if (!sessions) return <p className="muted">{problem ? t('errors.retrying') : t('shell.loading')}</p>;
+  if (!sessions.length) return <p className="muted">{t('mindsEye.empty')}</p>;
+  return (
+    <ul className="sessions">
+      {sessions.map(s => (
+        <li key={s.sessionId}>
+          <button type="button" aria-current={s.sessionId === currentId ? 'true' : undefined} onClick={() => onOpen(s.sessionId)}>
+            <span className="lbl">{sessionName(s) ?? t('mindsEye.unnamed')}</span>
+            <span className="when">{s.state === 'working' ? t('mindsEye.working') : relativeAge(s.lastActiveAt, now, locale)}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** A turn's calls as one line: one call says what it did; several are counted and listed under it. */
+function TurnLine({ item }) {
+  const { t } = useTranslation();
+  const [first] = item.calls;
+  if (item.calls.length === 1) {
+    return (
+      <div className="turn">
+        <Markdown text={`_${t('mindsEye.turn', { turn: item.turn })} · ${first.call}_${first.detail ? ` — ${first.detail}` : ''}`} />
+      </div>
+    );
+  }
+  return (
+    <details className="turn">
+      <summary>{t('mindsEye.turnCalls', { turn: item.turn, count: item.calls.length })}</summary>
+      <ul>
+        {item.calls.map(c => <li key={c.id}><Markdown text={`${c.call}${c.detail ? ` — ${c.detail}` : ''}`} /></li>)}
+      </ul>
+    </details>
+  );
+}
+
+/** Her questions on a reply, as she asked them. */
+function Questions({ questions }) {
+  return (
+    <ol className="questions">
+      {questions.map(q => (
+        <li key={q.id}>
+          <Markdown text={q.text} />
+          {q.options?.length > 0 && <p className="muted">{q.options.join(' · ')}</p>}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** Why she paused, as a continue gate's `reason` says it (each key named, for the catalog's check). */
+const PAUSED = {
+  turn_limit:     t => t('mindsEye.paused.turn_limit'),
+  action_limit:   t => t('mindsEye.paused.action_limit'),
+  round_budget:   t => t('mindsEye.paused.round_budget'),
+  after_followup: t => t('mindsEye.paused.after_followup'),
+};
+
+/** One of her messages: a reply, an error, or a question waiting on the person. */
+function HerMessage({ message, waiting }) {
+  const { t } = useTranslation();
+  const p = message.payload ?? {};
+  if (message.messageType === 'HUMAN_GATE' && p.gate_type === 'minds_eye_continue_gate') {
+    return (
+      <div className={waiting ? 'msg gate waiting' : 'msg gate'}>
+        <p className="plain">{(PAUSED[p.reason] ?? PAUSED.turn_limit)(t)}</p>
+        {waiting && <p className="hint">{t('run.waiting')}</p>}
+      </div>
+    );
+  }
+  if (message.messageType === 'HUMAN_NOTIFICATION' && p.questions?.length) {
+    return (
+      <div className="msg">
+        {p.format === 'markdown' ? <Markdown text={p.message} /> : <p className="plain">{p.message}</p>}
+        <Questions questions={p.questions} />
+      </div>
+    );
+  }
+  return <Message message={message} waiting={waiting} />;
+}
+
+/**
+ * The conversation drawn from its data — what useConversation feeds, and what the tests draw.
+ *
+ * @param {object} props
+ * @param {object|null} props.session
+ * @param {object[]} props.messages
+ * @param {string|null} props.repliesKeptFrom
+ * @param {'gone'|'unreachable'|null} props.problem
+ */
+export function ConversationView({ session, messages, repliesKeptFrom, problem }) {
+  const { t } = useTranslation();
+  if (problem === 'gone') return <p className="muted">{t('mindsEye.gone')}</p>;
+  if (!session) return <p className="muted">{problem ? t('errors.retrying') : t('shell.loading')}</p>;
+  const waitingAt = session.gate ? messages.findLast(m => m.kind === 'inbox' && m.messageType === 'HUMAN_GATE') : null;
+  return (
+    <div className="convo">
+      {repliesMissing(session, repliesKeptFrom) && <p className="muted notkept">{t('mindsEye.notKept')}</p>}
+      {groupTurns(messages).map(item => {
+        if (item.kind === 'turn')   return <TurnLine key={item.key} item={item} />;
+        if (item.kind === 'person') return <div key={`p${item.seq}`} className="msg mine"><p className="plain">{item.text}</p></div>;
+        return <HerMessage key={`i${item.id}`} message={item} waiting={item === waitingAt} />;
+      })}
+      {session.state === 'working' && <p className="working" role="status">{t('mindsEye.working')}</p>}
+      {problem === 'unreachable' && <p className="muted">{t('errors.retrying')}</p>}
+    </div>
+  );
+}
+
+/**
+ * The box she is written to. Disabled while she works, and while a question of hers waits on an
+ * answer that is not typed.
+ *
+ * @param {object} props
+ * @param {string|null} props.blocked     Why nothing can be sent now, or null
+ * @param {(text: string) => Promise<void>} props.onSend
+ */
+export function Composer({ blocked, onSend }) {
+  const { t } = useTranslation();
+  const [text, setText]       = useState('');
+  const [sending, setSending] = useState(false);
+  const [failed, setFailed]   = useState(null);
+  const send = async e => {
+    e.preventDefault();
+    if (!text.trim() || sending || blocked) return;
+    setSending(true);
+    setFailed(null);
+    try {
+      await onSend(text.trim());
+      setText('');
+    } catch (err) {
+      setFailed(err?.code === 'session_busy' || err?.code === 'gate_waiting' ? t(`mindsEye.${err.code}`) : t('mindsEye.failed'));
+    } finally {
+      setSending(false);
+    }
+  };
+  return (
+    <form className="composer" onSubmit={send}>
+      <textarea value={text} rows={3} placeholder={t('mindsEye.placeholder')} aria-label={t('mindsEye.placeholder')}
+        onChange={e => setText(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send(e); }} />
+      {(blocked || failed) && <p className="hint" role="status">{failed ?? blocked}</p>}
+      <div className="btnrow">
+        <button type="submit" className="btn primary" disabled={!text.trim() || sending || !!blocked}>{t('mindsEye.send')}</button>
+      </div>
+    </form>
+  );
+}
+
+/** Why a message cannot be sent to this session now, or null. */
+function blockedReason(session, t) {
+  if (!session) return null;
+  if (session.state === 'working')    return t('mindsEye.session_busy');
+  if (session.gate?.kind === 'action') return t('mindsEye.gate_waiting');
+  return null;
+}
+
+/**
+ * @param {object} props
+ * @param {{ api: object, locale: string, onSignInRequired: () => void }} props.context
+ * @param {number|null} props.sessionId     The session open, from `?minds-eye=`
+ * @param {(sessionId: number|null) => void} props.onOpen
+ * @param {boolean} [props.active]          Read the list — false while the region is not drawn
+ */
+export function MindsEyeRegion({ context, sessionId, onOpen, active = true }) {
+  const { t } = useTranslation();
+  const { api, onSignInRequired } = context;
+  const list  = useSessions(api, active, onSignInRequired);
+  const convo = useConversation(api, sessionId, onSignInRequired);
+  const [composing, setComposing] = useState(false);
+  const now = Date.now();
+
+  const start = async text => {
+    const { sessionId: started } = await api.post('minds-eye/sessions', { text });
+    setComposing(false);
+    onOpen(started);
+    list.refresh();
+  };
+  const send = async text => {
+    await api.post(`minds-eye/sessions/${sessionId}/messages`, { text });
+    convo.refresh();
+    list.refresh();
+  };
+
+  if (composing) {
+    return (
+      <div className="region-body">
+        <button type="button" className="fold" onClick={() => setComposing(false)}>{t('mindsEye.back')}</button>
+        <Composer blocked={null} onSend={start} />
+      </div>
+    );
+  }
+  if (sessionId) {
+    const name = convo.session ? sessionName(convo.session) ?? t('mindsEye.unnamed') : null;
+    return (
+      <div className="region-body">
+        <button type="button" className="fold" onClick={() => onOpen(null)}>{t('mindsEye.back')}</button>
+        {name && <h3 className="convo-title">{name}</h3>}
+        <ConversationView session={convo.session} messages={convo.messages} repliesKeptFrom={convo.repliesKeptFrom} problem={convo.problem} />
+        {convo.problem !== 'gone' && <Composer blocked={blockedReason(convo.session, t)} onSend={send} />}
+      </div>
+    );
+  }
+  return (
+    <div className="region-body">
+      <button type="button" className="btn" onClick={() => setComposing(true)}>{t('mindsEye.new')}</button>
+      <SessionList sessions={list.sessions} currentId={sessionId} problem={list.problem} now={now} locale={context.locale} onOpen={onOpen} />
+    </div>
+  );
+}

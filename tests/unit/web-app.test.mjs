@@ -25,6 +25,7 @@ import { inputsOf, initialValues, isChanged, fieldProblems, formValues, answerFo
 import { liveScript, isNewBuild } from '../../src/ui/web/app/shell/version.mjs';
 import { runName, panelWorkflows, foldPoint, addMessages, threadDelay, isActive, isWorking, THREAD_POLL_MS, THREAD_POLL_MAX_MS } from '../../src/ui/web/app/runs/runs.mjs';
 import { pageItems, domainItems, sectionOf, currentItem, gateHeadline, relativeAge, pollDelay, POLL_MS, POLL_MAX_MS } from '../../src/ui/web/app/shell/nav.mjs';
+import { sessionName, addConversation, groupTurns, repliesMissing, conversationDelay, readCollapsed, writeCollapsed, withSession, COLLAPSED_KEY, WORKING_POLL_MS, WAITING_POLL_MS, POLL_MAX_MS as CONVO_MAX_MS, ROUND_CEILING_MS } from '../../src/ui/web/app/minds-eye/conversation.mjs';
 
 const APP_DIR = new URL('../../src/ui/web/app/', import.meta.url).pathname;
 const CONFIG  = { userPoolId: 'us-east-2_pool', clientId: 'client123', authDomain: 'https://auth.example', siteUrl: 'https://site.example', region: 'us-east-2' };
@@ -223,16 +224,20 @@ describe('createApiClient — the bearer, one retry on 401, WebError codes', () 
 
 describe('matchPath — the §4.8 routes', () => {
   for (const [path, search, expected] of [
-    ['/', '', { page: 'home', params: {}, run: null }],
-    ['/p/money', '', { page: 'householdPage', params: { pageKey: 'money' }, run: null }],
-    ['/d', '', { page: 'domains', params: {}, run: null }],
-    ['/d/budgets_expenses', '?run=1500', { page: 'domain', params: { domain: 'budgets_expenses' }, run: 1500 }],
-    ['/runs/42', '', { page: 'run', params: { runId: '42' }, run: null }],
-    ['/settings/profile', '', { page: 'settings', params: { entry: 'profile' }, run: null }],
-    ['/runs/0', '', { page: 'notFound', params: {}, run: null }],
-    ['/d/x/y', '', { page: 'notFound', params: {}, run: null }],
-    ['/p/%E0%A4%A', '', { page: 'notFound', params: {}, run: null }],
-    ['/', '?run=abc', { page: 'home', params: {}, run: null }],
+    ['/', '', { page: 'home', params: {}, run: null, mindsEye: null }],
+    ['/p/money', '', { page: 'householdPage', params: { pageKey: 'money' }, run: null, mindsEye: null }],
+    ['/d', '', { page: 'domains', params: {}, run: null, mindsEye: null }],
+    ['/d/budgets_expenses', '?run=1500', { page: 'domain', params: { domain: 'budgets_expenses' }, run: 1500, mindsEye: null }],
+    ['/runs/42', '', { page: 'run', params: { runId: '42' }, run: null, mindsEye: null }],
+    ['/settings/profile', '', { page: 'settings', params: { entry: 'profile' }, run: null, mindsEye: null }],
+    ['/runs/0', '', { page: 'notFound', params: {}, run: null, mindsEye: null }],
+    ['/d/x/y', '', { page: 'notFound', params: {}, run: null, mindsEye: null }],
+    ['/p/%E0%A4%A', '', { page: 'notFound', params: {}, run: null, mindsEye: null }],
+    ['/', '?run=abc', { page: 'home', params: {}, run: null, mindsEye: null }],
+    ['/p/money', '?minds-eye=1367', { page: 'householdPage', params: { pageKey: 'money' }, run: null, mindsEye: 1367 }],
+    ['/runs/42', '?run=7&minds-eye=12', { page: 'run', params: { runId: '42' }, run: 7, mindsEye: 12 }],
+    ['/', '?minds-eye=0', { page: 'home', params: {}, run: null, mindsEye: null }],
+    ['/nowhere', '?minds-eye=5', { page: 'notFound', params: {}, run: null, mindsEye: 5 }],
   ]) {
     it(`${path}${search}`, () => assert.deepEqual(matchPath(path, search), expected));
   }
@@ -554,6 +559,7 @@ describe('components and catalog', () => {
                    export { Markdown } from './Markdown.jsx';
                    export { WorkflowList } from './panels/WorkflowPanel.jsx';
                    export { ThreadView } from './runs/RunThread.jsx';
+                   export { SessionList, ConversationView, Composer } from './minds-eye/Region.jsx';
                    export { Gate, AnsweredRecord } from './gates/Gate.jsx';
                    export { ReportBody } from './panels/ReportPanel.jsx';
                    export { initI18n } from './i18n.mjs';
@@ -1002,6 +1008,82 @@ describe('components and catalog', () => {
     assert.match(html, /<button type="button">Sign in again<\/button>/);
   });
 
+  describe('her region', () => {
+    const strip = html => html.replace(/<!-- -->/g, '');
+    const NOW   = Date.parse('2026-11-19T12:00:00.000Z');
+    const S     = { sessionId: 7, label: null, firstMessage: 'Plan the   garden beds', topic: null, provider: 'web',
+      createdAt: '2026-11-19T11:00:00.000Z', lastActiveAt: '2026-11-19T11:58:00.000Z', state: 'waiting', gate: null };
+    const person = (seq, text, at) => ({ kind: 'person', seq, text, createdAt: at });
+    const her    = (id, payload, at, messageType = 'HUMAN_NOTIFICATION') => ({ kind: 'inbox', id, messageType, payload, createdAt: at });
+    const convo  = props => strip(ui.renderToString(ui.createElement(ui.ConversationView, { session: S, messages: [], repliesKeptFrom: '2026-11-19T11:00:05.000Z', problem: null, ...props })));
+
+    it('the list names each session by label, else first message, with its age or Working…', () => {
+      const html = strip(ui.renderToString(ui.createElement(ui.SessionList, {
+        sessions: [{ ...S, label: 'Garden' }, { ...S, sessionId: 8, state: 'working' }, { ...S, sessionId: 9, firstMessage: null }],
+        currentId: 8, problem: false, now: NOW, locale: 'en', onOpen() {},
+      })));
+      assert.match(html, /<span class="lbl">Garden<\/span><span class="when">2 minutes ago<\/span>/);
+      assert.match(html, /aria-current="true"[^>]*><span class="lbl">Plan the garden beds<\/span><span class="when">Working…<\/span>/);
+      assert.match(html, /<span class="lbl">New conversation<\/span>/);
+    });
+
+    it('an empty list says how to start, and a list not yet read says Loading…', () => {
+      assert.match(ui.renderToString(ui.createElement(ui.SessionList, { sessions: [], currentId: null, problem: false, now: NOW, locale: 'en', onOpen() {} })), /No conversations yet/);
+      assert.match(ui.renderToString(ui.createElement(ui.SessionList, { sessions: null, currentId: null, problem: false, now: NOW, locale: 'en', onOpen() {} })), /Loading…/);
+    });
+
+    it('the person\'s messages and hers, a turn\'s calls on one line', () => {
+      const html = convo({ messages: [
+        person(1, 'Plan the beds', '2026-11-19T11:00:00.000Z'),
+        her(10, { message: '_Turn 1 · `read_a`_ — first', format: 'markdown', turn: 1, call: '`read_a`', detail: 'first' }, '2026-11-19T11:00:02.000Z'),
+        her(11, { message: '_Turn 1 · `read_b`_', format: 'markdown', turn: 1, call: '`read_b`' }, '2026-11-19T11:00:03.000Z'),
+        her(12, { message: '_Turn 2 · `read_c`_ — then', format: 'markdown', turn: 2, call: '`read_c`', detail: 'then' }, '2026-11-19T11:00:04.000Z'),
+        her(13, { message: 'Here is **the plan**.', format: 'markdown', invitesReply: true }, '2026-11-19T11:00:05.000Z'),
+      ] });
+      assert.match(html, /<div class="msg mine"><p class="plain">Plan the beds<\/p><\/div>/);
+      assert.match(html, /<details class="turn"><summary>Turn 1 · 2 calls<\/summary><ul><li><div class="md"><p><code>read_a<\/code> — first<\/p><\/div><\/li><li><div class="md"><p><code>read_b<\/code><\/p>/);
+      assert.match(html, /<div class="turn"><div class="md"><p><em>Turn 2 · <code>read_c<\/code><\/em> — then<\/p>/);
+      assert.match(html, /<strong>the plan<\/strong>/);
+      assert.doesNotMatch(html, /Turn 1 ·.*Turn 1 ·/s);
+    });
+
+    it('her questions are drawn under her reply, with their options', () => {
+      const html = convo({ messages: [her(13, { message: 'Two things.', format: 'markdown', invitesReply: true,
+        questions: [{ id: 'q1', text: 'Raised beds?', options: ['Yes', 'No'] }, { id: 'q2', text: 'How many?' }] }, '2026-11-19T11:00:05.000Z')] });
+      assert.match(html, /<ol class="questions"><li><div class="md"><p>Raised beds\?<\/p><\/div><p class="muted">Yes · No<\/p><\/li><li><div class="md"><p>How many\?<\/p>/);
+    });
+
+    it('a continue gate says why she paused; the one waiting is marked', () => {
+      const gate = her(14, { gate_type: 'minds_eye_continue_gate', atSeq: 6, reason: 'round_budget' }, '2026-11-19T11:05:00.000Z', 'HUMAN_GATE');
+      const html = convo({ session: { ...S, gate: { kind: 'continue', atSeq: 6 } }, messages: [gate] });
+      assert.match(html, /<div class="msg gate waiting"><p class="plain">I’ve used up this round’s time/);
+      assert.match(html, /Waiting for your answer\./);
+      assert.match(convo({ messages: [{ ...gate, payload: { gate_type: 'minds_eye_continue_gate', atSeq: 6 } }] }), /I’ve reached my turn limit/);
+    });
+
+    it('Working… while she works; the lost-replies notice only on a session older than the inbox', () => {
+      assert.match(convo({ session: { ...S, state: 'working' } }), /<p class="working" role="status">Working…<\/p>/);
+      assert.doesNotMatch(convo({}), /were not kept/);
+      assert.match(convo({ repliesKeptFrom: '2026-11-19T11:30:00.000Z' }), /were not kept/);
+    });
+
+    it('a session that is not the person\'s, or gone, says it cannot be shown', () => {
+      assert.match(convo({ session: null, problem: 'gone' }), /This conversation can’t be shown\./);
+    });
+
+    it('the composer says why nothing can be sent while she works', () => {
+      const html = ui.renderToString(ui.createElement(ui.Composer, { blocked: 'Novia is still working — wait for her reply.', onSend: async () => {} }));
+      assert.match(html, /Novia is still working/);
+      assert.match(html, /<button type="submit" class="btn primary" disabled="">Send<\/button>/);
+    });
+
+    it('the shell draws her region at the left, headed by her name, with a Novia tab for a phone', () => {
+      const html = strip(draw('/p/money?minds-eye=7'));
+      assert.match(html, /<div class="body"><aside class="region" aria-label="Novia"><div class="region-head"><h2>Novia<\/h2><button type="button" class="ib" aria-label="Collapse Novia"/);
+      assert.match(html, /<nav class="tabbar"[^>]*>.*<button type="button">Novia<\/button><\/nav>/s);
+    });
+  });
+
   it('every catalog key is used by the app, and every key the app uses is in the catalog', () => {
     const catalog = JSON.parse(readFileSync(join(APP_DIR, 'locales/en.json'), 'utf8'));
     const flat    = (obj, prefix = '') => Object.entries(obj).flatMap(([k, v]) => (typeof v === 'object' ? flat(v, `${prefix}${k}.`) : [`${prefix}${k}`]));
@@ -1010,5 +1092,66 @@ describe('components and catalog', () => {
     const used    = new Set(sources(APP_DIR).flatMap(src => [...src.matchAll(/\bt\('([a-zA-Z0-9_.]+)'/g)].map(m => m[1])));
     assert.deepEqual([...used].filter(k => !keys.has(k)), [], 'used but not in the catalog');
     assert.deepEqual([...keys].filter(k => !used.has(k)), [], 'in the catalog but never used');
+  });
+});
+
+describe('her region — the decisions, pure', () => {
+  it('sessionName: label, else first message, whitespace folded; null with neither', () => {
+    assert.equal(sessionName({ label: ' Garden ', firstMessage: 'x' }), 'Garden');
+    assert.equal(sessionName({ label: '', firstMessage: 'Plan\n the  beds' }), 'Plan the beds');
+    assert.equal(sessionName({ label: null, firstMessage: null }), null);
+  });
+
+  it('addConversation: each message once, keyed by side', () => {
+    const p1 = { kind: 'person', seq: 1 }, i1 = { kind: 'inbox', id: 1 }, i2 = { kind: 'inbox', id: 2 };
+    assert.deepEqual(addConversation([p1, i1], [i1, i2, { kind: 'person', seq: 1 }]), [p1, i1, i2]);
+  });
+
+  it('groupTurns: consecutive lines of one turn together; a line without a turn stays itself', () => {
+    const line = (id, turn) => ({ kind: 'inbox', id, messageType: 'HUMAN_NOTIFICATION', payload: { turn, call: `c${id}` } });
+    const old  = { kind: 'inbox', id: 9, messageType: 'HUMAN_NOTIFICATION', payload: { message: '_Turn 3 · `x`_' } };
+    const items = groupTurns([line(1, 1), line(2, 1), line(3, 2), old, line(4, 2)]);
+    assert.deepEqual(items.map(i => (i.kind === 'turn' ? `t${i.turn}:${i.calls.length}` : i.id)), ['t1:2', 't2:1', 9, 't2:1']);
+    assert.deepEqual(items[0].calls[1], { call: 'c2', detail: null, id: 2 });
+  });
+
+  it('repliesMissing: a first reply long after the session began, or none once it stopped', () => {
+    const s = { createdAt: '2026-11-10T10:00:00.000Z', state: 'waiting' };
+    assert.equal(repliesMissing(s, '2026-11-10T10:00:30.000Z'), false);
+    assert.equal(repliesMissing(s, new Date(Date.parse(s.createdAt) + ROUND_CEILING_MS + 1).toISOString()), true);
+    assert.equal(repliesMissing(s, null), true);
+    assert.equal(repliesMissing({ ...s, state: 'working' }, null), false);
+  });
+
+  it('conversationDelay: by her state, doubling on failure, capped', () => {
+    assert.equal(conversationDelay(0, 'working'), WORKING_POLL_MS);
+    assert.equal(conversationDelay(0, 'waiting'), WAITING_POLL_MS);
+    assert.equal(conversationDelay(1, 'working'), WORKING_POLL_MS * 2);
+    assert.equal(conversationDelay(10, 'waiting'), CONVO_MAX_MS);
+  });
+
+  it('the collapsed region is remembered on the device, and a storage that throws forgets', () => {
+    const store = new MemoryStorage();
+    assert.equal(readCollapsed(store), false);
+    writeCollapsed(store, true);
+    assert.equal(store.getItem(COLLAPSED_KEY), 'true');
+    assert.equal(readCollapsed(store), true);
+    writeCollapsed(store, false);
+    assert.equal(readCollapsed(store), false);
+    const broken = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); }, removeItem() {} };
+    assert.equal(readCollapsed(broken), false);
+    assert.doesNotThrow(() => writeCollapsed(broken, true));
+  });
+
+  it('withSession: sets or clears ?minds-eye=, keeping the rest of the location', () => {
+    assert.equal(withSession('/p/money', 7), '/p/money?minds-eye=7');
+    assert.equal(withSession('/d/x?run=4', 7), '/d/x?run=4&minds-eye=7');
+    assert.equal(withSession('/d/x?run=4&minds-eye=7', null), '/d/x?run=4');
+    assert.equal(withSession('/?minds-eye=7', null), '/');
+  });
+
+  it('the app\'s round ceiling is ProcFunction\'s, as /proc\'s is', async () => {
+    const proc = await import('../../src/proc/minds-eye-sessions.mjs');
+    assert.equal(ROUND_CEILING_MS, proc.ROUND_CEILING_MS);
   });
 });

@@ -18,27 +18,34 @@ const ROUTES = [
   { page: 'settings',      pattern: /^\/settings\/([a-z]+)$/, params: ['entry'] },
 ];
 
+const idParam = (query, name) => {
+  const value = query.get(name);
+  return /^[1-9][0-9]*$/.test(value ?? '') ? Number(value) : null;
+};
+
 /**
- * The page a location names, its path parameters, and the run drawer's run (`?run=`). Pure.
+ * The page a location names, its path parameters, the run drawer's run (`?run=`) and the
+ * session her region is open on (`?minds-eye=`), both on any page. Pure.
  *
  * @param {string} pathname
  * @param {string} [search]
- * @returns {{ page: string, params: Record<string, string>, run: number|null }}
+ * @returns {{ page: string, params: Record<string, string>, run: number|null, mindsEye: number|null }}
  */
 export function matchPath(pathname, search = '') {
-  const runParam = new URLSearchParams(search).get('run');
-  const run      = /^[1-9][0-9]*$/.test(runParam ?? '') ? Number(runParam) : null;
+  const query    = new URLSearchParams(search);
+  const run      = idParam(query, 'run');
+  const mindsEye = idParam(query, 'minds-eye');
   for (const route of ROUTES) {
     const m = route.pattern.exec(pathname);
     if (!m) continue;
     try {
       const params = Object.fromEntries((route.params ?? []).map((name, i) => [name, decodeURIComponent(m[i + 1])]));
-      return { page: route.page, params, run };
+      return { page: route.page, params, run, mindsEye };
     } catch {
       break;   // a malformed %-escape names no page
     }
   }
-  return { page: 'notFound', params: {}, run };
+  return { page: 'notFound', params: {}, run, mindsEye };
 }
 
 const listeners = new Set();
