@@ -3,14 +3,15 @@
 // See LICENSE file in the project root for full license terms.
 // src/ui/web/api/routes.mjs
 //
-// The web routes WebApiFunction forwards — the twelve operations of docs/openapi.yaml's UI-Web
+// The web routes WebApiFunction forwards — the eighteen operations of docs/openapi.yaml's UI-Web
 // section, and nothing else (docs/arch-web-app.md §3.1). An allow-list, never a proxy: a method
 // or path not listed here, or a path parameter outside its pattern, never reaches PROC. Each
 // web path is its PROC path under /api/v1/proc/, and each route names the query parameters it
 // passes on. Pure.
 
-const RUN_ID = /^[1-9][0-9]{0,15}$/;
-const NAME   = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
+const RUN_ID     = /^[1-9][0-9]{0,15}$/;
+const SESSION_ID = RUN_ID;
+const NAME       = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
 
 /**
  * @typedef {object} WebRoute
@@ -35,6 +36,12 @@ export const WEB_ROUTES = [
   { operationId: 'webListGates',      method: 'GET',  path: ['gates'] },
   { operationId: 'webGetGate',        method: 'GET',  path: ['gates', RUN_ID] },
   { operationId: 'webAnswerGate',     method: 'POST', path: ['gates', RUN_ID, 'responses'], body: true },
+  { operationId: 'webListMindsEyeSessions',  method: 'GET',   path: ['minds-eye', 'sessions'], query: ['topic', 'limit', 'before'] },
+  { operationId: 'webStartMindsEyeSession',  method: 'POST',  path: ['minds-eye', 'sessions'], body: true },
+  { operationId: 'webRenameMindsEyeSession', method: 'PATCH', path: ['minds-eye', 'sessions', SESSION_ID], body: true },
+  { operationId: 'webReadMindsEyeMessages',  method: 'GET',   path: ['minds-eye', 'sessions', SESSION_ID, 'messages'], query: ['after', 'afterSeq', 'limit'] },
+  { operationId: 'webSendMindsEyeMessage',   method: 'POST',  path: ['minds-eye', 'sessions', SESSION_ID, 'messages'], body: true },
+  { operationId: 'webAnswerMindsEyeGate',    method: 'POST',  path: ['minds-eye', 'sessions', SESSION_ID, 'responses'], body: true },
 ];
 
 /**

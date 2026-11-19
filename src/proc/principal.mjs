@@ -39,6 +39,18 @@ export function canSeeRun(principal, run) {
 }
 
 /**
+ * May this principal see this minds-eye session? Only minds_eye sessions are ever shown, and a
+ * session is owned by its callback as a run is: a web-started one by its starter, a Slack-started
+ * one by the household (decision O).
+ *
+ * @param {{ user: string, roles: string[] }} principal
+ * @param {{ session_type?: string, callback?: object|null }} session   A PGC_Session row
+ */
+export function canSeeSession(principal, session) {
+  return session?.session_type === 'minds_eye' && canSeeRun(principal, session);
+}
+
+/**
  * A run Novia started to test her work (callback provider `novia`): it ran against the sandbox
  * and its messages went to her session, so no web read lists it or answers for it.
  *
