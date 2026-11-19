@@ -25,7 +25,7 @@ import { inputsOf, initialValues, isChanged, fieldProblems, formValues, answerFo
 import { liveScript, isNewBuild } from '../../src/ui/web/app/shell/version.mjs';
 import { runName, panelWorkflows, foldPoint, addMessages, threadDelay, isActive, isWorking, THREAD_POLL_MS, THREAD_POLL_MAX_MS } from '../../src/ui/web/app/runs/runs.mjs';
 import { pageItems, domainItems, sectionOf, currentItem, gateHeadline, relativeAge, pollDelay, POLL_MS, POLL_MAX_MS } from '../../src/ui/web/app/shell/nav.mjs';
-import { sessionName, addConversation, groupTurns, repliesMissing, conversationDelay, readCollapsed, writeCollapsed, withSession, COLLAPSED_KEY, WORKING_POLL_MS, WAITING_POLL_MS, POLL_MAX_MS as CONVO_MAX_MS, ROUND_CEILING_MS } from '../../src/ui/web/app/minds-eye/conversation.mjs';
+import { sessionName, addConversation, groupTurns, repliesMissing, conversationDelay, readCollapsed, writeCollapsed, withSession, answerable, answerField, answersFrom, RADIO_LIMIT, COLLAPSED_KEY, WORKING_POLL_MS, WAITING_POLL_MS, POLL_MAX_MS as CONVO_MAX_MS, ROUND_CEILING_MS } from '../../src/ui/web/app/minds-eye/conversation.mjs';
 
 const APP_DIR = new URL('../../src/ui/web/app/', import.meta.url).pathname;
 const CONFIG  = { userPoolId: 'us-east-2_pool', clientId: 'client123', authDomain: 'https://auth.example', siteUrl: 'https://site.example', region: 'us-east-2' };
@@ -1077,6 +1077,51 @@ describe('components and catalog', () => {
       assert.match(html, /<button type="submit" class="btn primary" disabled="">Send<\/button>/);
     });
 
+    describe('answered in place (item 4)', () => {
+      const on    = { onGate: async () => {}, onAnswers: async () => {} };
+      const ask   = (id, questions, at = '2026-11-19T11:00:05.000Z') => her(id, { message: 'Two things.', format: 'markdown', invitesReply: true, questions }, at);
+      const QS    = [{ id: 'q1', text: 'Raised beds?', options: ['Yes', 'No'] }, { id: 'q2', text: 'How many?' },
+        { id: 'q3', text: 'Which?', options: Array.from({ length: RADIO_LIMIT + 1 }, (_, i) => `o${i}`) }];
+
+      it('an action gate: its confirm label, the test label when offered, and Cancel', () => {
+        const gate = her(20, { gate_type: 'minds_eye_gate', atSeq: 9, confirmLabel: 'Apply', testLabel: 'Apply and test',
+          dialog: { fields: [{ type: 'typography', value: '**Change** step 4' }] } }, '2026-11-19T11:05:00.000Z', 'HUMAN_GATE');
+        const html = convo({ session: { ...S, gate: { kind: 'action', atSeq: 9 } }, messages: [gate], ...on });
+        assert.match(html, /<div class="msg gate waiting"><div class="md"><p><strong>Change<\/strong> step 4<\/p><\/div><div class="btnrow"><button type="button" class="btn primary">Apply<\/button><button type="button" class="btn">Apply and test<\/button><button type="button" class="btn">Cancel<\/button>/);
+        const drop = convo({ session: { ...S, gate: { kind: 'action', atSeq: 9 } }, messages: [{ ...gate, payload: { ...gate.payload, confirmLabel: 'Drop', confirmStyle: 'danger', testLabel: undefined } }], ...on });
+        assert.match(drop, /<button type="button" class="btn danger">Drop<\/button><button type="button" class="btn">Cancel<\/button><\/div>/);
+      });
+
+      it('a continue gate: Continue and End, a follow-up written below', () => {
+        const gate = her(21, { gate_type: 'minds_eye_continue_gate', atSeq: 6, reason: 'turn_limit' }, '2026-11-19T11:05:00.000Z', 'HUMAN_GATE');
+        const html = convo({ session: { ...S, gate: { kind: 'continue', atSeq: 6 } }, messages: [gate], ...on });
+        assert.match(html, /<button type="button" class="btn primary">Continue<\/button><button type="button" class="btn">End<\/button><\/div><p class="hint">Or write a follow-up below\.<\/p>/);
+      });
+
+      it('a gate the session has moved past has no buttons', () => {
+        const gate = her(21, { gate_type: 'minds_eye_continue_gate', atSeq: 6 }, '2026-11-19T11:05:00.000Z', 'HUMAN_GATE');
+        assert.doesNotMatch(convo({ session: { ...S, state: 'working' }, messages: [gate], ...on }), /<button/);
+      });
+
+      it('her latest reply\'s questions: choices and a comment, text, a dropdown past ten; Anything else; Send answers', () => {
+        const html = convo({ messages: [ask(30, QS)], ...on });
+        assert.match(html, /<div class="msg waiting">/);
+        assert.match(html, /<span role="radiogroup" aria-labelledby="f-a-q1-l" class="opts"><label><input type="radio" name="a-q1" value="Yes"/);
+        assert.match(html, /<label for="f-c-q1" class="flabel">Comment/);
+        assert.match(html, /<label for="f-a-q2" class="flabel">Your answer[^<]*<i> \(optional\)<\/i><\/label><textarea id="f-a-q2"/);
+        assert.match(html, /<select id="f-a-q3"/);
+        assert.doesNotMatch(html, /f-c-q2/);
+        assert.match(html, /<label for="f-note" class="flabel">Anything else/);
+        assert.match(html, /<button type="button" class="btn primary" disabled="">Send answers<\/button>/);
+      });
+
+      it('an older reply\'s questions are only what she asked', () => {
+        const html = convo({ messages: [ask(30, QS), her(31, { message: 'Done.', format: 'markdown', invitesReply: true }, '2026-11-19T11:06:00.000Z')], ...on });
+        assert.doesNotMatch(html, /<input|<textarea|Send answers/);
+        assert.match(html, /<p class="muted">Yes · No<\/p>/);
+      });
+    });
+
     it('the shell draws her region at the left, headed by her name, with a Novia tab for a phone', () => {
       const html = strip(draw('/p/money?minds-eye=7'));
       assert.match(html, /<div class="body"><aside class="region" aria-label="Novia"><div class="region-head"><h2>Novia<\/h2><button type="button" class="ib" aria-label="Collapse Novia"/);
@@ -1141,6 +1186,33 @@ describe('her region — the decisions, pure', () => {
     const broken = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); }, removeItem() {} };
     assert.equal(readCollapsed(broken), false);
     assert.doesNotThrow(() => writeCollapsed(broken, true));
+  });
+
+  it('answerable: the gate she waits at, or her last reply with questions — nothing while she works', () => {
+    const reply = q => ({ kind: 'inbox', id: 5, messageType: 'HUMAN_NOTIFICATION', payload: { invitesReply: true, ...(q ? { questions: [{ id: 'q1', text: 'x' }] } : {}) } });
+    const gate  = { kind: 'inbox', id: 6, messageType: 'HUMAN_GATE', payload: { gate_type: 'minds_eye_gate', atSeq: 9 } };
+    const me    = { kind: 'person', seq: 3 };
+    assert.equal(answerable({ state: 'waiting', gate: { kind: 'action', atSeq: 9 } }, [reply(true), gate]), gate);
+    assert.equal(answerable({ state: 'waiting', gate: { kind: 'action', atSeq: 8 } }, [gate]), null);
+    assert.equal(answerable({ state: 'waiting', gate: null }, [reply(true)]).id, 5);
+    assert.equal(answerable({ state: 'waiting', gate: null }, [reply(false)]), null);
+    assert.equal(answerable({ state: 'waiting', gate: null }, [reply(true), me]).id, 5);
+    assert.equal(answerable({ state: 'working', gate: null }, [reply(true)]), null);
+    assert.equal(answerable(null, []), null);
+  });
+
+  it('answerField: radio up to ten choices, a dropdown past, text without', () => {
+    assert.equal(answerField({ id: 'q1', options: ['a', 'b'] }, 'L').input_type, 'radio');
+    assert.equal(answerField({ id: 'q1', options: Array.from({ length: RADIO_LIMIT + 1 }, (_, i) => `${i}`) }, 'L').input_type, 'select');
+    assert.deepEqual(answerField({ id: 'q2' }, 'Your answer'), { name: 'a-q2', input_type: 'textarea', label: 'Your answer', optional: true });
+  });
+
+  it('answersFrom: the answers with something in them, the note, or null', () => {
+    const qs = [{ id: 'q1' }, { id: 'q2' }, { id: 'q3' }];
+    assert.deepEqual(answersFrom(qs, { q1: { answer: ' Yes ' }, q2: { answer: '  ' }, q3: { comment: 'later' } }, '  '),
+      { answers: [{ id: 'q1', answer: 'Yes', comment: null }, { id: 'q3', answer: null, comment: 'later' }], note: null });
+    assert.deepEqual(answersFrom(qs, {}, ' just this '), { answers: [], note: 'just this' });
+    assert.equal(answersFrom(qs, { q1: { answer: '' } }, ''), null);
   });
 
   it('withSession: sets or clears ?minds-eye=, keeping the rest of the location', () => {

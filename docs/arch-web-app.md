@@ -512,6 +512,9 @@ Block Kit. **No domain vocabulary, no Slack ceilings**: a gate is as long as its
 | `text_input` | Text area, then the gate's buttons | `{ action, inputValue }` |
 | `review_object` | Key/value table, then buttons | `{ action }` |
 | `followup_prompt` | Message, and *Ask follow-up* — a text box whose text answers the gate, as Slack's button does; the dialog's own buttons are not drawn, as Slack draws none | `{ action: 'confirm', inputValue }` — written to the step's `output_key` |
+| `minds_eye_gate` | Her action gate, in her conversation (§4.5): the message, then her confirm label (*Apply*, *Register*, *Drop* — drawn as danger when she says so), her test label when she offers one (*Apply and test*), and *Cancel*, as Slack draws them | `POST /minds-eye/sessions/{id}/responses` `{ atSeq, action: 'approve' \| 'test' \| 'cancel' }` |
+| `minds_eye_continue_gate` | Why she paused (by its `reason`), *Continue* and *End*; a follow-up is written in her box, which answers the gate as Slack's *Follow-up* does | `{ atSeq, action: 'continue' \| 'end' }` to the same route; a follow-up `POST …/messages` `{ text }` |
+| Her reply's `questions` | Under her latest reply while she waits: each question with its answer box — its choices as radios (a dropdown past ten) and a comment, or a text area — then *Anything else* and *Send answers*; under an older reply, only what she asked. *Continue with Novia* is her box | `POST /minds-eye/sessions/{id}/messages` `{ answers: [{ id, answer, comment }], note }` |
 
 **The grid.** A field may carry three optional, generic layout properties on the `human_gate`
 `PGC_StepType` contract:

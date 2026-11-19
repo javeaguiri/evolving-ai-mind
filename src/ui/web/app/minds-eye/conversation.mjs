@@ -118,3 +118,51 @@ export function withSession(location, sessionId) {
   const qs = params.toString();
   return qs ? `${path}?${qs}` : path;
 }
+
+/**
+ * Her message the person can answer now: the gate she waits at, or her last reply when it
+ * asks questions — never an older one. Null while she works, or when nothing is asked.
+ *
+ * @param {{ state: string, gate: object|null }|null} session
+ * @param {object[]} messages
+ * @returns {object|null}
+ */
+export function answerable(session, messages) {
+  if (session?.state !== 'waiting') return null;
+  const last = messages.findLast(m => m.kind === 'inbox');
+  if (!last) return null;
+  if (session.gate) return last.messageType === 'HUMAN_GATE' && last.payload?.atSeq === session.gate.atSeq ? last : null;
+  return last.payload?.invitesReply && last.payload?.questions?.length ? last : null;
+}
+
+/** Past this many choices a question's options are a dropdown, as Slack's radio buttons stop at 10. */
+export const RADIO_LIMIT = 10;
+
+/**
+ * A question's answer box, as a gate input (§5.3): its choices, or text.
+ *
+ * @param {{ id: string, options?: string[] }} question
+ * @param {string} label
+ */
+export function answerField(question, label) {
+  const options = (question.options ?? []).map(o => ({ value: o, label: o }));
+  if (!options.length) return { name: `a-${question.id}`, input_type: 'textarea', label, optional: true };
+  return { name: `a-${question.id}`, input_type: options.length <= RADIO_LIMIT ? 'radio' : 'select', label, optional: true, options };
+}
+
+/**
+ * The answers to send — each question's answer and comment, those with something in them —
+ * and the closing note. Null when nothing is filled in.
+ *
+ * @param {{ id: string }[]} questions
+ * @param {Record<string, { answer?: string, comment?: string }>} values  By question id
+ * @param {string} note
+ * @returns {{ answers: object[], note: string|null } | null}
+ */
+export function answersFrom(questions, values, note) {
+  const answers = questions
+    .map(q => ({ id: q.id, answer: values[q.id]?.answer?.trim() || null, comment: values[q.id]?.comment?.trim() || null }))
+    .filter(a => a.answer || a.comment);
+  const kept = note?.trim() || null;
+  return answers.length || kept ? { answers, note: kept } : null;
+}

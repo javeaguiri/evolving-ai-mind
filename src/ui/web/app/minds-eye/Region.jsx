@@ -6,19 +6,22 @@
 // Her region (docs/arch-web-app.md §4.1, §4.5): the left of the page, where only she answers. Her
 // sessions at its head, most recently active first, each named by its label or first message;
 // opening one shows the conversation — the person's own messages and hers, a turn's tool calls on
-// one line (decision T) — with a box to write in. *New* starts a session. « collapses the region to
-// a strip, remembered on this device. The session open is in the location (`?minds-eye=`), so it
-// is a deep link and survives a reload. An open conversation is read again while it is open and
-// the tab visible: often while she works, less while she waits; the list less often still.
+// one line (decision T), her gates and questions answered in place (§5.2) — with a box to write
+// in. *New* starts a session. « collapses the region to a strip, remembered on this device. The
+// session open is in the location (`?minds-eye=`), so it is a deep link and survives a reload. An
+// open conversation is read again while it is open and the tab visible: often while she works,
+// less while she waits; the list less often still.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation }      from 'react-i18next';
 import { SignInRequired }      from '../auth/session.mjs';
 import { Markdown }            from '../Markdown.jsx';
 import { Message }             from '../runs/RunThread.jsx';
+import { Input }               from '../gates/Input.jsx';
 import { relativeAge }         from '../shell/nav.mjs';
 import {
   sessionName, addConversation, groupTurns, repliesMissing, conversationDelay, LIST_POLL_MS,
+  answerable, answerField, answersFrom,
 } from './conversation.mjs';
 
 /** Her sessions, read when the region opens, after the person sends, and now and then. */
@@ -146,17 +149,105 @@ function TurnLine({ item }) {
   );
 }
 
-/** Her questions on a reply, as she asked them. */
-function Questions({ questions }) {
+/**
+ * Her questions on a reply. Under her latest reply, while she waits, each has its answer box —
+ * its choices and a comment, or text — with *Anything else* and *Send answers*, as Slack draws
+ * them; under an older reply they are what she asked.
+ */
+function Questions({ questions, onAnswers }) {
+  const { t } = useTranslation();
+  const [values, setValues]   = useState({});
+  const [note, setNote]       = useState('');
+  const [sending, setSending] = useState(false);
+  const [notice, setNotice]   = useState(null);
+  const set = (id, part, value) => setValues(v => ({ ...v, [id]: { ...v[id], [part]: value } }));
+  const reply = answersFrom(questions, values, note);
+
+  const send = async () => {
+    if (!reply || sending) return;
+    setSending(true);
+    setNotice(null);
+    try {
+      await onAnswers(reply.answers, reply.note);
+    } catch (err) {
+      setNotice(err?.code === 'session_busy' || err?.code === 'gate_waiting' ? t(`mindsEye.${err.code}`) : t('mindsEye.failed'));
+      setSending(false);
+    }
+  };
+
   return (
-    <ol className="questions">
-      {questions.map(q => (
-        <li key={q.id}>
-          <Markdown text={q.text} />
-          {q.options?.length > 0 && <p className="muted">{q.options.join(' · ')}</p>}
-        </li>
-      ))}
-    </ol>
+    <>
+      <ol className="questions">
+        {questions.map(q => (
+          <li key={q.id}>
+            <Markdown text={q.text} />
+            {!onAnswers && q.options?.length > 0 && <p className="muted">{q.options.join(' · ')}</p>}
+            {onAnswers && (
+              <>
+                <Input field={answerField(q, t('mindsEye.yourAnswer'))} value={values[q.id]?.answer ?? ''} disabled={sending}
+                  onChange={v => set(q.id, 'answer', v)} />
+                {q.options?.length > 0 && (
+                  <Input field={{ name: `c-${q.id}`, input_type: 'text', label: t('mindsEye.comment'), optional: true }}
+                    value={values[q.id]?.comment ?? ''} disabled={sending} onChange={v => set(q.id, 'comment', v)} />
+                )}
+              </>
+            )}
+          </li>
+        ))}
+      </ol>
+      {onAnswers && (
+        <div className="answers">
+          <Input field={{ name: 'note', input_type: 'textarea', label: t('mindsEye.anythingElse'), optional: true }}
+            value={note} disabled={sending} onChange={setNote} />
+          {notice && <p className="notice" role="alert">{notice}</p>}
+          <div className="btnrow">
+            <button type="button" className="btn primary" disabled={!reply || sending} onClick={send}>{t('mindsEye.sendAnswers')}</button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
+ * A gate's buttons: an action gate's approve (its label from /proc), approve-and-test when she
+ * offers it, and Cancel; a continue gate's Continue and End — a follow-up is written in the box
+ * below. A gate answered elsewhere says so.
+ */
+function GateButtons({ gate, onGate }) {
+  const { t } = useTranslation();
+  const [sending, setSending] = useState(false);
+  const [notice, setNotice]   = useState(null);
+  const p = gate.payload ?? {};
+  const answer = async action => {
+    if (sending) return;
+    setSending(true);
+    setNotice(null);
+    try {
+      await onGate(p.atSeq, action);
+    } catch (err) {
+      setNotice(err?.code === 'gate_moved' || err?.code === 'gate_not_waiting' ? t('gate.moved') : t('gate.failed'));
+      setSending(false);
+    }
+  };
+  const buttons = p.gate_type === 'minds_eye_continue_gate'
+    ? [{ action: 'continue', label: t('gate.continue'), primary: true }, { action: 'end', label: t('mindsEye.end') }]
+    : [
+      { action: 'approve', label: p.confirmLabel || t('mindsEye.approve'), primary: true, danger: p.confirmStyle === 'danger' },
+      ...(p.testLabel ? [{ action: 'test', label: p.testLabel }] : []),
+      { action: 'cancel', label: t('mindsEye.cancel') },
+    ];
+  return (
+    <>
+      <div className="btnrow">
+        {buttons.map(b => (
+          <button key={b.action} type="button" className={b.danger ? 'btn danger' : b.primary ? 'btn primary' : 'btn'} disabled={sending}
+            onClick={() => answer(b.action)}>{b.label}</button>
+        ))}
+      </div>
+      {p.gate_type === 'minds_eye_continue_gate' && <p className="hint">{t('mindsEye.followupHint')}</p>}
+      {notice && <p className="notice" role="alert">{notice}</p>}
+    </>
   );
 }
 
@@ -168,50 +259,60 @@ const PAUSED = {
   after_followup: t => t('mindsEye.paused.after_followup'),
 };
 
-/** One of her messages: a reply, an error, or a question waiting on the person. */
-function HerMessage({ message, waiting }) {
+/**
+ * One of her messages: a reply, an error, or a gate. `live`: the one the person can answer now,
+ * drawn with its controls when the handlers are given.
+ */
+function HerMessage({ message, live, onGate, onAnswers }) {
   const { t } = useTranslation();
   const p = message.payload ?? {};
-  if (message.messageType === 'HUMAN_GATE' && p.gate_type === 'minds_eye_continue_gate') {
+  if (message.messageType === 'HUMAN_GATE' && (p.gate_type === 'minds_eye_continue_gate' || p.gate_type === 'minds_eye_gate')) {
+    const text = p.gate_type === 'minds_eye_continue_gate'
+      ? <p className="plain">{(PAUSED[p.reason] ?? PAUSED.turn_limit)(t)}</p>
+      : (p.dialog?.fields ?? []).map((f, i) => (f.type === 'typography' ? <Markdown key={i} text={f.value} /> : null));
     return (
-      <div className={waiting ? 'msg gate waiting' : 'msg gate'}>
-        <p className="plain">{(PAUSED[p.reason] ?? PAUSED.turn_limit)(t)}</p>
-        {waiting && <p className="hint">{t('run.waiting')}</p>}
+      <div className={live ? 'msg gate waiting' : 'msg gate'}>
+        {text}
+        {live && onGate && <GateButtons gate={message} onGate={onGate} />}
+        {live && !onGate && <p className="hint">{t('run.waiting')}</p>}
       </div>
     );
   }
   if (message.messageType === 'HUMAN_NOTIFICATION' && p.questions?.length) {
     return (
-      <div className="msg">
+      <div className={live ? 'msg waiting' : 'msg'}>
         {p.format === 'markdown' ? <Markdown text={p.message} /> : <p className="plain">{p.message}</p>}
-        <Questions questions={p.questions} />
+        <Questions key={message.id} questions={p.questions} onAnswers={live ? onAnswers : undefined} />
       </div>
     );
   }
-  return <Message message={message} waiting={waiting} />;
+  return <Message message={message} waiting={false} />;
 }
 
 /**
  * The conversation drawn from its data — what useConversation feeds, and what the tests draw.
+ * With `onGate` and `onAnswers`, the message she waits on is answered in place.
  *
  * @param {object} props
  * @param {object|null} props.session
  * @param {object[]} props.messages
  * @param {string|null} props.repliesKeptFrom
  * @param {'gone'|'unreachable'|null} props.problem
+ * @param {(atSeq: number, action: string) => Promise<void>} [props.onGate]
+ * @param {(answers: object[], note: string|null) => Promise<void>} [props.onAnswers]
  */
-export function ConversationView({ session, messages, repliesKeptFrom, problem }) {
+export function ConversationView({ session, messages, repliesKeptFrom, problem, onGate, onAnswers }) {
   const { t } = useTranslation();
   if (problem === 'gone') return <p className="muted">{t('mindsEye.gone')}</p>;
   if (!session) return <p className="muted">{problem ? t('errors.retrying') : t('shell.loading')}</p>;
-  const waitingAt = session.gate ? messages.findLast(m => m.kind === 'inbox' && m.messageType === 'HUMAN_GATE') : null;
+  const live = answerable(session, messages);
   return (
     <div className="convo">
       {repliesMissing(session, repliesKeptFrom) && <p className="muted notkept">{t('mindsEye.notKept')}</p>}
       {groupTurns(messages).map(item => {
         if (item.kind === 'turn')   return <TurnLine key={item.key} item={item} />;
         if (item.kind === 'person') return <div key={`p${item.seq}`} className="msg mine"><p className="plain">{item.text}</p></div>;
-        return <HerMessage key={`i${item.id}`} message={item} waiting={item === waitingAt} />;
+        return <HerMessage key={`i${item.id}`} message={item} live={item === live} onGate={onGate} onAnswers={onAnswers} />;
       })}
       {session.state === 'working' && <p className="working" role="status">{t('mindsEye.working')}</p>}
       {problem === 'unreachable' && <p className="muted">{t('errors.retrying')}</p>}
@@ -293,6 +394,16 @@ export function MindsEyeRegion({ context, sessionId, onOpen, active = true }) {
     convo.refresh();
     list.refresh();
   };
+  const answers = async (given, note) => {
+    await api.post(`minds-eye/sessions/${sessionId}/messages`, { answers: given, note });
+    convo.refresh();
+    list.refresh();
+  };
+  const gate = async (atSeq, action) => {
+    await api.post(`minds-eye/sessions/${sessionId}/responses`, { atSeq, action });
+    convo.refresh();
+    list.refresh();
+  };
 
   if (composing) {
     return (
@@ -308,7 +419,8 @@ export function MindsEyeRegion({ context, sessionId, onOpen, active = true }) {
       <div className="region-body">
         <button type="button" className="fold" onClick={() => onOpen(null)}>{t('mindsEye.back')}</button>
         {name && <h3 className="convo-title">{name}</h3>}
-        <ConversationView session={convo.session} messages={convo.messages} repliesKeptFrom={convo.repliesKeptFrom} problem={convo.problem} />
+        <ConversationView session={convo.session} messages={convo.messages} repliesKeptFrom={convo.repliesKeptFrom} problem={convo.problem}
+          onGate={gate} onAnswers={answers} />
         {convo.problem !== 'gone' && <Composer blocked={blockedReason(convo.session, t)} onSend={send} />}
       </div>
     );
