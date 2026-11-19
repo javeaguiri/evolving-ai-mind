@@ -349,6 +349,9 @@ components:
           enum: [BEFORE UPDATE, BEFORE INSERT, AFTER UPDATE, AFTER INSERT]
         function:
           type: string
+          description: >
+            One of the trigger functions SERV holds in code (src/serv/trigger-functions.mjs),
+            written with its parentheses — never SQL from the caller.
           example: set_updated_at()
 
     SchemaRow:
@@ -5397,6 +5400,61 @@ paths:
                     action: added
         '400':
           description: Invalid identifier, empty columns array, or a column not registered
+        '404':
+          description: Table not found in PGC_Schema
+
+  /api/v1/serv/schema/addTrigger:
+    post:
+      summary: Add a trigger to an existing table — DDL + PGC_Schema sync
+      description: >
+        Executes CREATE OR REPLACE TRIGGER on an existing table and records it in
+        PGC_Schema.triggers, upserted by name. createTable and bootstrap were the only places
+        a trigger could be created, so a trigger needed after a table was built had no route;
+        updateTable writes the registry without touching DDL. A trigger's function is never
+        SQL from the caller: `function` names one of the trigger functions SERV holds in code
+        (src/serv/trigger-functions.mjs), each with the databases it may be installed in, and
+        the function is installed (CREATE OR REPLACE) before the trigger. Idempotent. Which
+        database the table lives in is read from PGC_Schema.target, never supplied by the
+        caller.
+      tags: [SERV-Schema]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tableName, trigger]
+              properties:
+                tableName:
+                  type: string
+                  example: PGC_SessionEntry
+                trigger:
+                  $ref: '#/components/schemas/TriggerDefinition'
+            examples:
+              session_last_active:
+                summary: Keep a session's last activity current as entries are written
+                value:
+                  tableName: PGC_SessionEntry
+                  trigger: { name: trg_pgc_sessionentry_last_active, timing: AFTER INSERT, function: touch_session_last_active() }
+      responses:
+        '200':
+          description: Trigger applied and PGC_Schema updated
+          content:
+            application/json:
+              examples:
+                added:
+                  summary: Trigger was new — appended to the registry
+                  value:
+                    success: true
+                    tableName: PGC_SessionEntry
+                    trigger: { name: trg_pgc_sessionentry_last_active, timing: AFTER INSERT, function: touch_session_last_active() }
+                    action: added
+        '400':
+          description: >
+            Invalid trigger name or timing, a function SERV does not hold, or one not
+            installable in the table's database
         '404':
           description: Table not found in PGC_Schema
 
