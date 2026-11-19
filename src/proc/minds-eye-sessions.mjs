@@ -16,10 +16,11 @@
 // so a Slack-started session continued on the web still replies in its thread.
 //
 // A session is waiting or working. Waiting: her last message is a reply that invites one, an
-// error, or a gate still current (its atSeq is the session's latest entry). Working: a round is
-// under way, and a message is refused (session_busy) so two rounds never run on one session —
-// unless the last activity is older than the longest a round can run, so a round that died never
-// leaves it stuck. Transport-agnostic — no AWS SDK, no Slack SDK.
+// error, or a gate still current (its atSeq is the session's latest entry), and the person has
+// written nothing since. Working: a round is under way, or the person's message awaits one; a
+// message is then refused (session_busy) so two rounds never run on one session — unless the
+// last activity is older than the longest a round can run, so a round that died never leaves it
+// stuck. Transport-agnostic — no AWS SDK, no Slack SDK.
 
 import { randomUUID }                              from 'crypto';
 import { respond, err }                            from '../shared/lambda-utils.mjs';
@@ -87,11 +88,16 @@ export function parseMessagesQuery(query = {}) {
  * @param {object} facts
  * @param {object|null} facts.lastMessage   Its latest inbox row ({ message_type, payload, created_at })
  * @param {number|null} facts.latestSeq     Its latest entry's sequence_number
+ * @param {string|null} facts.lastPersonAt  When the person's latest entry was written
  * @param {string}      facts.lastActiveAt  PGC_Session.last_active_at
  * @param {number}      [now]
  * @returns {{ state: 'waiting'|'working', gate: { kind: string, atSeq: number } | null }}
  */
-export function sessionState({ lastMessage = null, latestSeq = null, lastActiveAt = null }, now = Date.now()) {
+export function sessionState({ lastMessage = null, latestSeq = null, lastPersonAt = null, lastActiveAt = null }, now = Date.now()) {
+  const lastAt  = Math.max(Date.parse(lastActiveAt) || 0, Date.parse(lastMessage?.created_at) || 0);
+  const working = { state: now - lastAt > ROUND_CEILING_MS ? 'waiting' : 'working', gate: null };
+  // The person wrote after her last message: the round that answers it has not spoken yet.
+  if (Date.parse(lastPersonAt) > (Date.parse(lastMessage?.created_at) || 0)) return working;
   const kind = lastMessage?.message_type === 'HUMAN_GATE' ? GATE_KINDS[lastMessage.payload?.gate_type] ?? null : null;
   if (kind && lastMessage.payload.atSeq != null && lastMessage.payload.atSeq === latestSeq) {
     return { state: 'waiting', gate: { kind, atSeq: latestSeq } };
@@ -99,8 +105,7 @@ export function sessionState({ lastMessage = null, latestSeq = null, lastActiveA
   if (!kind && (lastMessage?.message_type === 'WORKFLOW_ERROR' || lastMessage?.payload?.invitesReply)) {
     return { state: 'waiting', gate: null };
   }
-  const lastAt = Math.max(Date.parse(lastActiveAt) || 0, Date.parse(lastMessage?.created_at) || 0);
-  return { state: now - lastAt > ROUND_CEILING_MS ? 'waiting' : 'working', gate: null };
+  return working;
 }
 
 /**
@@ -198,11 +203,12 @@ export function gateAnswer({ state, gateMessage, sessionId, body = {} }) {
 // ── Reads ────────────────────────────────────────────────────────────────────
 
 /**
- * Each session's latest entry, first message and latest inbox row, in one read. The ids are
+ * Each session's latest entry, first message, the person's latest entry and latest inbox row,
+ * in one read. The ids are
  * integers from PGC_Session, the only values in the statement.
  *
  * @param {number[]} ids
- * @returns {Promise<Map<number, { latestSeq: number|null, firstMessage: string|null, lastMessage: object|null }>>}
+ * @returns {Promise<Map<number, { latestSeq: number|null, firstMessage: string|null, lastPersonAt: string|null, lastMessage: object|null }>>}
  */
 async function readFacts(ids) {
   const facts = new Map();
@@ -212,6 +218,7 @@ async function readFacts(ids) {
            (SELECT max(e.sequence_number) FROM "PGC_SessionEntry" e WHERE e.session_id = s.id) AS latest_seq,
            (SELECT e.content FROM "PGC_SessionEntry" e WHERE e.session_id = s.id AND e.role = 'user'
              ORDER BY e.sequence_number LIMIT 1) AS first_message,
+           (SELECT max(e.created_at) FROM "PGC_SessionEntry" e WHERE e.session_id = s.id AND e.role = 'user') AS last_person_at,
            m.message_type, m.payload, m.created_at AS message_at
       FROM "PGC_Session" s
       LEFT JOIN LATERAL (
@@ -223,6 +230,7 @@ async function readFacts(ids) {
     facts.set(Number(r.id), {
       latestSeq:    r.latest_seq == null ? null : Number(r.latest_seq),
       firstMessage: r.first_message ?? null,
+      lastPersonAt: r.last_person_at ?? null,
       lastMessage:  r.message_type ? { message_type: r.message_type, payload: r.payload, created_at: r.message_at } : null,
     });
   }

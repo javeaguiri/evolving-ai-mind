@@ -78,6 +78,22 @@ describe('sessionState — waiting or working', () => {
     assert.equal(sessionState({ lastMessage: null, latestSeq: 1, lastActiveAt: ago(1000) }, NOW).state, 'working');
   });
 
+  it('the person wrote after her last message: working, even after a reply that invited one or at a gate', () => {
+    assert.deepEqual(sessionState({ lastMessage: reply(), latestSeq: 4, lastPersonAt: ago(500), lastActiveAt: ago(500) }, NOW),
+      { state: 'working', gate: null });
+    assert.deepEqual(sessionState({ lastMessage: gate('minds_eye_continue_gate', 9), latestSeq: 10, lastPersonAt: ago(500), lastActiveAt: ago(500) }, NOW),
+      { state: 'working', gate: null });
+  });
+
+  it('the person\'s message before her last one changes nothing', () => {
+    assert.equal(sessionState({ lastMessage: reply(), latestSeq: 4, lastPersonAt: ago(5000), lastActiveAt: ago(900) }, NOW).state, 'waiting');
+  });
+
+  it('a person\'s message no round answered, past the ceiling, waits again', () => {
+    const quiet = ago(ROUND_CEILING_MS + 1);
+    assert.equal(sessionState({ lastMessage: { ...reply(), created_at: ago(ROUND_CEILING_MS + 5000) }, latestSeq: 4, lastPersonAt: quiet, lastActiveAt: quiet }, NOW).state, 'waiting');
+  });
+
   it('a round silent past the ceiling has died — the session waits', () => {
     const quiet = ago(ROUND_CEILING_MS + 1);
     assert.equal(sessionState({ lastMessage: { ...progress, created_at: quiet }, latestSeq: 3, lastActiveAt: quiet }, NOW).state, 'waiting');
