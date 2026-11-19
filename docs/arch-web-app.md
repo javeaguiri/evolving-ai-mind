@@ -223,7 +223,7 @@ when the base version moved, `422` naming the panel whose config fails its schem
 `DELETE /pages/{pageKey}` (never Home). `GET /sources/{source}/rows` (§3.1) gains the registry's
 edit policy and `display` metadata — the same read as a domain page, so a panel sees nothing a
 domain page could not — and a grid's edits save through §6.4. A Novia panel reads
-`GET /novia/sessions?topic=`.
+`GET /minds-eye/sessions?topic=`.
 
 Adds `arch-home-brain.md` §4.7's remaining resources — `GET /domains`, `/domains/{domain}/schema`,
 `/domains/{domain}/records[/{id}]`, `GET /runs/{runId}` (one run's steps, for Activity), the Novia
@@ -320,7 +320,7 @@ which one.
 | **Workflow** | One workflow, or every workflow of a domain | A *Start* button per workflow (its `display.label`); its runs by **run label** (§2.4), newest first; the active run stepped through in place (§4.3). With `show_output`, the latest output as a `report` widget above the runs | `workflow` or `domain`, `limit`, `show_output` | 0 |
 | **Records** | A table, view or entity of a domain | Its rows in one view at a time, with the **view switch** in the panel's header | `source` (a table or view) or `entity`, `view` (the one it opens on), the views' options | 0, read-only |
 | **Summary** | A table or view, or a workflow's latest output | Exactly one widget | `source` (or `workflow` for a report), `widget`, the widget's options | 0 |
-| **Novia** | A topic | Her sessions on that topic (§2.5), newest first; opening one continues it in the panel; *New* starts a session on the topic | `topic` | 1 |
+| **Novia** | A topic | Her sessions on that topic (§2.5), most recently active first; opening one continues it in the panel; *New* starts a session on the topic | `topic` | 1 |
 
 **The view switch.** The views are renderings of the same rows, so choosing one is the viewer's
 choice, not the page's: the switch never writes a new page version, and the panel's config is the
@@ -427,7 +427,7 @@ Novia has the left-hand region (§4.1), and only she answers there.
 
 | Behaviour | Design |
 |---|---|
-| **Region** | Her sessions at its head, newest first, each named by its topic (§2.5) or, without one, by its first message; opening one shows the conversation. Deep-linkable as `?novia=<sessionId>` on any route |
+| **Region** | Her sessions at its head, most recently active first, each named by its `label` or, without one, by its first message; opening one shows the conversation. Deep-linkable as `?minds-eye=<sessionId>` on any route |
 | **Novia panels** | A panel on a page holds one topic's sessions (§4.2), for a subject the household returns to; *New* there starts a session on that topic, the only way a session gets one |
 | **Messages** | `MINDS_EYE` / `MINDS_EYE_RESUME`, as `/novia` in Slack; her gated actions render with the gate components of §5 |
 | **Ask Novia about this** | From any panel, record, run or question: opens her region with the item's identifiers (panel config, run id, record) in the opening message |
@@ -478,7 +478,7 @@ Client-side; every page has a deep link.
 | `/activity/runs`, `/activity/schedules`, `/activity/memory` | Every run by its label, filterable by domain and status; the schedules; what the brain remembers, by domain | 1 |
 | `/settings/{entry}` | Settings (§4.7) | 0 (Profile), 1 |
 | `?run=<runId>` | The run drawer, over any route | 0 |
-| `?novia=<sessionId>` | Novia's region, open on a session | 1 |
+| `?minds-eye=<sessionId>` | Novia's region, open on a session | 1 |
 | `?help=<section>` | The Help drawer | 1 |
 
 ---

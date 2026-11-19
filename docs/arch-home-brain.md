@@ -181,7 +181,7 @@ Resources are in §4.7. **Mode** is from §4.1: *Navigate* is laid out by the ap
 | **Recent activity** | Navigate | Runs by status and time; drill into a run's steps | `GET /runs`, `GET /runs/{runId}` |
 | **Domain page** | Navigate | Drill-down into a domain: its records as a sortable, filterable table, a record and its child records, and the domain's workflows as actions. Fields the edit policy allows are editable in place; add and delete appear where the table allows them (§4.8) | `GET /domains/{domain}/schema`, `GET /domains/{domain}/records`, `GET /domains/{domain}/records/{id}` |
 | **Workflow output** | Execute | A started workflow's markdown, forms and gates, in a panel beside the page that started it | Pushed inbox messages for the run |
-| **Novia** (right) | Navigate → Execute | The session list, kept current; opening one shows the conversation, with her gated actions (`propose_workflow_fix`, `register_workflow`) as gates | `GET /novia/sessions`; history from `PGC_SessionEntry`; new turns pushed |
+| **Novia** (right) | Navigate → Execute | The session list, kept current; opening one shows the conversation, with her gated actions (`propose_workflow_fix`, `register_workflow`) as gates | `GET /minds-eye/sessions`; history from `PGC_SessionEntry`; new turns pushed |
 | **Ask Novia about this** | Execute | From any panel, opens Novia with the current view as context — the run id, the domain, the record, the gate | The panel's own identifiers, passed into the opening message |
 
 ### 4.4 Gate rendering
@@ -282,7 +282,7 @@ REST resources, JSON in and out, spec-first in `openapi.yaml` before implementat
 | `GET /domains/{domain}/records/{id}` | One record with its child records | SERV entity reads via `PGC_EntitySchema` |
 | `GET /gates` | Gates waiting on a person | Runs at `awaiting_human_gate` |
 | `GET /runs`, `GET /runs/{runId}` | Activity and a run's steps | `PGC_WorkflowRun`, `PGC_WorkflowRunStep` |
-| `GET /novia/sessions`, `GET /novia/sessions/{id}/messages` | Sessions, and a conversation's history | `PGC_Session`, `PGC_SessionEntry` |
+| `GET /minds-eye/sessions`, `GET /minds-eye/sessions/{id}/messages` | Sessions, and a conversation's history | `PGC_Session`, `PGC_SessionEntry` |
 | `GET /inbox` | Pushed messages since a cursor, for catch-up | `PGC_UiMessage` |
 
 **Execute** — each returns `202 Accepted` with the run or session it touched; what follows is
@@ -293,7 +293,7 @@ pushed:
 | `POST /commands` | Free-text intent | `CLASSIFY_INTENT` |
 | `POST /runs` | Start a named workflow with input | Run entry, as `POST /proc/run-workflow` |
 | `POST /gates/{runId}/responses` | Answer a gate | `resume_gate` |
-| `POST /novia/sessions`, `POST /novia/sessions/{id}/messages` | Open a session; send a message | `MINDS_EYE` / `MINDS_EYE_RESUME` |
+| `POST /minds-eye/sessions`, `POST /minds-eye/sessions/{id}/messages` | Open a session; send a message | `MINDS_EYE` / `MINDS_EYE_RESUME` |
 
 **Edit** — direct record edits under the edit policy (§4.8); synchronous, returning the record as
 written:
