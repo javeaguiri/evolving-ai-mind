@@ -80,8 +80,9 @@ else {
 if (!(await hasColumn())) {
   console.log(`  ${column}  would fill once the column exists`);
 } else {
+  // As text: a JS Date keeps milliseconds, and the column holds microseconds.
   const sessions = await select(`
-    SELECT s.id, coalesce(e.latest, s.created_at) AS last_active_at
+    SELECT s.id, coalesce(e.latest, s.created_at)::text AS last_active_at
       FROM "PGC_Session" s
       LEFT JOIN (SELECT session_id, max(created_at) AS latest FROM "PGC_SessionEntry" GROUP BY session_id) e
         ON e.session_id = s.id
