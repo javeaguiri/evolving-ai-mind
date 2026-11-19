@@ -16,6 +16,7 @@
 //   POST   /serv/schema/modifyConstraint — DROP + ADD CONSTRAINT + PGC_Schema sync
 //   POST   /serv/schema/addForeignKey       — ALTER TABLE ... ADD FOREIGN KEY + PGC_Schema sync
 //   POST   /serv/schema/addUniqueConstraint — ALTER TABLE ... ADD UNIQUE + PGC_Schema sync
+//   POST   /serv/schema/addTrigger          — CREATE OR REPLACE TRIGGER (a function SERV holds) + PGC_Schema sync
 //   POST   /serv/schema/listTables          — list all entries in PGC_Schema
 //   POST   /serv/schema/listPhysicalTables  — list physical tables from DB catalog (registered/orphaned)
 //   POST   /serv/schema/getTable            — get one entry by table_name
@@ -31,6 +32,7 @@
 
 import { ok, err }                        from '../shared/lambda-utils.mjs';
 import { getClient, buildCreateTableSQL } from './init-brain.mjs';
+import { TRIGGER_FUNCTIONS, triggerFunctionName, validateTrigger, buildTriggerSQL } from './trigger-functions.mjs';
 
 // ---------------------------------------------------------------------------
 // Allowed PostgreSQL column types — security gate.
@@ -97,6 +99,7 @@ export async function handle(req) {
     case 'dropConstraint':   return dropConstraint(req);
     case 'addForeignKey':       return addForeignKey(req);
     case 'addUniqueConstraint': return addUniqueConstraint(req);
+    case 'addTrigger':          return addTrigger(req);
     case 'deleteTable':      return deleteTable(req);
     default:
       return err(404, `SERV-Schema route "${req.subRoute}" not found`, req.correlationId);
@@ -913,14 +916,14 @@ async function modifyConstraint(req) {
 const COLUMN_NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
 const ON_DELETE_ACTIONS   = new Set(['CASCADE', 'SET NULL', 'RESTRICT', 'NO ACTION']);
 
-// upsertForeignKey — pure. Appends when the named FK is new, replaces it when it
-// is not, so a re-issued request converges rather than duplicating the entry.
-export function upsertForeignKey(existing, foreignKey) {
-  const keys = existing ?? [];
-  if (keys.some(fk => fk.name === foreignKey.name)) {
-    return keys.map(fk => (fk.name === foreignKey.name ? foreignKey : fk));
+// upsertNamed — pure. Appends when the named entry (a foreign key, a trigger) is new,
+// replaces it when it is not, so a re-issued request converges rather than duplicating it.
+export function upsertNamed(existing, entry) {
+  const entries = existing ?? [];
+  if (entries.some(e => e.name === entry.name)) {
+    return entries.map(e => (e.name === entry.name ? entry : e));
   }
-  return [...keys, foreignKey];
+  return [...entries, entry];
 }
 
 // validateForeignKey — pure. Returns an error string, or null when the spec is
@@ -1019,7 +1022,7 @@ async function addForeignKey(req) {
 
     await pgcClient.query(
       `UPDATE "PGC_Schema" SET foreign_keys = $1::jsonb, updated_at = now() WHERE table_name = $2`,
-      [JSON.stringify(upsertForeignKey(existing, entry)), tableName]
+      [JSON.stringify(upsertNamed(existing, entry)), tableName]
     );
 
     console.info(`schema: foreign key "${name}" on "${tableName}" ${action}`);
@@ -1104,6 +1107,68 @@ async function addUniqueConstraint(req) {
   } catch (error) {
     console.error('schema addUniqueConstraint error:', error.message);
     return err(500, `addUniqueConstraint failed: ${error.message}`, req.correlationId);
+  } finally {
+    await dbClient.end();
+    if (dbClient !== pgcClient) await pgcClient.end();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /serv/schema/addTrigger
+// createTable and bootstrap were the only places a trigger was ever created, so a trigger
+// needed after a table was built had no route. The function is one SERV holds
+// (trigger-functions.mjs), installed before the trigger; no SQL comes from the caller.
+// ---------------------------------------------------------------------------
+
+async function addTrigger(req) {
+  const { tableName, trigger } = req.body;
+
+  if (!tableName) return err(400, 'tableName is required', req.correlationId);
+  if (!TABLE_NAME_PATTERN.test(tableName)) {
+    return err(400, `Invalid table name "${tableName}"`, req.correlationId);
+  }
+
+  const pgcClient = getClient(process.env.PGC_DATABASE_URL);
+  let dbClient = pgcClient;
+
+  try {
+    await pgcClient.connect();
+
+    // `target` is read from PGC_Schema, never from the caller — see modifyConstraint.
+    const reg = await pgcClient.query(
+      `SELECT target, triggers FROM "PGC_Schema" WHERE table_name = $1`, [tableName]
+    );
+    if (reg.rows.length === 0) {
+      return err(404, `Table "${tableName}" not found in PGC_Schema`, req.correlationId);
+    }
+    const target = reg.rows[0].target;
+
+    const invalid = validateTrigger(trigger, target);
+    if (invalid) return err(400, invalid, req.correlationId);
+
+    if (target === 'pgd') {
+      dbClient = getClient(process.env.PGD_DATABASE_URL);
+      await dbClient.connect();
+    }
+
+    const entry = { name: trigger.name, timing: trigger.timing, function: trigger.function.trim() };
+    await dbClient.query(TRIGGER_FUNCTIONS[triggerFunctionName(entry.function)].sql);
+    await dbClient.query(buildTriggerSQL(tableName, entry));
+
+    const existing = reg.rows[0].triggers ?? [];
+    const action   = existing.some(t => t.name === entry.name) ? 'updated' : 'added';
+
+    await pgcClient.query(
+      `UPDATE "PGC_Schema" SET triggers = $1::jsonb, updated_at = now() WHERE table_name = $2`,
+      [JSON.stringify(upsertNamed(existing, entry)), tableName]
+    );
+
+    console.info(`schema: trigger "${entry.name}" on "${tableName}" ${action}`);
+    return ok({ success: true, tableName, trigger: entry, action }, req.correlationId);
+
+  } catch (error) {
+    console.error('schema addTrigger error:', error.message);
+    return err(500, `addTrigger failed: ${error.message}`, req.correlationId);
   } finally {
     await dbClient.end();
     if (dbClient !== pgcClient) await pgcClient.end();

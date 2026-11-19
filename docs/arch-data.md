@@ -1021,6 +1021,7 @@ DDL executor and PGC metadata registry.
 | `/api/v1/serv/schema/modifyConstraint` | POST | Add a named CHECK, or replace its expression if one of that name exists. **Upserts** `PGC_Schema.constraints` — appends when new. A CHECK the DB enforces but the registry omits is invisible to `domain_schema`, so `design_workflow_process`/`design_workflow_prompts` never see the enum and generated workflows keep emitting values the DB rejects. |
 | `/api/v1/serv/schema/addForeignKey` | POST | ALTER TABLE ... ADD CONSTRAINT ... FOREIGN KEY + `PGC_Schema.foreign_keys` sync. **`createTable` was previously the only place a foreign key could be created**, so a relationship introduced after a domain was built had no route — `modifyConstraint` emits CHECK only, and `updateTable` writes the registry without touching DDL, which would leave the registry asserting a constraint the database does not enforce. Idempotent. Both tables must be registered and share the same `target` (PGC and PGD are separate databases, so a cross-target FK cannot exist physically); the referencing column must already exist. `onDelete` limited to CASCADE / SET NULL / RESTRICT / NO ACTION. |
 | `/api/v1/serv/schema/addUniqueConstraint` | POST | ALTER TABLE ... ADD CONSTRAINT ... UNIQUE + `PGC_Schema.constraints` sync (`type: "unique"`). Same gap as above one type over: `modifyConstraint` covers CHECK only, so a uniqueness rule discovered after a table was built — a lookup table that must not accumulate duplicate names — had no route. Idempotent; every column must already be registered. |
+| `/api/v1/serv/schema/addTrigger` | POST | CREATE OR REPLACE TRIGGER on an existing table + `PGC_Schema.triggers` sync, upserted by name. `createTable` and bootstrap were the only places a trigger was created. The function is named from SERV's catalogue (`trigger-functions.mjs`, each with the databases it is installed in) and installed first — never SQL from the caller. Idempotent |
 | `/api/v1/serv/schema/dropConstraint` | POST | Drop a named constraint from a PGD table (DDL + PGC_Schema sync). Accepts any constraint type. Wired into Novia `propose_schema_fix` tool. |
 
 > **`target` is never supplied by the caller** on `dropColumn` / `modifyColumn` / `modifyConstraint` / `dropConstraint` — it is read from `PGC_Schema`. A correctness requirement only a technical caller would know is a bug, not a contract.
@@ -1281,6 +1282,13 @@ Adds a FK to an **existing** table and records it in `PGC_Schema.foreign_keys` i
 curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/addUniqueConstraint" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGD_InventoryCategory", "constraintName": "uq_inventorycategory_name", "columns": ["name"] }'
 ```
 Adds a UNIQUE constraint over one or more columns and registers it as `type: "unique"`. Deduplicate the existing rows first — the DDL fails on a table that already violates it.
+
+#### SERV-Schema — addTrigger
+
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/addTrigger" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_SessionEntry", "trigger": { "name": "trg_pgc_sessionentry_last_active", "timing": "AFTER INSERT", "function": "touch_session_last_active()" } }'
+```
+Adds a trigger to an **existing** table and records it in `PGC_Schema.triggers`, upserted by name. Build the body from the table's template. `function` names one of the functions SERV holds (`src/serv/trigger-functions.mjs`), installed before the trigger; any other is refused. Idempotent.
 
 ---
 

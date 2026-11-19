@@ -46,6 +46,7 @@ import seedStepType      from './templates/pgc/seeds/seed_PGC_StepType.json'    
 import seedCapability    from './templates/pgc/seeds/seed_PGC_Capability.json'   with { type: 'json' };
 import seedPage          from './templates/pgc/seeds/seed_PGC_Page.json'         with { type: 'json' };
 import { currentSandbox }   from './sandbox-context.mjs';
+import { functionsFor, buildTriggerSQL } from './trigger-functions.mjs';
 
 const { Client } = pg;
 
@@ -159,10 +160,10 @@ export async function bootstrap(req) {
     await pgdClient.connect();
     console.info('init-brain: bootstrap starting');
 
-    // Step 1 — install set_updated_at() trigger function on both PGC and PGD.
-    // PGD needs it because all /create-domain tables include an updated_at trigger.
-    await installTriggerFunction(client);
-    await installTriggerFunction(pgdClient);
+    // Step 1 — install SERV's trigger functions, each in the databases it lists.
+    // PGD needs set_updated_at() because all /create-domain tables include an updated_at trigger.
+    await installTriggerFunctions(client, 'pgc');
+    await installTriggerFunctions(pgdClient, 'pgd');
 
     // Step 2 — create PGC system tables from templates, tracking new vs existing
     for (const template of PGC_TEMPLATES) {
@@ -247,21 +248,12 @@ export async function bootstrap(req) {
 // ---------------------------------------------------------------------------
 
 /**
- * Install the set_updated_at() trigger function in PGC.
+ * Install the trigger functions SERV holds for one database (trigger-functions.mjs).
  * CREATE OR REPLACE — safe to run on every bootstrap.
  */
-async function installTriggerFunction(client) {
-  const sql = `
-    CREATE OR REPLACE FUNCTION set_updated_at()
-    RETURNS TRIGGER AS $$
-    BEGIN
-      NEW.updated_at = now();
-      RETURN NEW;
-    END;
-    $$ LANGUAGE plpgsql;
-  `;
-  await client.query(sql);
-  console.info('init-brain: set_updated_at() installed');
+async function installTriggerFunctions(client, target) {
+  for (const sql of functionsFor(target)) await client.query(sql);
+  console.info(`init-brain: trigger functions installed (${target})`);
 }
 
 /**
@@ -458,11 +450,7 @@ export function buildCreateTableSQL(template) {
   ].join('\n');
 
   // Triggers are separate statements — must run after CREATE TABLE
-  const triggerStatements = (triggers || []).map(trg => `
-    CREATE OR REPLACE TRIGGER "${trg.name}"
-      ${trg.timing} ON "${table_name}"
-      FOR EACH ROW EXECUTE FUNCTION ${trg.function};
-  `.trim());
+  const triggerStatements = (triggers || []).map(trg => buildTriggerSQL(table_name, trg));
 
   return { createTable, triggers: triggerStatements };
 }
