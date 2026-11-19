@@ -16,7 +16,7 @@ import {
   TRIGGER_FUNCTIONS, triggerFunctionName, validateTrigger, buildTriggerSQL, functionsFor,
 } from '../../src/serv/trigger-functions.mjs';
 import { buildCreateTableSQL } from '../../src/serv/init-brain.mjs';
-import { upsertNamed } from '../../src/serv/schema.mjs';
+import { upsertNamed, validateCreatePayload } from '../../src/serv/schema.mjs';
 import { readdirSync, readFileSync } from 'node:fs';
 
 const TEMPLATE_DIR = new URL('../../src/serv/templates/pgc/', import.meta.url);
@@ -136,5 +136,29 @@ describe('upsertNamed — a re-issued trigger converges', () => {
 
   it('treats a null registry entry as empty', () => {
     assert.deepEqual(upsertNamed(null, valid), [valid]);
+  });
+});
+
+describe('validateCreatePayload — createTable checks its triggers as addTrigger does', () => {
+  const table = { tableName: 'PGD_Cards', target: 'pgd', columns: [{ name: 'id', type: 'serial' }] };
+  const updatedAt = { name: 'trg_cards_updated_at', timing: 'BEFORE UPDATE', function: 'set_updated_at()' };
+
+  it('accepts a table with no triggers, or with set_updated_at', () => {
+    assert.equal(validateCreatePayload(table), null);
+    assert.equal(validateCreatePayload({ ...table, triggers: [updatedAt] }), null);
+  });
+
+  it('refuses a trigger whose function carries SQL', () => {
+    const triggers = [{ ...updatedAt, function: 'set_updated_at(); DROP TABLE "PGD_Cards"' }];
+    assert.match(validateCreatePayload({ ...table, triggers }), /not one SERV holds/);
+  });
+
+  it('refuses a timing outside the four, and a function not installed in the target', () => {
+    assert.match(validateCreatePayload({ ...table, triggers: [{ ...updatedAt, timing: 'BEFORE UPDATE OR DELETE' }] }), /timing/);
+    assert.match(validateCreatePayload({ ...table, triggers: [{ ...updatedAt, function: 'touch_session_last_active()' }] }), /not installed in pgd/);
+  });
+
+  it('refuses triggers that are not an array', () => {
+    assert.match(validateCreatePayload({ ...table, triggers: updatedAt }), /must be an array/);
   });
 });

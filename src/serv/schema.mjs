@@ -118,7 +118,7 @@ async function createTable(req) {
   } = req.body;
 
   // --- Validate ---
-  const validationError = validateCreatePayload({ tableName, target, columns });
+  const validationError = validateCreatePayload({ tableName, target, columns, triggers });
   if (validationError) {
     return err(400, validationError, req.correlationId);
   }
@@ -1377,7 +1377,7 @@ async function deleteTable(req) {
 // Security validation
 // ---------------------------------------------------------------------------
 
-function validateCreatePayload({ tableName, target, columns }) {
+export function validateCreatePayload({ tableName, target, columns, triggers = [] }) {
   if (!tableName)              return 'tableName is required';
   if (!target)                 return 'target is required (pgc or pgd)';
   if (!columns?.length)        return 'columns array is required and must not be empty';
@@ -1397,6 +1397,13 @@ function validateCreatePayload({ tableName, target, columns }) {
     if (!ALLOWED_TYPES.has(col.type.toLowerCase().split('(')[0].trim())) {
       return `Column type "${col.type}" is not allowed — rejected for security`;
     }
+  }
+
+  // A trigger's parts are spliced into DDL, so each passes the check addTrigger applies.
+  if (!Array.isArray(triggers)) return 'triggers must be an array';
+  for (const trigger of triggers) {
+    const problem = validateTrigger(trigger, target);
+    if (problem) return problem;
   }
 
   return null;  // valid
