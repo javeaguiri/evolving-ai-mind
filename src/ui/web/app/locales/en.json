@@ -83,6 +83,7 @@
     "name": "Novia",
     "collapse": "Collapse Novia",
     "expand": "Open Novia",
+    "resize": "Drag to resize Novia — double-click for the usual width",
     "new": "+ New",
     "back": "‹ All conversations",
     "empty": "No conversations yet — start one with New.",

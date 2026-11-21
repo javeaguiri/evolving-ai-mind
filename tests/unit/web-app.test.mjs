@@ -25,7 +25,7 @@ import { inputsOf, initialValues, isChanged, fieldProblems, formValues, answerFo
 import { liveScript, isNewBuild } from '../../src/ui/web/app/shell/version.mjs';
 import { runName, panelWorkflows, foldPoint, addMessages, threadDelay, isActive, isWorking, THREAD_POLL_MS, THREAD_POLL_MAX_MS } from '../../src/ui/web/app/runs/runs.mjs';
 import { pageItems, domainItems, sectionOf, currentItem, gateHeadline, relativeAge, pollDelay, POLL_MS, POLL_MAX_MS } from '../../src/ui/web/app/shell/nav.mjs';
-import { sessionName, addConversation, groupTurns, repliesMissing, conversationDelay, readCollapsed, writeCollapsed, withSession, answerable, answerField, answersFrom, RADIO_LIMIT, stillExpecting, personCount, panelTopic, sessionsQuery, startBody, labelBody, EXPECT_MS, COLLAPSED_KEY, WORKING_POLL_MS, WAITING_POLL_MS, POLL_MAX_MS as CONVO_MAX_MS, ROUND_CEILING_MS } from '../../src/ui/web/app/minds-eye/conversation.mjs';
+import { sessionName, addConversation, groupTurns, repliesMissing, conversationDelay, readCollapsed, writeCollapsed, withSession, answerable, answerField, answersFrom, RADIO_LIMIT, stillExpecting, personCount, panelTopic, sessionsQuery, startBody, labelBody, clampWidth, readWidth, writeWidth, WIDTH_KEY, DEFAULT_WIDTH, MIN_WIDTH, EXPECT_MS, COLLAPSED_KEY, WORKING_POLL_MS, WAITING_POLL_MS, POLL_MAX_MS as CONVO_MAX_MS, ROUND_CEILING_MS } from '../../src/ui/web/app/minds-eye/conversation.mjs';
 
 const APP_DIR = new URL('../../src/ui/web/app/', import.meta.url).pathname;
 const CONFIG  = { userPoolId: 'us-east-2_pool', clientId: 'client123', authDomain: 'https://auth.example', siteUrl: 'https://site.example', region: 'us-east-2' };
@@ -1157,7 +1157,8 @@ describe('components and catalog', () => {
 
     it('the shell draws her region at the left, headed by her name, with a Novia tab for a phone', () => {
       const html = strip(draw('/p/money?minds-eye=7'));
-      assert.match(html, /<div class="body"><aside class="region" aria-label="Novia"><div class="region-head"><h2>Novia<\/h2><button type="button" class="ib" aria-label="Collapse Novia"/);
+      assert.match(html, /<div class="body"><aside class="region" aria-label="Novia" style="flex-basis:320px"><div class="region-head"><h2>Novia<\/h2><button type="button" class="ib" aria-label="Collapse Novia"/);
+      assert.match(html, /<div class="region-handle" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Drag to resize Novia — double-click for the usual width"[^>]*aria-valuenow="320" aria-valuemin="280"[^>]*><\/div><\/aside>/);
       assert.match(html, /<nav class="tabbar"[^>]*>.*<button type="button">Novia<\/button><\/nav>/s);
     });
 
@@ -1230,6 +1231,26 @@ describe('her region — the decisions, pure', () => {
     const broken = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); }, removeItem() {} };
     assert.equal(readCollapsed(broken), false);
     assert.doesNotThrow(() => writeCollapsed(broken, true));
+  });
+
+  it('her region\'s width: held between its minimum and 60% of the window, remembered unless it is the usual one', () => {
+    assert.equal(clampWidth(500, 1600), 500);
+    assert.equal(clampWidth(100, 1600), MIN_WIDTH);
+    assert.equal(clampWidth(1400, 1600), 960);
+    assert.equal(clampWidth(400, 300), MIN_WIDTH);      // a window too narrow still leaves the minimum
+    assert.equal(clampWidth(333.6, 1600), 334);
+    const store = new MemoryStorage();
+    assert.equal(readWidth(store), DEFAULT_WIDTH);
+    writeWidth(store, 480);
+    assert.equal(store.getItem(WIDTH_KEY), '480');
+    assert.equal(readWidth(store), 480);
+    writeWidth(store, DEFAULT_WIDTH);
+    assert.equal(store.getItem(WIDTH_KEY), null);
+    store.setItem(WIDTH_KEY, 'wide');
+    assert.equal(readWidth(store), DEFAULT_WIDTH);
+    const broken = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); }, removeItem() { throw new Error('denied'); } };
+    assert.equal(readWidth(broken), DEFAULT_WIDTH);
+    assert.doesNotThrow(() => writeWidth(broken, 480));
   });
 
   it('answerable: the gate she waits at, or her last reply with questions — nothing while she works', () => {

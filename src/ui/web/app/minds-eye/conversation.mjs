@@ -130,6 +130,31 @@ export function writeCollapsed(storage, collapsed) {
   try { collapsed ? storage?.setItem(COLLAPSED_KEY, 'true') : storage?.removeItem(COLLAPSED_KEY); } catch { /* not kept */ }
 }
 
+/** Her region's width (§4.1): dragged by its edge, remembered on this device, within bounds. */
+export const WIDTH_KEY     = 'minds-eye.width';
+export const DEFAULT_WIDTH = 320;
+export const MIN_WIDTH     = 280;
+export const MAX_SHARE     = 0.6;    // of the window, so the page keeps room
+
+/** A width within bounds, whole pixels: at least MIN_WIDTH, at most MAX_SHARE of the window. */
+export function clampWidth(width, windowWidth) {
+  const max = Math.max(MIN_WIDTH, Math.floor(windowWidth * MAX_SHARE));
+  return Math.round(Math.min(Math.max(width, MIN_WIDTH), max));
+}
+
+/** @param {Storage|null} storage */
+export function readWidth(storage) {
+  try {
+    const width = Number(storage?.getItem(WIDTH_KEY));
+    return Number.isFinite(width) && width >= MIN_WIDTH ? width : DEFAULT_WIDTH;
+  } catch { return DEFAULT_WIDTH; }
+}
+
+/** @param {Storage|null} storage */
+export function writeWidth(storage, width) {
+  try { width === DEFAULT_WIDTH ? storage?.removeItem(WIDTH_KEY) : storage?.setItem(WIDTH_KEY, String(width)); } catch { /* not kept */ }
+}
+
 /**
  * The location with her region open on a session, or closed on none — `?minds-eye=` beside
  * whatever else the location carries.

@@ -469,8 +469,10 @@ td.bad .cell { border-color: var(--bad); }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 
 /* ---------- her region (§4.1, §4.5) ---------- */
-.region { flex: 0 0 320px; min-inline-size: 0; min-block-size: 0; display: flex; flex-direction: column; background: var(--paper); border-inline-end: 1px solid var(--line); }
+.region { position: relative; flex: 0 0 320px; min-inline-size: 0; max-inline-size: 60vw; min-block-size: 0; display: flex; flex-direction: column; background: var(--paper); border-inline-end: 1px solid var(--line); }
 .region.collapsed { flex-basis: 48px; align-items: center; padding-block: 10px; }
+.region-handle { position: absolute; inset-block: 0; inset-inline-end: -4px; inline-size: 8px; cursor: col-resize; touch-action: none; z-index: 1; }
+.region-handle:hover, .region-handle:focus-visible { background: linear-gradient(to right, transparent 3px, var(--accent) 3px, var(--accent) 5px, transparent 5px); outline: none; }
 .region.collapsed .strip { display: flex; flex-direction: column; align-items: center; gap: 10px; border: 0; background: transparent; color: var(--muted); padding-block: 4px; padding-inline: 8px; border-radius: 8px; cursor: pointer; }
 .region.collapsed .strip:hover { background: var(--ground); color: var(--ink); }
 .region.collapsed .strip .name { writing-mode: vertical-rl; font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }

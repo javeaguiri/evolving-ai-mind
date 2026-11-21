@@ -30,6 +30,7 @@ import { runName }             from './runs/runs.mjs';
 import { domainItems, pollDelay, HOME_PAGE_KEY } from './shell/nav.mjs';
 import { MindsEyeRegion }      from './minds-eye/Region.jsx';
 import { readCollapsed, writeCollapsed, withSession } from './minds-eye/conversation.mjs';
+import { RegionHandle, useRegionWidth } from './minds-eye/RegionHandle.jsx';
 
 const PHONE = '(max-width: 640px)';
 const storage = () => { try { return globalThis.localStorage ?? null; } catch { return null; } };
@@ -150,6 +151,7 @@ export function Shell({ route, me, pages, domains, problem, api, onSignInRequire
   const session  = route.mindsEye ?? page.mindsEye ?? null;   // the session her region is open on
   const [collapsed, setCollapsed] = useState(() => readCollapsed(storage()));
   const [phoneOpen, setPhoneOpen] = useState(false);
+  const width = useRegionWidth(storage);
   const openSession = sessionId => replace(withSession(route.location, sessionId));
   const collapse    = value => { setCollapsed(value); writeCollapsed(storage(), value); };
 
@@ -177,12 +179,13 @@ export function Shell({ route, me, pages, domains, problem, api, onSignInRequire
           </button>
         </aside>
       ) : (
-        <aside className="region" aria-label={t('mindsEye.name')}>
+        <aside className="region" aria-label={t('mindsEye.name')} style={{ flexBasis: width.value }}>
           <div className="region-head">
             <h2>{t('mindsEye.name')}</h2>
             <button type="button" className="ib" onClick={() => collapse(true)} aria-label={t('mindsEye.collapse')} title={t('mindsEye.collapse')}>«</button>
           </div>
           <MindsEyeRegion context={context} sessionId={session} onOpen={openSession} />
+          <RegionHandle width={width} />
         </aside>
       ))}
       <main className="main">
