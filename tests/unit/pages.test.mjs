@@ -37,6 +37,7 @@ describe('pageProblems — a valid page', () => {
       panel('summary',  { widget: 'metric', source: 'PGD_ItemSummary', value_column: 'total' }, { id: 'm' }),
       panel('summary',  { widget: 'report', workflow: 'report_thing' }, { id: 'rep', title: { en: 'Report', es: 'Informe' } }),
       panel('minds_eye', { topic: 'Things' }, { id: 'n' }),
+      panel('minds_eye', { domain: 'things' }, { id: 'nd' }),
     ]);
     assert.deepEqual(pageProblems(ok, registry), []);
   });
@@ -94,6 +95,13 @@ describe('pageProblems — refused, not stored', () => {
   it('a source and an entity together, or a workflow and a domain together', () => {
     assert.match(problemsOf(panel('records', { source: 'PGD_Items', entity: 'Item' }))[0], /not both/);
     assert.match(problemsOf(panel('workflow', { workflow: 'do_thing', domain: 'things' }))[0], /not both/);
+  });
+
+  it('a minds_eye panel names a domain the registry holds, or a topic, one of the two', () => {
+    assert.match(problemsOf(panel('minds_eye', { domain: 'things', topic: 'Things' }))[0], /name a domain or a topic, not both/);
+    assert.match(problemsOf(panel('minds_eye', {}))[0], /name a domain or a topic, not both/);
+    assert.match(problemsOf(panel('minds_eye', { domain: 'stuff' }))[0], /no domain "stuff"/);
+    assert.match(problemsOf(panel('minds_eye', { topic: ' ' }))[0], /topic is text/);
   });
 
   it('page-level problems, and every problem rather than the first', () => {

@@ -156,7 +156,11 @@ This is an Execution change in `run-workflow.mjs` and a column on `PGC_WorkflowR
 A Novia panel (§4.2) lists the sessions on one topic, so a session carries one:
 `PGC_Session.topic`, text, nullable.
 
-- **Set only from the panel.** *New* in a Novia panel starts a session with the panel's `topic`, and
+- **Named by the panel.** A Novia panel's config names its topic as a `domain` of the registry or as
+  free text (`topic`), one of the two. A domain is preferred: it stays the same when the panel or
+  page is renamed, and two panels naming it share its sessions. The session's `topic` holds the
+  domain's name or the text.
+- **Set only from the panel.** *New* in a Novia panel starts a session on the panel's topic, and
   the user keeps that conversation on the topic. Nothing else writes the column.
 - **A session begun elsewhere** — her region, Slack — has no topic. It is listed in her region by
   its first message, and in no Novia panel.
@@ -320,7 +324,7 @@ which one.
 | **Workflow** | One workflow, or every workflow of a domain | A *Start* button per workflow (its `display.label`); its runs by **run label** (§2.4), newest first; the active run stepped through in place (§4.3). With `show_output`, the latest output as a `report` widget above the runs | `workflow` or `domain`, `limit`, `show_output` | 0 |
 | **Records** | A table, view or entity of a domain | Its rows in one view at a time, with the **view switch** in the panel's header | `source` (a table or view) or `entity`, `view` (the one it opens on), the views' options | 0, read-only |
 | **Summary** | A table or view, or a workflow's latest output | Exactly one widget | `source` (or `workflow` for a report), `widget`, the widget's options | 0 |
-| **Novia** | A topic | Her sessions on that topic (§2.5), most recently active first; opening one continues it in the panel; *New* starts a session on the topic | `topic` | 1 |
+| **Novia** | A topic — a domain, or free text | Her sessions on that topic (§2.5), most recently active first; opening one continues it in the panel; *New* starts a session on the topic | `domain` or `topic` | 1 |
 
 **The view switch.** The views are renderings of the same rows, so choosing one is the viewer's
 choice, not the page's: the switch never writes a new page version, and the panel's config is the

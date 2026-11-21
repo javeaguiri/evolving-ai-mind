@@ -609,7 +609,7 @@ CREATE TABLE "PGC_Session" (
 | replayed_from_session_id | integer NULL | Provenance — the `PGC_Session.id` whose recording was served on a replayed call |
 | created_at | timestamp | |
 | callback | jsonb NULL | Where the session's messages go — the shape of `PGC_WorkflowRun.callback`: Slack `{ provider, channel, threadId }`, web `{ provider: 'web', channel: <principal> }` (the session is its own thread). A message's own callback wins; this is the fallback, field by field. Ownership: a web session belongs to its `channel`, a Slack one to the household (`principal.mjs`). Replaced `slack_thread_ts` (Sprint 18) |
-| topic | text NULL | `minds_eye` only — the subject a `minds_eye` panel lists sessions by; set only from the panel that starts the session (`arch-web-app.md` §2.5) |
+| topic | text NULL | `minds_eye` only — the subject a `minds_eye` panel lists sessions by — a domain's name, or free text; set only from the panel that starts the session (`arch-web-app.md` §2.5) |
 | label | text NULL | `minds_eye` only — the session's name, set or cleared from the web; null means it is named by its first message |
 | last_active_at | timestamptz NOT NULL DEFAULT now() | The latest entry's `created_at`, set by `trg_pgc_sessionentry_last_active` on every `PGC_SessionEntry` insert (`touch_session_last_active()`, `src/serv/trigger-functions.mjs`); never written by code. `minds_eye` sessions are listed by it, newest first (Sprint 18) |
 
@@ -769,7 +769,7 @@ are proposed and settled at the Phase 1 build.
 
 | Table | Change | Phase | Design |
 |---|---|---|---|
-| `PGC_Session` | `topic` text, nullable — the subject a `minds_eye` panel lists sessions by; set only from the panel that starts the session. `label` text, nullable — the session's name, edited from the web. `callback` jsonb replaces `slack_thread_ts` | 1 (Sprint 18) | `arch-web-app.md` §2.5 |
+| `PGC_Session` | `topic` text, nullable — the subject a `minds_eye` panel lists sessions by — a domain's name, or free text; set only from the panel that starts the session. `label` text, nullable — the session's name, edited from the web. `callback` jsonb replaces `slack_thread_ts` | 1 (Sprint 18) | `arch-web-app.md` §2.5 |
 | `PGC_WorkflowRun` | `label` text, nullable — the run's name in lists, resolved from its workflow's `display.run_label` once every token resolves, then not again | 0 | `arch-web-app.md` §2.4 |
 | `PGC_WorkflowRun` | No column. A `human_gate` frame in `stack` gains `gate_id` (UUID), set when the frame is pushed; `resumeGate` refuses an answer whose `gate_id` differs from the top frame's. An answer carrying none (a Slack button posted before the change) is accepted as today | 0 | `arch-web-app.md` §2.2 |
 | `PGC_Schema`, `PGC_EntitySchema` | `display` jsonb, nullable — how a table or entity is shown: `view`, `label`, `columns` (order, label, hidden, width), `format`, `total`, `soft_delete`, `order_by`, `default_filter`. Every key optional; absent means the default | 1 | `arch-web-app.md` §6.3 |
