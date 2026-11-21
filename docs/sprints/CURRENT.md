@@ -118,7 +118,7 @@ on Money). AC2 under way (Javear, session 1381): gates answered on the web, then
 looked hung after an approved `register_workflow` — the action ran, then SERV refused a call and
 the round threw. Cause: Lambda throttling at the account's concurrency of 10 (SERV throttled 17×,
 PROC 4×, concurrency flat at 10, 09:08–09:19); the web app's polling holds three functions per
-read. Javear requests 1000 in Service Quotas (console). Fixed in Execution (`e9dd8e5`,
+read. Javear requested 1000 in Service Quotas (2026-11-21), approval pending. Fixed in Execution (`e9dd8e5`,
 deployed): a round that throws now tells the person it stopped, with the follow-up, instead of
 vanishing. From the computer after 1381: her region widened to
 its longest session name (a flex item's automatic minimum) and the collapsed strip showed » alone
