@@ -45,7 +45,7 @@ answers given.
 | **5** | ✅ **Novia panels** (§4.2): the `minds_eye` panel kind — a topic's sessions, *New* starts one on the topic; at least one on a household page (`household/pages.json`). Kind `novia` renamed `minds_eye` (`7abb15c`, decision R). A panel's topic is a `domain` of the registry or free text, one of the two — a domain preferred, as it outlives a renamed panel (decision V; `b1e3b3e`). The panel is her region drawn with the topic (`MindsEyePanel.jsx`, `50821f2`); the session open is the panel's own. **Deployed 2026-11-21** (`deploy-web.mjs`; Money v4 with `ask-money` on `budgets_expenses`). Live ✅ (AC3, session 1391). **✅ DONE** |
 | **6** | ⬜ **`GATE_RESOLVED`** (§8): a Slack-started gate answered on the web updates the Slack message, so its buttons disappear rather than refuse |
 | **7** | ⬜ **A run's thread keeps its answers** (backlog, decision L): `resumeGate` writes a `GATE_ANSWERED` inbox row — the action's label, a form's change count — and both surfaces draw it |
-| **8** | 🟡 **Renaming a session** (S): `label` on the session reads; a write route to set or clear it (spec first; principal-checked, `minds_eye` only); rename in her region and in a `minds_eye` panel. Route built with item 2. **UI built and deployed 2026-11-21:** ✎ beside the open conversation's name — a box holding its label, Enter or leaving it saves, Escape keeps the name, empty clears (`ConvoTitle` in `Region.jsx`, so the panel has it too); the web client's `patch`. Live check pending (AC6) |
+| **8** | ✅ **Renaming a session** (S): `label` on the session reads; a write route to set or clear it (spec first; principal-checked, `minds_eye` only); rename in her region and in a `minds_eye` panel. Route built with item 2. **UI built and deployed 2026-11-21:** ✎ beside the open conversation's name — a box holding its label, Enter or leaving it saves, Escape keeps the name, empty clears (`ConvoTitle` in `Region.jsx`, so the panel has it too); the web client's `patch`. Live ✅ (AC6). **✅ DONE** |
 
 ## Acceptance Criteria
 
@@ -56,7 +56,7 @@ answers given.
 | **AC3** | ✅ | A Novia panel on a household page lists its topic's sessions; *New* starts one on that topic — **met 2026-11-21, session 1391** (started from Money's `ask-money` panel, stored with topic `budgets_expenses`, listed in the panel after a reload) | 1, 2, 5 | Shown live |
 | **AC4** | ⬜ | A Slack-started gate answered on the web loses its buttons in Slack, and the answer shows in the run's thread after a reload | 6, 7 | Shown live |
 | **AC5** | 🟡 | Each new endpoint is in `openapi.yaml` before it is built, as its own commit; every minds-eye session read checks the principal and returns `minds_eye` sessions only — a `general_chat` or `llm_call_diagnostic` id is a 404 | all | Review as each lands, and tests |
-| **AC6** | 🟡 | Javear renames a session on the web; the new name shows in her region and its panel, and survives a reload | 1, 2, 8 | Shown live |
+| **AC6** | ✅ | Javear renames a session on the web; the new name shows in her region and its panel, and survives a reload — **met 2026-11-21**: 1381 renamed in her region, 1391 in Money's panel, both kept after a reload | 1, 2, 8 | Shown live |
 
 ## Retro lessons to apply (sprint-17)
 
