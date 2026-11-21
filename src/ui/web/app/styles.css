@@ -469,8 +469,11 @@ td.bad .cell { border-color: var(--bad); }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 
 /* ---------- her region (§4.1, §4.5) ---------- */
-.region { flex: 0 0 320px; min-block-size: 0; display: flex; flex-direction: column; background: var(--paper); border-inline-end: 1px solid var(--line); }
+.region { flex: 0 0 320px; min-inline-size: 0; min-block-size: 0; display: flex; flex-direction: column; background: var(--paper); border-inline-end: 1px solid var(--line); }
 .region.collapsed { flex-basis: 48px; align-items: center; padding-block: 10px; }
+.region.collapsed .strip { display: flex; flex-direction: column; align-items: center; gap: 10px; border: 0; background: transparent; color: var(--muted); padding-block: 4px; padding-inline: 8px; border-radius: 8px; cursor: pointer; }
+.region.collapsed .strip:hover { background: var(--ground); color: var(--ink); }
+.region.collapsed .strip .name { writing-mode: vertical-rl; font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
 .region-head { display: flex; align-items: center; gap: 8px; padding-block: 10px; padding-inline: 14px; border-block-end: 1px solid var(--line); }
 .region-head h2 { flex: 1 1 auto; font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .region-body { flex: 1 1 auto; min-block-size: 0; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }

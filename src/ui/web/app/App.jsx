@@ -172,7 +172,9 @@ export function Shell({ route, me, pages, domains, problem, api, onSignInRequire
       <div className="body">
       {!phone && (collapsed ? (
         <aside className="region collapsed">
-          <button type="button" className="ib" onClick={() => collapse(false)} aria-label={t('mindsEye.expand')} title={t('mindsEye.expand')}>»</button>
+          <button type="button" className="strip" onClick={() => collapse(false)} aria-label={t('mindsEye.expand')} title={t('mindsEye.expand')}>
+            <span aria-hidden="true">»</span><span className="name" aria-hidden="true">{t('mindsEye.name')}</span>
+          </button>
         </aside>
       ) : (
         <aside className="region" aria-label={t('mindsEye.name')}>

@@ -1147,6 +1147,17 @@ describe('components and catalog', () => {
       assert.match(html, /<div class="body"><aside class="region" aria-label="Novia"><div class="region-head"><h2>Novia<\/h2><button type="button" class="ib" aria-label="Collapse Novia"/);
       assert.match(html, /<nav class="tabbar"[^>]*>.*<button type="button">Novia<\/button><\/nav>/s);
     });
+
+    it('collapsed, her region is a strip that names her, the whole strip opening it', () => {
+      const held = globalThis.localStorage;
+      globalThis.localStorage = { getItem: k => (k === COLLAPSED_KEY ? 'true' : null), setItem() {} };
+      try {
+        const html = strip(draw('/p/money'));
+        assert.match(html, /<aside class="region collapsed"><button type="button" class="strip" aria-label="Open Novia" title="Open Novia"><span aria-hidden="true">»<\/span><span class="name" aria-hidden="true">Novia<\/span><\/button><\/aside>/);
+      } finally {
+        globalThis.localStorage = held;
+      }
+    });
   });
 
   it('every catalog key is used by the app, and every key the app uses is in the catalog', () => {
