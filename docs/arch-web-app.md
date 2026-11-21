@@ -301,7 +301,7 @@ Page, domain and panel names above are illustrative; all of them are data.
 | **🔔 Needs you** | The count of questions waiting on a person, across every run and provider, shown only when there are some. Opens the list; each item opens the question **inside its run** (§4.3) |
 | **🧠 Help** | What the brain can do and how pages are built (§4.6) |
 | **⚙ Settings** | The user's own settings (§4.7) |
-| **Page body** | The page's title at its head — where the user is, with no side menu to say so — and *Edit page* (Phase 1); then its panels in a responsive grid; each panel declares a width (`1/3`, `1/2`, `2/3`, `full`); a phone stacks them in order, full width |
+| **Page body** | The page's title at its head — where the user is, with no side menu to say so — and *Edit page* (Phase 1); then its panels in a responsive grid; each panel declares a width (`1/3`, `1/2`, `2/3`, `full`). The grid follows the page's own width, not the window's, so widening Novia narrows it: a narrow page draws thirds as halves and stacks halves; a phone stacks them all in order, full width |
 | **Novia** (left) | Her sessions and the open conversation (§4.5). **«** collapses her to a strip and the page widens into the space; her edge is dragged to widen or narrow her, between 280 px and 60% of the window (double-click for the usual width); she collapses on her own while a run needs the full width, and reopens when it ends. Open or collapsed, and her width, are remembered on the device. The *Novia* tab on a phone. Phase 1 — in Phase 0 the page has the full width |
 
 ### 4.2 Pages, panels and widgets
