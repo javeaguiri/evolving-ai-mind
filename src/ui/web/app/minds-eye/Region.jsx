@@ -22,7 +22,7 @@ import { Input }               from '../gates/Input.jsx';
 import { relativeAge }         from '../shell/nav.mjs';
 import {
   sessionName, addConversation, groupTurns, repliesMissing, conversationDelay, LIST_POLL_MS,
-  answerable, answerField, answersFrom, stillExpecting, personCount, sessionsQuery, startBody,
+  answerable, answerField, answersFrom, stillExpecting, personCount, sessionsQuery, startBody, labelBody,
 } from './conversation.mjs';
 
 /** Her sessions — a topic's, for a panel — read when the region opens, after the person sends, and now and then. */
@@ -371,6 +371,55 @@ export function Composer({ blocked, onSend }) {
   );
 }
 
+/**
+ * The open conversation's name, renamed in place (decision S): ✎ turns it into a box holding its
+ * label; Enter or leaving the box saves, Escape keeps the name. An empty box clears the label, and
+ * the session is named by its first message again.
+ *
+ * @param {object} props
+ * @param {string} props.name                 What the session is called now
+ * @param {string|null} props.label           Its label, if it has one
+ * @param {(text: string) => Promise<void>} props.onRename
+ * @param {boolean} [props.editing]           Open on the box — for the tests
+ */
+export function ConvoTitle({ name, label, onRename, editing: initial = false }) {
+  const { t } = useTranslation();
+  const [editing, setEditing] = useState(initial);
+  const [text, setText]       = useState(label ?? '');
+  const [failed, setFailed]   = useState(false);
+  const saving = useRef(false);
+  const open = () => { setText(label ?? ''); setFailed(false); setEditing(true); };
+  const save = async () => {
+    if (saving.current) return;
+    if ((text.trim() || null) === (label ?? null)) { setEditing(false); return; }
+    saving.current = true;
+    try {
+      await onRename(text);
+      setEditing(false);
+    } catch {
+      setFailed(true);
+    } finally {
+      saving.current = false;
+    }
+  };
+  if (!editing) {
+    return (
+      <div className="convo-head">
+        <h3 className="convo-title">{name}</h3>
+        <button type="button" className="ib" onClick={open} aria-label={t('mindsEye.rename')} title={t('mindsEye.rename')}>✎</button>
+      </div>
+    );
+  }
+  return (
+    <form className="convo-head" onSubmit={e => { e.preventDefault(); save(); }}>
+      <input className="convo-rename" value={text} placeholder={name || t('mindsEye.renamePlaceholder')} aria-label={t('mindsEye.renamePlaceholder')}
+        autoFocus onChange={e => setText(e.target.value)} onBlur={save}
+        onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); setEditing(false); } }} />
+      {failed && <p className="hint" role="status">{t('mindsEye.renameFailed')}</p>}
+    </form>
+  );
+}
+
 /** Why a message cannot be sent to this session now, or null. */
 function blockedReason(session, t) {
   if (!session) return null;
@@ -394,6 +443,7 @@ export function MindsEyeRegion({ context, sessionId, onOpen, active = true, topi
   const convo = useConversation(api, sessionId, onSignInRequired);
   const [composing, setComposing] = useState(false);
   const [sent, setSent]           = useState(null);   // { sessionId, text, persons } until the stored copy arrives
+  const [renamed, setRenamed]     = useState(null);   // the session as last renamed, until the conversation reads it again
   const now     = Date.now();
   const persons = personCount(convo.messages);
   const pending = sent && sent.sessionId === sessionId && persons <= sent.persons ? sent.text : null;
@@ -418,6 +468,14 @@ export function MindsEyeRegion({ context, sessionId, onOpen, active = true, topi
     convo.refresh();
     list.refresh();
   };
+  useEffect(() => {
+    if (renamed && convo.session?.label === renamed.label) setRenamed(null);
+  }, [renamed, convo.session]);
+  const rename = async text => {
+    const renamedTo = await api.patch(`minds-eye/sessions/${sessionId}`, labelBody(text));
+    setRenamed(renamedTo);
+    list.refresh();
+  };
   const gate = async (atSeq, action) => {
     await api.post(`minds-eye/sessions/${sessionId}/responses`, { atSeq, action });
     convo.refresh();
@@ -433,11 +491,12 @@ export function MindsEyeRegion({ context, sessionId, onOpen, active = true, topi
     );
   }
   if (sessionId) {
-    const name = convo.session ? sessionName(convo.session) ?? t('mindsEye.unnamed') : null;
+    const shown = renamed?.sessionId === sessionId && convo.session ? { ...convo.session, label: renamed.label } : convo.session;
+    const name  = shown ? sessionName(shown) ?? t('mindsEye.unnamed') : null;
     return (
       <div className="region-body">
         <button type="button" className="fold" onClick={() => onOpen(null)}>{t('mindsEye.back')}</button>
-        {name && <h3 className="convo-title">{name}</h3>}
+        {name && <ConvoTitle key={`${sessionId}:${shown.label ?? ''}`} name={name} label={shown.label ?? null} onRename={rename} />}
         <ConversationView session={convo.session} messages={convo.messages} repliesKeptFrom={convo.repliesKeptFrom} problem={convo.problem}
           onGate={gate} onAnswers={answers} pending={pending} />
         {convo.problem !== 'gone' && <Composer blocked={pending ? t('mindsEye.session_busy') : blockedReason(convo.session, t)} onSend={send} />}

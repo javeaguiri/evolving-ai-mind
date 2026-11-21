@@ -25,7 +25,7 @@ import { inputsOf, initialValues, isChanged, fieldProblems, formValues, answerFo
 import { liveScript, isNewBuild } from '../../src/ui/web/app/shell/version.mjs';
 import { runName, panelWorkflows, foldPoint, addMessages, threadDelay, isActive, isWorking, THREAD_POLL_MS, THREAD_POLL_MAX_MS } from '../../src/ui/web/app/runs/runs.mjs';
 import { pageItems, domainItems, sectionOf, currentItem, gateHeadline, relativeAge, pollDelay, POLL_MS, POLL_MAX_MS } from '../../src/ui/web/app/shell/nav.mjs';
-import { sessionName, addConversation, groupTurns, repliesMissing, conversationDelay, readCollapsed, writeCollapsed, withSession, answerable, answerField, answersFrom, RADIO_LIMIT, stillExpecting, personCount, panelTopic, sessionsQuery, startBody, EXPECT_MS, COLLAPSED_KEY, WORKING_POLL_MS, WAITING_POLL_MS, POLL_MAX_MS as CONVO_MAX_MS, ROUND_CEILING_MS } from '../../src/ui/web/app/minds-eye/conversation.mjs';
+import { sessionName, addConversation, groupTurns, repliesMissing, conversationDelay, readCollapsed, writeCollapsed, withSession, answerable, answerField, answersFrom, RADIO_LIMIT, stillExpecting, personCount, panelTopic, sessionsQuery, startBody, labelBody, EXPECT_MS, COLLAPSED_KEY, WORKING_POLL_MS, WAITING_POLL_MS, POLL_MAX_MS as CONVO_MAX_MS, ROUND_CEILING_MS } from '../../src/ui/web/app/minds-eye/conversation.mjs';
 
 const APP_DIR = new URL('../../src/ui/web/app/', import.meta.url).pathname;
 const CONFIG  = { userPoolId: 'us-east-2_pool', clientId: 'client123', authDomain: 'https://auth.example', siteUrl: 'https://site.example', region: 'us-east-2' };
@@ -195,6 +195,10 @@ describe('createApiClient — the bearer, one retry on 401, WebError codes', () 
     await api.post('runs', { workflow: 'w' });
     assert.equal(calls[1].init.method, 'POST');
     assert.equal(calls[1].init.body, '{"workflow":"w"}');
+    await api.patch('minds-eye/sessions/7', { label: 'Garden' });
+    assert.equal(calls[2].init.method, 'PATCH');
+    assert.equal(calls[2].url, '/api/v1/ui/web/minds-eye/sessions/7');
+    assert.equal(calls[2].init.body, '{"label":"Garden"}');
   });
 
   it('a 401 refreshes once and retries with the new token', async () => {
@@ -559,7 +563,7 @@ describe('components and catalog', () => {
                    export { Markdown } from './Markdown.jsx';
                    export { WorkflowList } from './panels/WorkflowPanel.jsx';
                    export { ThreadView } from './runs/RunThread.jsx';
-                   export { SessionList, ConversationView, Composer } from './minds-eye/Region.jsx';
+                   export { SessionList, ConversationView, Composer, ConvoTitle } from './minds-eye/Region.jsx';
                    export { MindsEyePanel } from './panels/MindsEyePanel.jsx';
                    export { Gate, AnsweredRecord } from './gates/Gate.jsx';
                    export { ReportBody } from './panels/ReportPanel.jsx';
@@ -1039,6 +1043,15 @@ describe('components and catalog', () => {
       assert.match(panel({ domain: 'pantry' }), /class="panel w-half"[\s\S]*\+ New[\s\S]*Loading…/);
     });
 
+    it('the open conversation is named with ✎ beside it; renaming, a box holds its label, the name its placeholder', () => {
+      const title = props => strip(ui.renderToString(ui.createElement(ui.ConvoTitle, { onRename: async () => {}, ...props })));
+      assert.match(title({ name: 'Plan the garden beds', label: null }),
+        /<div class="convo-head"><h3 class="convo-title">Plan the garden beds<\/h3><button type="button" class="ib" aria-label="Rename" title="Rename">✎<\/button><\/div>/);
+      const box = title({ name: 'Garden', label: 'Garden', editing: true });
+      assert.match(box, /<form class="convo-head"><input class="convo-rename" placeholder="Garden" aria-label="Name this conversation"[^>]* value="Garden"\/>/);
+      assert.match(title({ name: 'Plan the garden beds', label: null, editing: true }), /placeholder="Plan the garden beds"[^>]* value=""\/>/);
+    });
+
     it('an empty list says how to start, and a list not yet read says Loading…', () => {
       assert.match(ui.renderToString(ui.createElement(ui.SessionList, { sessions: [], currentId: null, problem: false, now: NOW, locale: 'en', onOpen() {} })), /No conversations yet/);
       assert.match(ui.renderToString(ui.createElement(ui.SessionList, { sessions: null, currentId: null, problem: false, now: NOW, locale: 'en', onOpen() {} })), /Loading…/);
@@ -1266,6 +1279,12 @@ describe('her region — the decisions, pure', () => {
     assert.equal(sessionsQuery(null), undefined);
     assert.deepEqual(startBody('hello', 'pantry'), { text: 'hello', topic: 'pantry' });
     assert.deepEqual(startBody('hello', null), { text: 'hello' });
+  });
+
+  it('labelBody (decision S): the name typed, trimmed; an empty name clears the label', () => {
+    assert.deepEqual(labelBody('  Garden beds '), { label: 'Garden beds' });
+    assert.deepEqual(labelBody('   '), { label: null });
+    assert.deepEqual(labelBody(''), { label: null });
   });
 
   it('withSession: sets or clears ?minds-eye=, keeping the rest of the location', () => {

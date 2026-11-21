@@ -431,7 +431,7 @@ Novia has the left-hand region (§4.1), and only she answers there.
 
 | Behaviour | Design |
 |---|---|
-| **Region** | Her sessions at its head, most recently active first, each named by its `label` or, without one, by its first message; opening one shows the conversation. Deep-linkable as `?minds-eye=<sessionId>` on any route |
+| **Region** | Her sessions at its head, most recently active first, each named by its `label` or, without one, by its first message; opening one shows the conversation, its name renamed in place with ✎ — an empty name clears the `label`. Deep-linkable as `?minds-eye=<sessionId>` on any route |
 | **Novia panels** | A panel on a page holds one topic's sessions (§4.2), for a subject the household returns to; *New* there starts a session on that topic, the only way a session gets one |
 | **Messages** | `MINDS_EYE` / `MINDS_EYE_RESUME`, as `/novia` in Slack; her gated actions render with the gate components of §5 |
 | **Ask Novia about this** | From any panel, record, run or question: opens her region with the item's identifiers (panel config, run id, record) in the opening message |

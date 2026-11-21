@@ -43,6 +43,11 @@ export function startBody(text, topic) {
   return topic ? { text, topic } : { text };
 }
 
+/** What a rename sends (decision S): the name typed, or null — an empty name clears it. */
+export function labelBody(text) {
+  return { label: text?.trim() || null };
+}
+
 const keyOf = m => (m.kind === 'person' ? `p${m.seq}` : `i${m.id}`);
 
 /**
