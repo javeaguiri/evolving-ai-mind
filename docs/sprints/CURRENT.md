@@ -113,3 +113,11 @@ iPhone width; then item 5 (`minds_eye` panels — the panel kind `novia` renamed
 `page-config.mjs` and the `Page` schema), item 8's rename in the UI (the route is built), then 6
 and 7.
 
+**2026-11-21 (session 3).** Item 5 built and deployed (kind `minds_eye`, decision V, the panel
+on Money). AC2 under way (Javear, session 1381): gates answered on the web, then the session
+looked hung after an approved `register_workflow` — the action ran, then SERV refused a call and
+the round threw. Cause: Lambda throttling at the account's concurrency of 10 (SERV throttled 17×,
+PROC 4×, concurrency flat at 10, 09:08–09:19); the web app's polling holds three functions per
+read. Javear requests 1000 in Service Quotas (console). Fixed in Execution (`e9dd8e5`,
+deployed): a round that throws now tells the person it stopped, with the follow-up, instead of
+vanishing.
