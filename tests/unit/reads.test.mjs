@@ -11,7 +11,7 @@ import assert                      from 'node:assert/strict';
 
 import { toWaitingGate, waitingGatesFor, handle as gates }      from '../../src/proc/gates.mjs';
 import { handle as outputs }                                    from '../../src/proc/outputs.mjs';
-import { parseSourceQuery, chooseColumns, handle as sources }   from '../../src/proc/sources.mjs';
+import { parseSourceQuery, chooseColumns, pageOrder, handle as sources } from '../../src/proc/sources.mjs';
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; delete process.env.HOUSEHOLD_PRINCIPALS; });
@@ -152,8 +152,28 @@ describe('GET /proc/sources/{source}/rows — read-only, registered columns only
 
   it('parses the query, and refuses a malformed one', () => {
     assert.deepEqual(parseSourceQuery({ columns: 'id, name', filter: '[{"column":"id","op":"gt","value":3}]', order_by: 'name ASC', limit: '20' }),
-      { columns: ['id', 'name'], filter: [{ column: 'id', op: 'gt', value: 3 }], orderBy: 'name ASC', limit: 20 });
-    for (const q of [{ limit: '501' }, { filter: 'nope' }, { filter: '[{"op":"eq"}]' }]) assert.ok(parseSourceQuery(q).error, JSON.stringify(q));
+      { columns: ['id', 'name'], filter: [{ column: 'id', op: 'gt', value: 3 }], orderBy: 'name ASC', limit: 20, offset: 0 });
+    assert.equal(parseSourceQuery({ offset: '100' }).offset, 100);
+    for (const q of [{ limit: '501' }, { filter: 'nope' }, { filter: '[{"op":"eq"}]' }, { offset: '-1' }, { offset: 'x' }]) assert.ok(parseSourceQuery(q).error, JSON.stringify(q));
+  });
+
+  it('a page\'s order ends on id where the source has one, so pages neither repeat nor skip a row (item 9)', () => {
+    assert.equal(pageOrder('date DESC', registered), 'date DESC, id ASC');
+    assert.equal(pageOrder(null, registered), 'id ASC');
+    assert.equal(pageOrder('name ASC, id DESC', registered), 'name ASC, id DESC');
+    assert.equal(pageOrder('"id"', registered), '"id"');
+    assert.equal(pageOrder('identifier ASC', registered), 'identifier ASC, id ASC');
+    assert.equal(pageOrder('year DESC', [{ name: 'year', type: 'integer' }]), 'year DESC', 'a view without id keeps its own order');
+    assert.equal(pageOrder(null, [{ name: 'year', type: 'integer' }]), undefined);
+  });
+
+  it('?offset reads the next page, in the page order', async () => {
+    process.env.HOUSEHOLD_PRINCIPALS = 'sub-a';
+    const calls = stubServ((b, n) => n === 1 ? { rows: [{ table_name: 'PGD_Items', type: 'table', columns: registered }] }
+      : { rows: [{ id: 101, name: 'z' }], offset: 100 });
+    const r = await sources(req('sources/PGD_Items/rows', 'GET', member, { query: { order_by: 'name ASC', offset: '100' } }));
+    assert.deepEqual([body(r).rows, body(r).more], [[{ id: 101, name: 'z' }], false]);
+    assert.deepEqual([calls[1].offset, calls[1].orderBy, calls[1].limit], [100, 'name ASC, id ASC', 100]);
   });
 
   it('defaults to every non-vector column; any column named must be registered', () => {

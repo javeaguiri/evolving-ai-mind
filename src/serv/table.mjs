@@ -9,7 +9,7 @@
 // relevant permission flag must be true before any SQL is executed.
 //
 // Routes:
-//   POST /serv/table/getRows    — parameterised SELECT with filters, orderBy, limit
+//   POST /serv/table/getRows    — parameterised SELECT with filters, orderBy, limit, offset
 //   POST /serv/table/insertRow  — single INSERT, gated by allow_insert
 //   POST /serv/table/updateRows — parameterised UPDATE, gated by allow_update
 //   POST /serv/table/deleteRows — parameterised DELETE, gated by allow_delete
@@ -29,7 +29,7 @@ import { ok, err }    from '../shared/lambda-utils.mjs';
 import { getClient }  from './init-brain.mjs';
 import { embedText }  from '../shared/embed-client.mjs';
 import { validateReadOnlySql } from './schema.mjs';
-import { normalizeOrderBy, buildOrderClause, resolveReadLimit } from './query-utils.mjs';
+import { normalizeOrderBy, buildOrderClause, resolveReadLimit, resolveReadOffset } from './query-utils.mjs';
 
 // ---------------------------------------------------------------------------
 // Allowed filter operators — security gate.
@@ -110,9 +110,14 @@ async function getRows(req) {
   // Only the second is a silent bound, and only PROC can tell the two apart — so the
   // distinction travels with the response rather than being re-derived downstream.
   const { limit: effectiveLimit, chosenBy: limitApplied } = resolveReadLimit(req.body);
+  // A later page of the same read: the rows before it are skipped.
+  const offset = resolveReadOffset(req.body.offset);
 
   if (!tableName) {
     return err(400, 'tableName is required', req.correlationId);
+  }
+  if (offset === null) {
+    return err(400, 'offset must be a whole number of rows, 0 or more', req.correlationId);
   }
 
   const pgcClient = getClient(process.env.PGC_DATABASE_URL);
@@ -214,7 +219,7 @@ async function getRows(req) {
         FROM "${tableName}"
         ${combinedWhere}
         ORDER BY ${vsCol} <=> $${vecIdx}::vector
-        LIMIT ${effectiveLimit}
+        LIMIT ${effectiveLimit} OFFSET ${offset}
       `;
 
       matchWhere  = combinedWhere;
@@ -231,7 +236,7 @@ async function getRows(req) {
         SELECT ${selectList} FROM "${tableName}"
         ${whereClause}
         ${orderClause}
-        LIMIT ${effectiveLimit}
+        LIMIT ${effectiveLimit} OFFSET ${offset}
       `;
 
       matchWhere  = whereClause;
@@ -246,7 +251,7 @@ async function getRows(req) {
     // many — is what separates a bounded view from a silently truncated one: nothing
     // downstream can otherwise tell a complete answer from a cut one. The COUNT runs only
     // on that boundary, never on an ordinary read, and it must run while the connection
-    // is still open.
+    // is still open. A later page is cut when rows remain past it: past the offset and its own.
     let totalMatching;
     if (result.rows.length === effectiveLimit) {
       const countResult = await dbClient.query(
@@ -254,7 +259,7 @@ async function getRows(req) {
       );
       totalMatching = countResult.rows[0].total;
     }
-    const truncated = totalMatching > result.rows.length;
+    const truncated = totalMatching > offset + result.rows.length;
 
 
     const rows = truncateVectorColumns(result.rows, schemaColumns);
@@ -265,6 +270,7 @@ async function getRows(req) {
       count:         rows.length,
       limit:         effectiveLimit,
       limit_applied: limitApplied,
+      ...(offset ? { offset } : {}),
       ...(truncated ? { truncated: true } : {}),
       ...(totalMatching !== undefined ? { total_matching: totalMatching } : {}),
       rows,

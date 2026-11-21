@@ -8,7 +8,8 @@
 // entity name, whose root table is read; a PGC_ system table is never a source. Columns default to
 // every non-vector column, and any column named — to select or to filter — must be registered.
 // Each column carries the label a person reads: until the registry holds column labels (§6.3,
-// Phase 1), the humanised name, marked labelFallback (§13). The page is bounded and says so.
+// Phase 1), the humanised name, marked labelFallback (§13). The page is bounded and says so;
+// ?offset reads the next.
 // Domain data belongs to the household.
 // Transport-agnostic — no AWS SDK, no Slack SDK.
 
@@ -21,13 +22,15 @@ export const SOURCE_DEFAULT_LIMIT = 100;
 export const SOURCE_MAX_LIMIT     = 500;
 
 /**
- * Read ?columns, ?filter, ?order_by and ?limit.
+ * Read ?columns, ?filter, ?order_by, ?limit and ?offset.
  *
- * @returns {{ columns: string[]|null, filter: object[], orderBy: string|null, limit: number } | { error: string }}
+ * @returns {{ columns: string[]|null, filter: object[], orderBy: string|null, limit: number, offset: number } | { error: string }}
  */
 export function parseSourceQuery(query = {}) {
   const limit = query.limit === undefined ? SOURCE_DEFAULT_LIMIT : (/^\d+$/.test(query.limit) ? Number(query.limit) : NaN);
   if (Number.isNaN(limit) || limit < 1 || limit > SOURCE_MAX_LIMIT) return { error: `limit must be between 1 and ${SOURCE_MAX_LIMIT}` };
+  const offset = query.offset === undefined ? 0 : (/^\d+$/.test(query.offset) ? Number(query.offset) : NaN);
+  if (Number.isNaN(offset)) return { error: 'offset must be a whole number of rows, 0 or more' };
 
   let filter = [];
   if (query.filter !== undefined) {
@@ -37,7 +40,7 @@ export function parseSourceQuery(query = {}) {
     }
   }
   const columns = query.columns === undefined ? null : query.columns.split(',').map(c => c.trim()).filter(Boolean);
-  return { columns, filter, orderBy: query.order_by || null, limit };
+  return { columns, filter, orderBy: query.order_by || null, limit, offset };
 }
 
 /**
@@ -55,6 +58,20 @@ export function chooseColumns(registered, { columns, filter }) {
     ? columns.map(n => byName.get(n))
     : registered.filter(c => !String(c.type ?? '').toLowerCase().startsWith('vector'));
   return { columns: chosen.map(c => ({ name: c.name, type: c.type, label: humanise(c.name), labelFallback: true })) };
+}
+
+/**
+ * The order a page is read in, ending on `id` where the source has one: rows that tie on the
+ * order asked for would otherwise fall on either side of a page's edge, repeated or skipped.
+ *
+ * @param {string|null} orderBy   SQL ORDER BY terms, as ?order_by
+ * @param {object[]}    registered PGC_Schema.columns
+ * @returns {string|undefined}
+ */
+export function pageOrder(orderBy, registered) {
+  if (!registered.some(c => c.name === 'id')) return orderBy ?? undefined;
+  if (orderBy && orderBy.split(',').some(term => term.trim().split(/\s+/)[0].replace(/"/g, '') === 'id')) return orderBy;
+  return orderBy ? `${orderBy}, id ASC` : 'id ASC';
 }
 
 /** The PGC_Schema row a source reads, or null. Never a PGC_ table. */
@@ -84,8 +101,8 @@ export async function readSourceRows(source, query) {
   const chosen = chooseColumns(schema.columns ?? [], query);
   if (chosen.error) return { status: 400, body: { error: 'invalid_query', message: chosen.error } };
 
-  const resp = await getRows(schema.table_name, query.filter, query.orderBy ?? undefined, query.limit, undefined,
-    chosen.columns.map(c => c.name));
+  const resp = await getRows(schema.table_name, query.filter, pageOrder(query.orderBy, schema.columns ?? []), query.limit, undefined,
+    chosen.columns.map(c => c.name), query.offset);
   return {
     status: 200,
     body: {
