@@ -126,3 +126,9 @@ deployed): a round that throws now tells the person it stopped, with the follow-
 vanishing. From the computer after 1381: her region widened to
 its longest session name (a flex item's automatic minimum) and the collapsed strip showed » alone
 — fixed and deployed (`026930e`): the region holds 320px, the strip names her.
+Later the same session: AC2 and AC3 met; item 8 (rename) built, AC6 met; her edge made draggable
+(Javear). Its byproduct — Money's halves side by side in a narrowed page — fixed with a container
+query. Item 9 added and done (records panels read on as scrolled, AC7 met). Decision W merged items
+6 and 7 into `GATE_ANSWERED`; built and deployed, the inbox check migrated. **Blocked:** AC4 waits
+on Javear adding the bot's `channels:history`, `groups:history`, `im:history` scopes (Slack app
+console, then reinstall). Then AC5's review and the sprint close. Concurrency quota: still pending.
