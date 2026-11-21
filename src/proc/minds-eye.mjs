@@ -269,6 +269,30 @@ export function keptCallback(stored, incoming) {
 }
 
 export async function handle(req) {
+  const round = { sessionId: req.body?.sessionId ?? null };
+  try {
+    return await handleRound(req, round);
+  } catch (error) {
+    await reportStoppedRound(req, round, error);
+    throw error;
+  }
+}
+
+/**
+ * A round that throws ends without a word: its SQS message was deleted on receipt, so nothing
+ * retries it, and the person is left on the last message she sent — in 1381 an approval's
+ * *applying, then planning a test…* after SERV refused a call under Lambda throttling. The
+ * person is told the round stopped, as a failed reasoning turn tells them, and the reply it
+ * invites picks the session back up: every completed step is already written.
+ */
+async function reportStoppedRound(req, round, error) {
+  const callback = req.callback ?? req.body?.callback ?? null;
+  const traceId  = req.traceId  ?? req.correlationId;
+  console.error('proc/minds-eye: round stopped', { traceId, sessionId: round.sessionId, error: error.message });
+  if (callback) await enqueueCallback(callback, buildFailureNotification(round.sessionId, traceId, error));
+}
+
+async function handleRound(req, round) {
   const body     = req.body ?? {};
   const callback = req.callback ?? body.callback ?? null;
   const traceId  = req.traceId  ?? req.correlationId;
@@ -315,6 +339,7 @@ export async function handle(req) {
     });
     if (!sessResp.success) throw new Error(`PGC_Session insert failed: ${sessResp.error}`);
     session = sessResp.row;
+    round.sessionId = session.id;
     console.info('proc/minds-eye: session created', { sessionId: session.id, traceId });
   }
 
@@ -752,7 +777,7 @@ async function handleRunEvent({ session, entries, runEvent, callback, traceId, r
 // refuses before spending an LLM call) and after a round ends without a
 // response (so a session can't slip past it one continue-gate at a time).
 /**
- * The notification for a round that ended on a failed reasoning turn.
+ * The notification for a round that ended on a failed reasoning turn, or that threw.
  *
  * A failure exit skips the loop-exit block, so no continue gate is posted and the thread
  * ends on an error with no way back in — twice the user has had to hunt an older message to
@@ -761,14 +786,14 @@ async function handleRunEvent({ session, entries, runEvent, callback, traceId, r
  * a new mechanism. The session itself was never damaged: every
  * completed turn is already written to PGC_SessionEntry.
  */
-export function buildFailureNotification(sessionId, traceId, llmError) {
+export function buildFailureNotification(sessionId, traceId, error) {
   return {
     type:      'HUMAN_NOTIFICATION',
     format:    'markdown',
     sessionId,
     invitesReply: true,
     traceId,
-    message:   `Agent reasoning failed: ${llmError.message}\n\nEverything up to this point is saved — use **Ask follow-up** to pick the session back up.`,
+    message:   `Agent reasoning stopped: ${error.message}\n\nEverything up to this point is saved — use **Ask follow-up** to pick the session back up.`,
   };
 }
 
