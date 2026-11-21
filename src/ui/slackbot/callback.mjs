@@ -21,7 +21,7 @@
 
 import { randomUUID }        from 'node:crypto';
 import { WebClient }         from '@slack/web-api';
-import { FORM_BLOCK_PREFIX, EMPTY_OPTION_VALUE, listIdBlockId, numberActionId, NOVIA_ANSWER_PREFIX, NOVIA_COMMENT_PREFIX, NOVIA_NOTE_BLOCK } from './form-fields.mjs';
+import { FORM_BLOCK_PREFIX, EMPTY_OPTION_VALUE, listIdBlockId, numberActionId, NOVIA_ANSWER_PREFIX, NOVIA_COMMENT_PREFIX, NOVIA_NOTE_BLOCK, preservedContentBlocks } from './form-fields.mjs';
 import { summariseWorkflowError } from '../shared/workflow-error.mjs';
 import { formatColumnHeader }    from '../shared/column-header.mjs';
 
@@ -157,6 +157,10 @@ async function processRecord(record) {
 
       case 'GATE_MOVED':
         await postGateMoved(message);
+        break;
+
+      case 'GATE_ANSWERED':
+        await postGateAnswered(message);
         break;
 
       default:
@@ -662,6 +666,54 @@ async function postGateMoved(message) {
     ...(callback.threadId ? { thread_ts: callback.threadId } : {}),
   });
   console.info('callback: GATE_MOVED posted', { channel: callback.channel, workflowRunId, traceId });
+}
+
+// ---------------------------------------------------------------------------
+// GATE_ANSWERED — a gate's answer (docs/arch-web-app.md §8). One answered in Slack needs nothing:
+// its click already replaced the buttons. One answered elsewhere finds the gate's message in the
+// run's thread by the gate_id its buttons carry, and replaces the buttons with the answer, keeping
+// the content. Reading the thread needs the bot's history scopes; without them the message is
+// left as it is (a click there is still refused and told, GATE_MOVED).
+// ---------------------------------------------------------------------------
+
+const THREAD_UNREADABLE = new Set(['missing_scope', 'not_in_channel', 'channel_not_found', 'thread_not_found']);
+
+/** The line that takes a gate's buttons' place. */
+export function gateAnsweredText({ label, changes, answeredIn }) {
+  const where = answeredIn === 'web' ? 'answered on the web' : 'answered elsewhere';
+  return `✅ ${label} — ${where}${changes > 0 ? ` · ${changes} ${changes === 1 ? 'change' : 'changes'}` : ''}`;
+}
+
+/** Does this message still offer buttons that answer the gate? */
+export function carriesGate(message, gateId) {
+  return (message.blocks ?? []).some(b => b.type === 'actions'
+    && (b.elements ?? []).some(e => typeof e.value === 'string' && e.value.includes(`"gateId":"${gateId}"`)));
+}
+
+async function postGateAnswered(message) {
+  const { callback, gateId, workflowRunId, answeredIn, traceId } = message;
+  if (answeredIn === 'slack' || !callback?.channel || !callback.threadId) return;
+
+  const found = [];
+  try {
+    for (let cursor; ;) {
+      const page = await slack.conversations.replies({ channel: callback.channel, ts: callback.threadId, limit: 200, ...(cursor ? { cursor } : {}) });
+      found.push(...(page.messages ?? []).filter(m => carriesGate(m, gateId)));
+      cursor = page.response_metadata?.next_cursor;
+      if (!cursor) break;
+    }
+  } catch (error) {
+    if (!THREAD_UNREADABLE.has(error.data?.error)) throw error;
+    console.warn('callback: GATE_ANSWERED — the run\'s thread cannot be read; the gate\'s message is left as it is',
+      { reason: error.data.error, workflowRunId, gateId, traceId });
+    return;
+  }
+
+  const answered = { type: 'context', elements: [{ type: 'mrkdwn', text: gateAnsweredText(message) }] };
+  for (const m of found) {
+    await slack.chat.update({ channel: callback.channel, ts: m.ts, text: m.text ?? '', blocks: [...preservedContentBlocks(m.blocks), answered] });
+  }
+  console.info('callback: GATE_ANSWERED — buttons replaced', { workflowRunId, gateId, messages: found.length, traceId });
 }
 
 async function postWorkflowError(message) {

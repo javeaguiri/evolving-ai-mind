@@ -16,7 +16,7 @@
   "foreign_keys": [],
   "constraints": [
     { "type": "check", "name": "chk_uimessage_provider", "expression": "provider IN ('slack', 'web')" },
-    { "type": "check", "name": "chk_uimessage_type",     "expression": "message_type IN ('HUMAN_GATE', 'HUMAN_NOTIFICATION', 'WORKFLOW_ERROR')" }
+    { "type": "check", "name": "chk_uimessage_type",     "expression": "message_type IN ('HUMAN_GATE', 'HUMAN_NOTIFICATION', 'WORKFLOW_ERROR', 'GATE_ANSWERED')" }
   ],
   "triggers": []
 }

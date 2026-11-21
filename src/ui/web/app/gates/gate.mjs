@@ -11,25 +11,9 @@
 
 import { numberRule, readNumber } from '../../../../shared/number-rule.mjs';
 import { formatColumnHeader }     from '../../../shared/column-header.mjs';
+import { MULTI, inputsOf, initialValues, isChanged } from '../../../../shared/form-changes.mjs';
 
-const MULTI = new Set(['multi_select', 'checkbox']);
-
-/** The gate's input fields — a form's fields, in order. */
-export const inputsOf = dialog => (dialog?.fields ?? []).filter(f => f.type === 'input');
-
-/** What each input opens on: its `initial`, as the dialog carries it. */
-export function initialValues(inputs) {
-  return Object.fromEntries(inputs.map(f => {
-    if (MULTI.has(f.input_type)) return [f.name, Array.isArray(f.initial) ? f.initial.map(String) : f.initial != null && f.initial !== '' ? [String(f.initial)] : []];
-    return [f.name, f.initial === undefined || f.initial === null ? '' : String(f.initial)];
-  }));
-}
-
-/** Has this input moved from where it opened? */
-export function isChanged(field, values, initial) {
-  const a = values[field.name], b = initial[field.name];
-  return Array.isArray(a) ? JSON.stringify([...a].sort()) !== JSON.stringify([...b].sort()) : String(a ?? '').trim() !== String(b ?? '').trim();
-}
+export { inputsOf, initialValues, isChanged };
 
 /**
  * What stops an answer being sent: a required field left empty, a number the shared rule refuses.

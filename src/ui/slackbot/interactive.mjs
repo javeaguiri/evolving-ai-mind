@@ -29,20 +29,11 @@ import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { WebClient }                     from '@slack/web-api';
 import { ok, err }                       from '../../shared/lambda-utils.mjs';
 import { randomUUID }                    from 'crypto';
-import { FORM_BLOCK_PREFIX, LIST_ID_BLOCK_PREFIX, collectFormValues, collectListIdValue, invalidNumberFields, collectNoviaAnswers } from './form-fields.mjs';
+import { FORM_BLOCK_PREFIX, LIST_ID_BLOCK_PREFIX, collectFormValues, collectListIdValue, invalidNumberFields, collectNoviaAnswers, preservedContentBlocks } from './form-fields.mjs';
 
 const sqs   = new SQSClient({});
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
-// preservedContentBlocks — drops interactive/action-affordance blocks (buttons,
-// text inputs) from a message's blocks, keeping everything else (section,
-// markdown, context, container/reveal). Used on every gate response so
-// chat.update replaces only the stale controls, never the original content —
-// Slack's chat.update has no partial-edit primitive, so preserving anything
-// means resending it explicitly (Sprint 7 Track D4).
-function preservedContentBlocks(blocks) {
-  return (blocks ?? []).filter(b => b.type !== 'actions' && b.type !== 'input');
-}
 
 // buildPrivateMetadata — JSON-encodes private_metadata, keeping contentBlocks
 // only if the result fits Slack's 3000-char private_metadata limit; drops it

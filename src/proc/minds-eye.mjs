@@ -2864,7 +2864,7 @@ async function startAnswerGate(params, session, traceId, pend) {
   }
   const last = await getRows('PGC_WorkflowRunStep', [{ column: 'run_id', op: 'eq', value: runId }], 'id DESC', 1, undefined, ['id']);
   await pend(runId, last.rows?.[0]?.id ?? 0);
-  const { status, body } = await answerGate(runId, { gateId, ...answer }, traceId);
+  const { status, body } = await answerGate(runId, { gateId, ...answer }, traceId, 'minds_eye');
   return status === 202 ? { waiting: true } : body;
 }
 

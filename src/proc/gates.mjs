@@ -147,17 +147,18 @@ export function checkGateResponse(run, body = {}) {
 }
 
 /**
- * Answer a gate: check it, then enqueue resume_gate. Shared by the HTTP route and by Novia.
+ * Answer a gate: check it, then enqueue resume_gate. Shared by the HTTP route and by Novia;
+ * `answeredIn` says which, for the answer's GATE_ANSWERED (`web` or `minds_eye`).
  *
  * @returns {Promise<{ status: number, body: object }>}
  */
-export async function answerGate(runId, body, traceId) {
+export async function answerGate(runId, body, traceId, answeredIn = 'web') {
   const resp = await getRows('PGC_WorkflowRun', [{ column: 'id', op: 'eq', value: runId }],
     undefined, 1, undefined, ['id', 'status', 'stack', 'callback']);
   const checked = checkGateResponse(resp.rows?.[0] ?? null, body);
   if (!checked.message) return checked;
 
-  await enqueueWorkflow({ ...checked.message, traceId, enqueuedAt: new Date().toISOString() });
+  await enqueueWorkflow({ ...checked.message, answeredIn, traceId, enqueuedAt: new Date().toISOString() });
   console.info('proc/gates: answer accepted, resume_gate enqueued', {
     workflowRunId: runId, gateId: body.gateId, action: body.action, traceId,
   });

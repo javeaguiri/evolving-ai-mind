@@ -42,6 +42,7 @@ import { resolveOutputWrites }  from './state-utils.mjs';
 import { extractTemplateRefs }  from './simulation-engine.mjs';
 import { shouldWriteEpisodicMemory } from './memory-writer.mjs';
 import { resolveRunLabel }      from './workflow-display.mjs';
+import { inputsOf, countChanges } from '../shared/form-changes.mjs';
 
 // ---------------------------------------------------------------------------
 // HTTP entry point
@@ -81,19 +82,19 @@ export async function handle(req) {
 // ---------------------------------------------------------------------------
 
 export async function dispatchSqs(message) {
-  const { action, workflowRunId, gateId, slackUserId, userResponse, responseData, message_ts, traceId, stepExecutionId } = message;
+  const { action, workflowRunId, gateId, slackUserId, userResponse, responseData, message_ts, answeredIn, traceId, stepExecutionId } = message;
   // A scope per message, so one run's sandbox can never reach the next message in the batch.
-  return sandboxScope(() => dispatch({ action, workflowRunId, gateId, slackUserId, userResponse, responseData, message_ts, traceId, source: 'sqs', stepExecutionId }));
+  return sandboxScope(() => dispatch({ action, workflowRunId, gateId, slackUserId, userResponse, responseData, message_ts, answeredIn, traceId, source: 'sqs', stepExecutionId }));
 }
 
 // ---------------------------------------------------------------------------
 // Core dispatch
 // ---------------------------------------------------------------------------
 
-async function dispatch({ action, workflowRunId, gateId, slackUserId, userResponse, responseData, message_ts, traceId, source, stepExecutionId }) {
+async function dispatch({ action, workflowRunId, gateId, slackUserId, userResponse, responseData, message_ts, answeredIn, traceId, source, stepExecutionId }) {
   switch (action) {
     case 'execute_top': return executeTop({ workflowRunId, traceId, source, stepExecutionId });
-    case 'resume_gate': return resumeGate({ workflowRunId, gateId, slackUserId, userResponse, responseData, message_ts, traceId, source });
+    case 'resume_gate': return resumeGate({ workflowRunId, gateId, slackUserId, userResponse, responseData, message_ts, answeredIn, traceId, source });
     case 'resume_llm':  return resumeLlm({ workflowRunId, traceId });
     case 'cancel':      return cancelRun({ workflowRunId, traceId });
     default:
@@ -561,7 +562,7 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
 // resume_gate
 // ---------------------------------------------------------------------------
 
-async function resumeGate({ workflowRunId, gateId, slackUserId, userResponse, responseData, message_ts, traceId, source }) {
+async function resumeGate({ workflowRunId, gateId, slackUserId, userResponse, responseData, message_ts, answeredIn, traceId, source }) {
 
   const run   = await loadRun(workflowRunId, traceId);
   const frame = topFrame(run);
@@ -622,7 +623,14 @@ async function resumeGate({ workflowRunId, gateId, slackUserId, userResponse, re
     : null;
   const cancelRoutesAway = cancelOption?.on_select && cancelOption.on_select !== 'cancel';
 
+  // The answer, once accepted, is told to the person's surfaces (GATE_ANSWERED): the web keeps it
+  // under its question, and Slack takes the buttons off a gate answered elsewhere.
+  const answered = option => sendGateAnswered(run, frame, {
+    option, userResponse, responseData, answeredIn: answeredIn ?? (slackUserId ? 'slack' : null), traceId,
+  });
+
   if (userResponse === 'cancel' && !cancelRoutesAway) {
+    await answered(cancelOption);
     await updateRows('PGC_WorkflowRun',
       [{ column: 'id', op: 'eq', value: run.id }],
       { status: 'cancelled', stack: [], completed_at: new Date().toISOString() }
@@ -910,6 +918,8 @@ async function resumeGate({ workflowRunId, gateId, slackUserId, userResponse, re
       workflowRunId: run.id, action_key: stepRef.action_key, value: actionValue, traceId,
     });
   }
+
+  await answered(matchedOption ?? itemActionMatch);
 
   // Pop gate frame
   run.stack.pop();
@@ -1751,6 +1761,38 @@ function findStep(steps, stepKey) {
 export function gateMovedNotice(run, { gateId, slackUserId, traceId }) {
   if (!gateId || !slackUserId || run?.callback?.provider !== 'slack') return null;
   return { type: 'GATE_MOVED', workflowRunId: run.id, gateId, slackUserId, traceId };
+}
+
+/**
+ * The answer a gate was given, for the inbox and the person's surfaces (docs/arch-web-app.md §8):
+ * its option's label, a form's changes — its inputs that moved from where they opened — and where it
+ * was answered. Only a person's run is told; a test run's events are her session's (sqs-callback).
+ *
+ * @param {object} run    PGC_WorkflowRun ({ id, callback })
+ * @param {object} frame  The gate frame answered ({ gate_id, gate_type, step_ref, local_state })
+ * @param {{ option?: object|null, userResponse: string, responseData?: object, answeredIn: string|null, traceId?: string }} answer
+ * @returns {object|null}
+ */
+export function gateAnsweredMessage(run, frame, { option, userResponse, responseData, answeredIn, traceId }) {
+  if (!['slack', 'web'].includes(run?.callback?.provider) || !frame?.gate_id) return null;
+  const formValues = responseData?.formValues;
+  const changes = frame.gate_type === 'form' && userResponse !== 'cancel' && formValues && typeof formValues === 'object'
+    ? countChanges(inputsOf(buildDialog(frame.step_ref, frame.local_state ?? {})), formValues)
+    : 0;
+  return {
+    type:          'GATE_ANSWERED',
+    workflowRunId: run.id,
+    gateId:        frame.gate_id,
+    label:         option?.label ?? userResponse,
+    ...(changes > 0 ? { changes } : {}),
+    answeredIn:    answeredIn ?? 'web',
+    traceId,
+  };
+}
+
+async function sendGateAnswered(run, frame, answer) {
+  const message = gateAnsweredMessage(run, frame, answer);
+  if (message) await enqueueCallback(run.callback, message);
 }
 
 async function noticeRefusedClick(run, click) {

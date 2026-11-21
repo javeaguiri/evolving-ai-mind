@@ -19,7 +19,7 @@ const sqs = new SQSClient({});
 
 // What reaches the inbox: the messages a person reads, for the providers a person reads them on.
 const INBOX_PROVIDERS = new Set(['slack', 'web']);
-const INBOX_TYPES     = new Set(['HUMAN_GATE', 'HUMAN_NOTIFICATION', 'WORKFLOW_ERROR']);
+const INBOX_TYPES     = new Set(['HUMAN_GATE', 'HUMAN_NOTIFICATION', 'WORKFLOW_ERROR', 'GATE_ANSWERED']);
 
 /**
  * Enqueue a result to SYSSQSCallbackResults.

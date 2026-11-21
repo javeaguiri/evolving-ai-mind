@@ -14,6 +14,17 @@ import { readNumber } from '../../shared/number-rule.mjs';
 // responses endpoint for the web and for Novia — so it lives in src/shared.
 export { readNumber };
 
+// preservedContentBlocks — drops interactive/action-affordance blocks (buttons,
+// text inputs) from a message's blocks, keeping everything else (section,
+// markdown, context, container/reveal). Used on every gate response so
+// chat.update replaces only the stale controls, never the original content —
+// Slack's chat.update has no partial-edit primitive, so preserving anything
+// means resending it explicitly (Sprint 7 Track D4). Shared by a click's update
+// (interactive.mjs) and an answer given elsewhere (callback.mjs, GATE_ANSWERED).
+export function preservedContentBlocks(blocks) {
+  return (blocks ?? []).filter(b => b.type !== 'actions' && b.type !== 'input');
+}
+
 // A form field's answer is identified by the field name encoded in its block_id:
 //   form_field_<workflowRunId>::<fieldName>
 // '::' separates the run id from the name — field names may contain underscores, so

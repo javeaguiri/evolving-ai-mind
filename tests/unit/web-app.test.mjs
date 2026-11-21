@@ -1018,6 +1018,24 @@ describe('components and catalog', () => {
       assert.match(html, /<div class="msg gate waiting" aria-busy="false"><div class="md"><p><strong>Pick<\/strong> one<\/p>.*>OK<\/button>/);
     });
 
+    it('an answer from the inbox (GATE_ANSWERED, item 7) is drawn under its question after a reload, wherever it was given', () => {
+      const sent = (id, gid, text) => ({ id, messageType: 'HUMAN_GATE', payload: { dialog: { gate_id: gid, fields: [{ type: 'typography', value: text }] } } });
+      const kept = (id, gid, label, changes) => ({ id, messageType: 'GATE_ANSWERED', payload: { gateId: gid, label, ...(changes ? { changes } : {}), answeredIn: 'slack' } });
+      const html = ui.renderToString(ui.createElement(ui.ThreadView, {
+        run: { status: 'completed' }, messages: [sent(1, 'g-0', 'First'), kept(2, 'g-0', 'Save', 3), { id: 3, messageType: 'HUMAN_NOTIFICATION', payload: { message: 'Done' } }],
+        problem: null,
+      })).replace(/<!-- -->/g, '');
+      assert.match(html, /<button type="button" class="fold">Show 1 earlier message<\/button>/, 'the answer is not a message of its own');
+      const open = ui.renderToString(ui.createElement(ui.ThreadView, {
+        run: { status: 'running' }, messages: [sent(1, 'g-0', 'First'), kept(2, 'g-0', 'Save', 3)], problem: null,
+      })).replace(/<!-- -->/g, '');
+      assert.match(open, /<p>First<\/p><\/div><\/div><p class="answered">You chose Save · 3 changes<\/p><\/div>/);
+      const both = ui.renderToString(ui.createElement(ui.ThreadView, {
+        run: { status: 'running' }, messages: [sent(1, 'g-0', 'First'), kept(2, 'g-0', 'Save')], answered: { 'g-0': { label: 'Old', changes: 0 } }, problem: null,
+      })).replace(/<!-- -->/g, '');
+      assert.match(both, /You chose Save/, 'the inbox\'s record wins over the page\'s');
+    });
+
     it('a waiting gate with no copy in the inbox — a scheduled run\'s — is still answered', () => {
       const html = ui.renderToString(ui.createElement(ui.ThreadView, {
         run: { status: 'awaiting_human_gate' }, messages: [], gate: gateOf('confirm', [actions({ action: 'ok', label: 'OK' })]), problem: null, context: CONTEXT, onAnswered() {}, onMoved() {},

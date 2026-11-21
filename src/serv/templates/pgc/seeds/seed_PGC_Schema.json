@@ -1665,7 +1665,7 @@
       {
         "type": "check",
         "name": "chk_uimessage_type",
-        "expression": "message_type IN ('HUMAN_GATE', 'HUMAN_NOTIFICATION', 'WORKFLOW_ERROR')"
+        "expression": "message_type IN ('HUMAN_GATE', 'HUMAN_NOTIFICATION', 'WORKFLOW_ERROR', 'GATE_ANSWERED')"
       }
     ],
     "triggers": []
