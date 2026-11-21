@@ -24,9 +24,10 @@ function columnSpecs(config) {
  * currency or the list view needs besides; with none, the read's own default (every readable column).
  *
  * @param {object} config  A records panel's config
+ * @param {number} [offset] Rows already read — the next page starts after them
  * @returns {{ source: string, query: Record<string, string|number|undefined> }}
  */
-export function rowsRequest(config) {
+export function rowsRequest(config, offset = 0) {
   const specs = columnSpecs(config);
   const names = specs && [...new Set([
     ...specs.map(s => s.name),
@@ -40,8 +41,21 @@ export function rowsRequest(config) {
       filter:   config.filter ? JSON.stringify(config.filter) : undefined,
       order_by: config.order_by,
       limit:    config.limit,
+      offset:   offset || undefined,
     },
   };
+}
+
+/**
+ * A read with its next page added: the rows run on, `more` is the new page's, and the total is
+ * the first page's (a short last page is not counted).
+ *
+ * @param {{ rows: object[], more: boolean, totalMatching?: number }} body
+ * @param {{ rows: object[], more: boolean, totalMatching?: number }} page
+ */
+export function appendPage(body, page) {
+  const totalMatching = body.totalMatching ?? page.totalMatching;
+  return { ...body, rows: [...body.rows, ...page.rows], more: page.more, ...(totalMatching !== undefined ? { totalMatching } : {}) };
 }
 
 /**

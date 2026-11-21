@@ -233,6 +233,9 @@ table.grid .num { text-align: end; font-variant-numeric: tabular-nums; white-spa
 .rlist button:hover { background: var(--ground); }
 .rlist button[aria-current="true"] { background: var(--accent-soft); }
 .rlist .rd { color: var(--muted); text-align: end; }
+/* a read that has more ends on this: it reads on as it scrolls into view */
+.more { display: flex; justify-content: center; padding-block: 10px; }
+.rlist .more .btn { inline-size: auto; border: 1px solid var(--control); background: var(--paper); padding-inline: 14px; }
 
 .skeleton { display: flex; flex-direction: column; gap: 8px; }
 .skeleton i { display: block; block-size: 14px; border-radius: 4px; background: var(--soft); }

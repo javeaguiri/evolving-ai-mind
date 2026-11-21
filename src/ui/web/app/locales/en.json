@@ -28,6 +28,8 @@
     "list": "List",
     "empty": "Nothing here yet",
     "showing": "Showing {shown, number} of {total, number}",
+    "more": "Show more",
+    "moreFailed": "Couldn't read more — try again",
     "missing": "“{source}” can’t be found.",
     "failed": "This panel couldn’t be read."
   },

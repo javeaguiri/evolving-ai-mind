@@ -333,6 +333,12 @@ opens on its config's `view`, else the source's `display.view` (§6.3), else `gr
 last choice is remembered per panel, per viewer — in the browser in Phase 0 — and never stored on
 the page.
 
+**Reading on.** A records panel reads a page of rows (its `limit`, else 100) and scrolls inside
+itself. As the end of what it holds comes into view it reads the next page and adds it, until
+the source has no more; *Show more* at the end does the same from the keyboard, and tries again
+when a page was refused. Pages are read by `offset`, in the panel's order ended on `id` where the
+source has one, so no row is repeated or skipped.
+
 **View types.**
 
 | View | Fits | Shows | Options | Phase |

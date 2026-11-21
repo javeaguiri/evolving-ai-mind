@@ -46,7 +46,7 @@ answers given.
 | **6** | ⬜ **`GATE_RESOLVED`** (§8): a Slack-started gate answered on the web updates the Slack message, so its buttons disappear rather than refuse |
 | **7** | ⬜ **A run's thread keeps its answers** (backlog, decision L): `resumeGate` writes a `GATE_ANSWERED` inbox row — the action's label, a form's change count — and both surfaces draw it |
 | **8** | ✅ **Renaming a session** (S): `label` on the session reads; a write route to set or clear it (spec first; principal-checked, `minds_eye` only); rename in her region and in a `minds_eye` panel. Route built with item 2. **UI built and deployed 2026-11-21:** ✎ beside the open conversation's name — a box holding its label, Enter or leaving it saves, Escape keeps the name, empty clears (`ConvoTitle` in `Region.jsx`, so the panel has it too); the web client's `patch`. Live ✅ (AC6). **✅ DONE** |
-| **9** | ⬜ **A list reads on as it is scrolled** (Javear, 2026-11-21, added in session): a records panel reads one page (100, or its `limit`) and stops — *Showing 50 of N*. Scrolling near its end reads the next page and adds it, until there is no more. Spec first: `offset` on `GET /sources/{source}/rows` (web and PROC); SERV's `getRows` takes an `offset`; `sources.mjs` passes it through |
+| **9** | 🟡 **A list reads on as it is scrolled** (Javear, 2026-11-21, added in session): a records panel reads one page (100, or its `limit`) and stops — *Showing 50 of N*. Scrolling near its end reads the next page and adds it, until there is no more. Spec first: `offset` on `GET /sources/{source}/rows` (web and PROC); SERV's `getRows` takes an `offset`; `sources.mjs` passes it through. **Built 2026-11-21:** spec (`openapi.yaml`, its own commit); SERV `resolveReadOffset`, `LIMIT … OFFSET`, `truncated` past offset plus the page, tested against the real route; PROC `?offset` and `pageOrder` (ends on `id` where the source has one); the panel reads on when its end scrolls into view (`MoreRows`, `appendPage`), *Show more* as the keyboard and retry path; §4.2 *Reading on*. 10 new tests |
 
 ## Acceptance Criteria
 
@@ -58,7 +58,7 @@ answers given.
 | **AC4** | ⬜ | A Slack-started gate answered on the web loses its buttons in Slack, and the answer shows in the run's thread after a reload | 6, 7 | Shown live |
 | **AC5** | 🟡 | Each new endpoint is in `openapi.yaml` before it is built, as its own commit; every minds-eye session read checks the principal and returns `minds_eye` sessions only — a `general_chat` or `llm_call_diagnostic` id is a 404 | all | Review as each lands, and tests |
 | **AC6** | ✅ | Javear renames a session on the web; the new name shows in her region and its panel, and survives a reload — **met 2026-11-21**: 1381 renamed in her region, 1391 in Money's panel, both kept after a reload | 1, 2, 8 | Shown live |
-| **AC7** | ⬜ | A records panel longer than its page (Money's *Budget and spending by category*, *Expenses*) reads on as Javear scrolls, to its last row | 9 | Shown live |
+| **AC7** | 🟡 | A records panel longer than its page (Money's *Budget and spending by category*, *Expenses*) reads on as Javear scrolls, to its last row | 9 | Shown live |
 
 ## Retro lessons to apply (sprint-17)
 

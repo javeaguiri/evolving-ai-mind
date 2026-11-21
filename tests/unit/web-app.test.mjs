@@ -20,7 +20,7 @@ import { createSession, safeReturnPath, SignInRequired, AuthUnavailable, REFRESH
 import { createApiClient, ApiError } from '../../src/ui/web/app/api/client.mjs';
 import { matchPath, matchLocation }  from '../../src/ui/web/app/router.mjs';
 import { formatValue, isNumericColumn }   from '../../src/ui/web/app/records/format.mjs';
-import { rowsRequest, mergeColumns, listFields, initialView, viewKey } from '../../src/ui/web/app/records/query.mjs';
+import { rowsRequest, appendPage, mergeColumns, listFields, initialView, viewKey } from '../../src/ui/web/app/records/query.mjs';
 import { inputsOf, initialValues, isChanged, fieldProblems, formValues, answerFor, gridOf, gridSections, moveCell, listColumns, revealContent } from '../../src/ui/web/app/gates/gate.mjs';
 import { liveScript, isNewBuild } from '../../src/ui/web/app/shell/version.mjs';
 import { runName, panelWorkflows, foldPoint, addMessages, threadDelay, isActive, isWorking, THREAD_POLL_MS, THREAD_POLL_MAX_MS } from '../../src/ui/web/app/runs/runs.mjs';
@@ -370,9 +370,17 @@ describe('records — the read, the columns, the views (§4.2)', () => {
     assert.deepEqual(rowsRequest({ source: 'PGD_Things', columns: ['date', { name: 'amount', format: 'currency', currency_column: 'currency' }],
       title_column: 'title', filter: [{ column: 'deleted_at', op: 'is_null' }], order_by: 'date DESC', limit: 50 }), {
       source: 'PGD_Things',
-      query:  { columns: 'date,amount,currency,title', filter: '[{"column":"deleted_at","op":"is_null"}]', order_by: 'date DESC', limit: 50 },
+      query:  { columns: 'date,amount,currency,title', filter: '[{"column":"deleted_at","op":"is_null"}]', order_by: 'date DESC', limit: 50, offset: undefined },
     });
-    assert.deepEqual(rowsRequest({ entity: 'Thing' }), { source: 'Thing', query: { columns: undefined, filter: undefined, order_by: undefined, limit: undefined } });
+    assert.deepEqual(rowsRequest({ entity: 'Thing' }), { source: 'Thing', query: { columns: undefined, filter: undefined, order_by: undefined, limit: undefined, offset: undefined } });
+    assert.equal(rowsRequest({ entity: 'Thing', limit: 50 }, 100).query.offset, 100, 'the next page starts after the rows read');
+  });
+
+  it('appendPage: the rows run on, more is the new page\'s, the total the first page\'s (item 9)', () => {
+    const first = { columns: [{ name: 'id' }], rows: [{ id: 1 }, { id: 2 }], more: true, totalMatching: 3 };
+    assert.deepEqual(appendPage(first, { columns: [{ name: 'id' }], rows: [{ id: 3 }], more: false }),
+      { columns: [{ name: 'id' }], rows: [{ id: 1 }, { id: 2 }, { id: 3 }], more: false, totalMatching: 3 });
+    assert.equal('totalMatching' in appendPage({ rows: [], more: true }, { rows: [], more: false }), false);
   });
 
   it('mergeColumns: the panel\'s order, labels (a language map read in the language) and formats; the rest read but not in the grid', () => {
@@ -823,6 +831,18 @@ describe('components and catalog', () => {
     assert.match(body('grid', {}, BODY.rows[1]), /<tr tabindex="0" aria-selected="true"><td>Shop B<\/td>/);
     assert.equal((body('grid', {}, BODY.rows[1]).match(/aria-selected/g) ?? []).length, 1);
     assert.match(body('list', {}, BODY.rows[0]), /<button type="button" aria-current="true"><span class="rt">Shop A/);
+  });
+
+  it('a read with more ends on Show more inside its scroll, which reads on (item 9); none without onMore or more', () => {
+    const paged = (view, extra = {}, paging) => ui.renderToString(ui.createElement(ui.RecordsBody, {
+      config: CONFIG, body: { ...BODY, ...extra }, view, where: { locale: 'en', timeZone: 'Europe/Madrid' }, onOpen() {}, onMore() {}, paging,
+    }));
+    assert.match(paged('grid'), /<\/table><div class="more"><button type="button" class="btn">Show more<\/button><\/div><\/div><p class="pfoot">/);
+    assert.match(paged('list'), /<li class="more"><button type="button" class="btn">Show more<\/button><\/li><\/ul>/);
+    assert.match(paged('grid', {}, { busy: true, failed: false }), /<div class="more"><span class="muted">Loading…<\/span><\/div>/);
+    assert.match(paged('grid', {}, { busy: false, failed: true }), /Couldn&#x27;t read more — try again/);
+    assert.doesNotMatch(paged('grid', { more: false }), /class="more"/);
+    assert.doesNotMatch(body('grid'), /class="more"/);
   });
 
   it('a drawer beside the page has no scrim and does not hold the page; the others do', () => {
