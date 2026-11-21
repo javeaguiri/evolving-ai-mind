@@ -475,6 +475,7 @@ td.bad .cell { border-color: var(--bad); }
 .region-head h2 { flex: 1 1 auto; font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .region-body { flex: 1 1 auto; min-block-size: 0; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 .region-body > .btn { align-self: flex-start; }
+.panel .region-body { padding: 0; max-block-size: 70vh; }
 .sessions { list-style: none; margin: 0; padding: 0; }
 .sessions button {
   inline-size: 100%; display: flex; align-items: baseline; gap: 8px; border: 0; background: transparent; text-align: start;

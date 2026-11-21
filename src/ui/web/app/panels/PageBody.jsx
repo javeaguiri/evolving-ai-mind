@@ -5,13 +5,14 @@
 //
 // A page's panels (docs/arch-web-app.md §4.2), laid out in a grid by width; a phone stacks them in
 // order, full width. Each is its kind inside the frame; a summary's chart and metric widgets are
-// Phase 1 and draw the frame alone.
+// Phase 1 and draw the frame alone. A minds_eye panel is her region on its topic.
 
 import { useTranslation }     from 'react-i18next';
 import { resolveLanguageMap } from '../../../../shared/language-map.mjs';
 import { RecordsPanel }       from './RecordsPanel.jsx';
 import { WorkflowPanel }      from './WorkflowPanel.jsx';
 import { ReportPanel }        from './ReportPanel.jsx';
+import { MindsEyePanel }      from './MindsEyePanel.jsx';
 import { PanelFrame }         from './PanelFrame.jsx';
 
 /**
@@ -34,6 +35,9 @@ export function PageBody({ pageKey, panels, context }) {
         }
         if (panel.kind === 'summary' && panel.config?.widget === 'report') {
           return <ReportPanel key={panel.id} panel={panel} title={title} context={context} />;
+        }
+        if (panel.kind === 'minds_eye') {
+          return <MindsEyePanel key={panel.id} panel={panel} title={title} context={context} />;
         }
         return <PanelFrame key={panel.id} title={title} width={panel.width} />;
       })}

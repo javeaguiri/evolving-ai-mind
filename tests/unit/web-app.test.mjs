@@ -25,7 +25,7 @@ import { inputsOf, initialValues, isChanged, fieldProblems, formValues, answerFo
 import { liveScript, isNewBuild } from '../../src/ui/web/app/shell/version.mjs';
 import { runName, panelWorkflows, foldPoint, addMessages, threadDelay, isActive, isWorking, THREAD_POLL_MS, THREAD_POLL_MAX_MS } from '../../src/ui/web/app/runs/runs.mjs';
 import { pageItems, domainItems, sectionOf, currentItem, gateHeadline, relativeAge, pollDelay, POLL_MS, POLL_MAX_MS } from '../../src/ui/web/app/shell/nav.mjs';
-import { sessionName, addConversation, groupTurns, repliesMissing, conversationDelay, readCollapsed, writeCollapsed, withSession, answerable, answerField, answersFrom, RADIO_LIMIT, stillExpecting, personCount, EXPECT_MS, COLLAPSED_KEY, WORKING_POLL_MS, WAITING_POLL_MS, POLL_MAX_MS as CONVO_MAX_MS, ROUND_CEILING_MS } from '../../src/ui/web/app/minds-eye/conversation.mjs';
+import { sessionName, addConversation, groupTurns, repliesMissing, conversationDelay, readCollapsed, writeCollapsed, withSession, answerable, answerField, answersFrom, RADIO_LIMIT, stillExpecting, personCount, panelTopic, sessionsQuery, startBody, EXPECT_MS, COLLAPSED_KEY, WORKING_POLL_MS, WAITING_POLL_MS, POLL_MAX_MS as CONVO_MAX_MS, ROUND_CEILING_MS } from '../../src/ui/web/app/minds-eye/conversation.mjs';
 
 const APP_DIR = new URL('../../src/ui/web/app/', import.meta.url).pathname;
 const CONFIG  = { userPoolId: 'us-east-2_pool', clientId: 'client123', authDomain: 'https://auth.example', siteUrl: 'https://site.example', region: 'us-east-2' };
@@ -560,6 +560,7 @@ describe('components and catalog', () => {
                    export { WorkflowList } from './panels/WorkflowPanel.jsx';
                    export { ThreadView } from './runs/RunThread.jsx';
                    export { SessionList, ConversationView, Composer } from './minds-eye/Region.jsx';
+                   export { MindsEyePanel } from './panels/MindsEyePanel.jsx';
                    export { Gate, AnsweredRecord } from './gates/Gate.jsx';
                    export { ReportBody } from './panels/ReportPanel.jsx';
                    export { initI18n } from './i18n.mjs';
@@ -1027,6 +1028,17 @@ describe('components and catalog', () => {
       assert.match(html, /<span class="lbl">New conversation<\/span>/);
     });
 
+    it('a minds_eye panel is titled by its own title, else its domain\'s label or its topic, and opens on its list', () => {
+      const panel = (config, title = '') => strip(ui.renderToString(ui.createElement(ui.MindsEyePanel, {
+        panel: { id: 'n', kind: 'minds_eye', width: '1/2', config }, title,
+        context: { api, domains: DOMAINS, locale: 'en', onSignInRequired() {} },
+      })));
+      assert.match(panel({ domain: 'pantry' }), /<h2>Pantry<\/h2>/);
+      assert.match(panel({ topic: 'Holidays' }), /<h2>Holidays<\/h2>/);
+      assert.match(panel({ domain: 'pantry' }, 'Ask about food'), /<h2>Ask about food<\/h2>/);
+      assert.match(panel({ domain: 'pantry' }), /class="panel w-half"[\s\S]*\+ New[\s\S]*Loading…/);
+    });
+
     it('an empty list says how to start, and a list not yet read says Loading…', () => {
       assert.match(ui.renderToString(ui.createElement(ui.SessionList, { sessions: [], currentId: null, problem: false, now: NOW, locale: 'en', onOpen() {} })), /No conversations yet/);
       assert.match(ui.renderToString(ui.createElement(ui.SessionList, { sessions: null, currentId: null, problem: false, now: NOW, locale: 'en', onOpen() {} })), /Loading…/);
@@ -1232,6 +1244,17 @@ describe('her region — the decisions, pure', () => {
     assert.equal(stillExpecting(e, { persons: 2, state: 'waiting', now: since + EXPECT_MS }), false);
     assert.equal(stillExpecting(null, { persons: 0, state: 'waiting', now: since }), false);
     assert.equal(personCount([{ kind: 'person' }, { kind: 'inbox' }, { kind: 'person' }]), 2);
+  });
+
+  it('a panel\'s topic (§2.5): its domain, titled by the domain\'s label, or its text; the list asks for it, New sends it', () => {
+    const domains = [{ domain: 'pantry', label: 'Pantry' }];
+    assert.deepEqual(panelTopic({ domain: 'pantry' }, domains), { topic: 'pantry', title: 'Pantry' });
+    assert.deepEqual(panelTopic({ domain: 'garden' }, domains), { topic: 'garden', title: 'garden' });
+    assert.deepEqual(panelTopic({ topic: 'Holidays' }, domains), { topic: 'Holidays', title: 'Holidays' });
+    assert.deepEqual(sessionsQuery('pantry'), { topic: 'pantry' });
+    assert.equal(sessionsQuery(null), undefined);
+    assert.deepEqual(startBody('hello', 'pantry'), { text: 'hello', topic: 'pantry' });
+    assert.deepEqual(startBody('hello', null), { text: 'hello' });
   });
 
   it('withSession: sets or clears ?minds-eye=, keeping the rest of the location', () => {

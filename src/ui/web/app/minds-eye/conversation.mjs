@@ -20,6 +20,29 @@ export function sessionName(session) {
   return name ? name.replace(/\s+/g, ' ') : null;
 }
 
+/**
+ * A minds_eye panel's topic and the title it falls back to (§2.5): a domain's name, titled by the
+ * domain's label, or free text, titled by itself.
+ *
+ * @param {{ domain?: string, topic?: string }} config
+ * @param {{ domain: string, label?: string }[]} domains
+ * @returns {{ topic: string, title: string }}
+ */
+export function panelTopic(config, domains) {
+  if (config.domain) return { topic: config.domain, title: domains.find(d => d.domain === config.domain)?.label ?? config.domain };
+  return { topic: config.topic, title: config.topic };
+}
+
+/** The query that lists sessions: a panel's topic, or none for her region. */
+export function sessionsQuery(topic) {
+  return topic ? { topic } : undefined;
+}
+
+/** What *New* sends: the text, and a panel's topic when it has one. */
+export function startBody(text, topic) {
+  return topic ? { text, topic } : { text };
+}
+
 const keyOf = m => (m.kind === 'person' ? `p${m.seq}` : `i${m.id}`);
 
 /**

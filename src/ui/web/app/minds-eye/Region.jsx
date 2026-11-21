@@ -10,7 +10,8 @@
 // in. *New* starts a session. « collapses the region to a strip, remembered on this device. The
 // session open is in the location (`?minds-eye=`), so it is a deep link and survives a reload. An
 // open conversation is read again while it is open and the tab visible: often while she works,
-// less while she waits; the list less often still.
+// less while she waits; the list less often still. A minds_eye panel (§4.2) draws the same region
+// with a `topic`: its sessions are that topic's, and *New* starts one on it.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation }      from 'react-i18next';
@@ -21,11 +22,11 @@ import { Input }               from '../gates/Input.jsx';
 import { relativeAge }         from '../shell/nav.mjs';
 import {
   sessionName, addConversation, groupTurns, repliesMissing, conversationDelay, LIST_POLL_MS,
-  answerable, answerField, answersFrom, stillExpecting, personCount,
+  answerable, answerField, answersFrom, stillExpecting, personCount, sessionsQuery, startBody,
 } from './conversation.mjs';
 
-/** Her sessions, read when the region opens, after the person sends, and now and then. */
-export function useSessions(api, active, onSignInRequired) {
+/** Her sessions — a topic's, for a panel — read when the region opens, after the person sends, and now and then. */
+export function useSessions(api, active, onSignInRequired, topic = null) {
   const [state, setState] = useState({ sessions: null, problem: false });
   const readNow = useRef(() => {});
 
@@ -35,7 +36,7 @@ export function useSessions(api, active, onSignInRequired) {
     async function read() {
       clearTimeout(timer);
       try {
-        const page = await api.get('minds-eye/sessions');
+        const page = await api.get('minds-eye/sessions', sessionsQuery(topic));
         if (!alive) return;
         setState({ sessions: page.sessions, problem: false });
       } catch (e) {
@@ -50,7 +51,7 @@ export function useSessions(api, active, onSignInRequired) {
     document.addEventListener('visibilitychange', onVisible);
     read();
     return () => { alive = false; clearTimeout(timer); document.removeEventListener('visibilitychange', onVisible); };
-  }, [api, active, onSignInRequired]);
+  }, [api, active, onSignInRequired, topic]);
 
   const refresh = useCallback(() => readNow.current(), []);
   return { ...state, refresh };
@@ -384,11 +385,12 @@ function blockedReason(session, t) {
  * @param {number|null} props.sessionId     The session open, from `?minds-eye=`
  * @param {(sessionId: number|null) => void} props.onOpen
  * @param {boolean} [props.active]          Read the list — false while the region is not drawn
+ * @param {string|null} [props.topic]       A minds_eye panel's topic: its sessions only, and New starts one on it
  */
-export function MindsEyeRegion({ context, sessionId, onOpen, active = true }) {
+export function MindsEyeRegion({ context, sessionId, onOpen, active = true, topic = null }) {
   const { t } = useTranslation();
   const { api, onSignInRequired } = context;
-  const list  = useSessions(api, active, onSignInRequired);
+  const list  = useSessions(api, active, onSignInRequired, topic);
   const convo = useConversation(api, sessionId, onSignInRequired);
   const [composing, setComposing] = useState(false);
   const [sent, setSent]           = useState(null);   // { sessionId, text, persons } until the stored copy arrives
@@ -398,7 +400,7 @@ export function MindsEyeRegion({ context, sessionId, onOpen, active = true }) {
   const hold    = (id, text) => setSent({ sessionId: id, text, persons: id === sessionId ? persons : 0 });
 
   const start = async text => {
-    const { sessionId: started } = await api.post('minds-eye/sessions', { text });
+    const { sessionId: started } = await api.post('minds-eye/sessions', startBody(text, topic));
     hold(started, text);
     setComposing(false);
     onOpen(started);
