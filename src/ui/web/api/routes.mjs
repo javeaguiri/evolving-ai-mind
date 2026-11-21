@@ -27,7 +27,7 @@ export const WEB_ROUTES = [
   { operationId: 'webGetMe',          method: 'GET',  path: ['me'] },
   { operationId: 'webListWorkflows',  method: 'GET',  path: ['workflows'] },
   { operationId: 'webListPages',      method: 'GET',  path: ['pages'] },
-  { operationId: 'webReadSourceRows', method: 'GET',  path: ['sources', NAME, 'rows'], query: ['columns', 'filter', 'order_by', 'limit'] },
+  { operationId: 'webReadSourceRows', method: 'GET',  path: ['sources', NAME, 'rows'], query: ['columns', 'filter', 'order_by', 'limit', 'offset'] },
   { operationId: 'webGetOutput',      method: 'GET',  path: ['outputs', NAME] },
   { operationId: 'webListRuns',       method: 'GET',  path: ['runs'], query: ['workflow', 'domain', 'status', 'limit', 'before'] },
   { operationId: 'webStartRun',       method: 'POST', path: ['runs'], body: true },

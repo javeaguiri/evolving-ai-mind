@@ -135,10 +135,11 @@ describe('each operation calls its PROC route as the principal', () => {
 
   it('a records read passes its filter through intact', async () => {
     const filter = JSON.stringify([{ column: 'a', op: 'eq', value: 'b&c=d' }]);
-    await handler(event('GET', 'sources/PGD_t/rows', { query: { filter, order_by: 'a DESC' } }));
+    await handler(event('GET', 'sources/PGD_t/rows', { query: { filter, order_by: 'a DESC', offset: '100' } }));
     const url = new URL(calls[0].url);
     assert.equal(url.searchParams.get('filter'), filter);
     assert.equal(url.searchParams.get('order_by'), 'a DESC');
+    assert.equal(url.searchParams.get('offset'), '100', 'the next page reaches PROC (item 9)');
   });
 
   it('returns PROC\'s body and status unchanged — a started run is 202', async () => {
