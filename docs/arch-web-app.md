@@ -124,7 +124,7 @@ system code or seed data.
 | version | integer | Unique with `page_key`; the latest is drawn |
 | title | jsonb | A string or a language map (§13) |
 | position | integer | Position in the *Pages* menu; Home is `0` |
-| panels | jsonb | Ordered `[{ id, kind, width, title?, config }]`; `kind` is `workflow`, `records`, `summary` or `novia` (§4.2). A records panel's `config` names its `source` (a table or view) or its `entity`, optionally the `view` it opens on, and the views' options; a summary panel's names its `source` (or `workflow`), its `widget` and that widget's options |
+| panels | jsonb | Ordered `[{ id, kind, width, title?, config }]`; `kind` is `workflow`, `records`, `summary` or `minds_eye` (§4.2). A records panel's `config` names its `source` (a table or view) or its `entity`, optionally the `view` it opens on, and the views' options; a summary panel's names its `source` (or `workflow`), its `widget` and that widget's options |
 | created_by | text | `seed`, `user` (the editor or `upsert-page.mjs`), `novia` |
 | created_at | timestamptz | |
 

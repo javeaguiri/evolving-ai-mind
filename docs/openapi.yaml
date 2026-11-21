@@ -167,10 +167,10 @@ components:
             required: [id, kind, width, config]
             properties:
               id:     { type: string }
-              kind:   { type: string, enum: [workflow, records, summary, novia] }
+              kind:   { type: string, enum: [workflow, records, summary, minds_eye] }
               width:  { type: string, enum: ['1/3', '1/2', '2/3', full] }
               title:  { description: A string or a language map. }
-              config: { type: object, description: "workflow: workflow | domain, limit?, show_output?. records: source (a table or view) | entity, view? (grid, list, document), columns?, filter?, order_by?, limit?, title_column?, detail_columns?, picker_column?. summary: widget (chart, metric, report) with source and its options, or workflow for a report. novia: topic." }
+              config: { type: object, description: "workflow: workflow | domain, limit?, show_output?. records: source (a table or view) | entity, view? (grid, list, document), columns?, filter?, order_by?, limit?, title_column?, detail_columns?, picker_column?. summary: widget (chart, metric, report) with source and its options, or workflow for a report. minds_eye: topic." }
     RunSummary:
       type: object
       required: [runId, workflowName, status, startedAt]

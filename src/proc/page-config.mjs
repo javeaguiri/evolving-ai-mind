@@ -14,7 +14,7 @@
 //             A column is a name, or { name, label?, format? } — format as §6.3: currency (with
 //             the row's own currency_column, or a fixed ISO 4217 currency), percent, date
 //   summary   widget: chart | metric (over a source) or report (over a workflow), and its options
-//   novia     topic
+//   minds_eye topic
 //
 // Pure — no I/O. The registry it checks names against is passed in.
 
@@ -30,7 +30,7 @@ const COLUMN_KEYS = ['name', 'label', 'format', 'currency_column', 'currency'];
 const KIND_KEYS = {
   workflow: ['workflow', 'domain', 'limit', 'show_output'],
   records:  ['source', 'entity', 'view', 'columns', 'filter', 'order_by', 'limit', 'title_column', 'detail_columns', 'picker_column'],
-  novia:    ['topic'],
+  minds_eye: ['topic'],
 };
 const WIDGET_KEYS = {
   chart:  ['widget', 'source', 'kind', 'category_column', 'value_columns', 'filter'],
@@ -88,8 +88,8 @@ export function pageProblems(page, registry) {
       case 'workflow': return workflowProblems(config, registry, m => at(where, m));
       case 'records':  return recordsProblems(config, registry, m => at(where, m));
       case 'summary':  return summaryProblems(config, registry, m => at(where, m));
-      case 'novia':    return noviaProblems(config, m => at(where, m));
-      default:         at(where, `kind is one of workflow, records, summary, novia — not ${panel?.kind}`);
+      case 'minds_eye': return mindsEyeProblems(config, m => at(where, m));
+      default:         at(where, `kind is one of workflow, records, summary, minds_eye — not ${panel?.kind}`);
     }
   });
   return problems;
@@ -215,7 +215,7 @@ function summaryProblems(config, registry, report) {
   }
 }
 
-function noviaProblems(config, report) {
-  unknownKeys(config, KIND_KEYS.novia, report);
+function mindsEyeProblems(config, report) {
+  unknownKeys(config, KIND_KEYS.minds_eye, report);
   if (!isText(config.topic)) report('topic is required');
 }

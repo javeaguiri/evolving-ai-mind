@@ -36,7 +36,7 @@ describe('pageProblems — a valid page', () => {
       panel('summary',  { widget: 'chart', source: 'PGD_ItemSummary', kind: 'bar', category_column: 'name', value_columns: ['total'] }, { id: 'c' }),
       panel('summary',  { widget: 'metric', source: 'PGD_ItemSummary', value_column: 'total' }, { id: 'm' }),
       panel('summary',  { widget: 'report', workflow: 'report_thing' }, { id: 'rep', title: { en: 'Report', es: 'Informe' } }),
-      panel('novia',    { topic: 'Things' }, { id: 'n' }),
+      panel('minds_eye', { topic: 'Things' }, { id: 'n' }),
     ]);
     assert.deepEqual(pageProblems(ok, registry), []);
   });
@@ -51,7 +51,7 @@ describe('pageProblems — refused, not stored', () => {
   const problemsOf = (...panels) => pageProblems(page(panels), registry);
 
   it('an unknown kind, widget or key', () => {
-    assert.match(problemsOf(panel('data', {}))[0], /kind is one of workflow, records, summary, novia/);
+    assert.match(problemsOf(panel('data', {}))[0], /kind is one of workflow, records, summary, minds_eye/);
     assert.match(problemsOf(panel('summary', { widget: 'table', source: 'PGD_Items' }))[0], /widget is one of chart, metric, report/);
     assert.match(problemsOf(panel('records', { source: 'PGD_Items', widget: 'table' }))[0], /not widget/);
   });
@@ -98,7 +98,7 @@ describe('pageProblems — refused, not stored', () => {
 
   it('page-level problems, and every problem rather than the first', () => {
     const bad = pageProblems({ page_key: 'Bad Key', title: '', position: -1, panels: [
-      panel('novia', {}, { id: 'x', width: 'half' }), panel('novia', { topic: 't' }, { id: 'x' }),
+      panel('minds_eye', {}, { id: 'x', width: 'half' }), panel('minds_eye', { topic: 't' }, { id: 'x' }),
     ] }, registry);
     assert.ok(bad.length >= 5, bad.join('\n'));
     assert.ok(bad.some(m => /id is used twice/.test(m)));
