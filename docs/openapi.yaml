@@ -1818,6 +1818,7 @@ paths:
         - { name: filter,   in: query, required: false, schema: { type: string } }
         - { name: order_by, in: query, required: false, schema: { type: string } }
         - { name: limit,    in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: offset,   in: query, required: false, schema: { type: integer, minimum: 0, default: 0 } }
       responses:
         '200': { description: "{ columns: [{ name, type, label, labelFallback }], rows, more, totalMatching? } — as GET /proc/sources/{source}/rows" }
         '400': { description: invalid_query, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
@@ -2618,7 +2619,7 @@ paths:
         table or view, or an entity name (its root table is read); a PGC_ system table is never
         a source. Read-only in Phase 0. Columns default to every non-vector column; a named
         column, or one a filter names, must be registered. The page is bounded and says so:
-        `more` is true when SERV withheld rows past `limit`, with `totalMatching`. Each column
+        `more` is true when SERV withheld rows past `limit`, with `totalMatching`; `offset` reads the next page. Each column
         carries the `label` a person reads (docs/arch-web-app.md §13): the registry's, once it
         holds column labels (§6.3, Phase 1); until then the humanised name, marked
         `labelFallback: true`. The household role is required — domain data belongs to the
@@ -2633,9 +2634,10 @@ paths:
         - { name: filter,   in: query, required: false, schema: { type: string }, description: "JSON array of { column, op, value } — SERV's getRows filters." }
         - { name: order_by, in: query, required: false, schema: { type: string }, description: "SQL ORDER BY terms, e.g. \"date DESC\"." }
         - { name: limit,    in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: offset,   in: query, required: false, schema: { type: integer, minimum: 0, default: 0 }, description: "Rows skipped — the next page is offset plus the rows read. A table's `id` ends the order, so pages neither repeat nor skip a row." }
       responses:
         '200':
-          description: "{ columns: [{ name, type, label, labelFallback }], rows, more, totalMatching? }"
+          description: "{ columns: [{ name, type, label, labelFallback }], rows, more, totalMatching? } — `more` is true while rows remain past this page"
         '400': { description: "invalid_query — a malformed filter, an unregistered column, or limit out of range." }
         '401': { description: principal_required }
         '403': { description: household_required }
@@ -5597,6 +5599,15 @@ paths:
                   minimum: 1
                   maximum: 1000
                   default: 100
+                offset:
+                  type: integer
+                  minimum: 0
+                  default: 0
+                  description: >
+                    Rows skipped before the page — the next page of the same read is its
+                    offset plus the rows returned. A stable page needs an orderBy that ends
+                    on a unique column. With an offset, `truncated` means rows remain past
+                    this page: `total_matching` exceeds offset plus the rows returned.
                 vectorSearch:
                   $ref: '#/components/schemas/VectorSearch'
             examples:
