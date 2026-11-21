@@ -82,7 +82,7 @@ enqueued to the results queue as today; for the web the row **is** the delivery.
 | channel | text | Slack channel, or the web user's `sub` |
 | thread_id | text | Slack thread ts. Null for a web run's message: the run is its own thread, named by `workflow_run_id` |
 | workflow_run_id | integer | Nullable, no FK — runs are purged independently |
-| message_type | text | `HUMAN_GATE`, `HUMAN_NOTIFICATION`, `WORKFLOW_ERROR` |
+| message_type | text | `HUMAN_GATE`, `HUMAN_NOTIFICATION`, `WORKFLOW_ERROR`, `GATE_ANSWERED` |
 | payload | jsonb | The message exactly as enqueued — markdown text, or `gate_type` + `dialog` |
 | created_at | timestamptz | |
 
@@ -801,9 +801,9 @@ for every message, Slack's included; that is how a Slack-started run also appear
 
 | Case | Behaviour |
 |---|---|
-| **Slack-started run, gate answered on the web** | The response is enqueued with the run's own callback (Slack). The next gate and the results post to the Slack thread as always, and through the inbox they also appear in 🔔 and in the run on the web. The Slack message's buttons stay live; each carries its `gate_id`, a click there is refused by `resumeGate` (§2.2), and the clicker alone is told *"Already answered — your click was not applied."* in the run's thread — a `GATE_MOVED` callback the listener posts ephemerally |
+| **Slack-started run, gate answered on the web** | The response is enqueued with the run's own callback (Slack). The next gate and the results post to the Slack thread as always, and through the inbox they also appear in 🔔 and in the run on the web. `resumeGate` sends `GATE_ANSWERED` with the run's callback; the listener finds the gate's message in the run's thread by the `gate_id` its buttons carry and replaces the buttons with the answer — *✅ Save — answered on the web* — keeping the message's content. A click on a message not yet updated is refused by `resumeGate` (§2.2), and the clicker alone is told *"Already answered — your click was not applied."* — a `GATE_MOVED` callback the listener posts ephemerally |
 | **Web-started run** | No Slack message exists, so it can only be answered on the web |
-| **Phase 1** | A `GATE_RESOLVED` callback updates the Slack message to show it was answered on the web, so the stale buttons disappear rather than refuse |
+| **Every answer** | `resumeGate` writes `GATE_ANSWERED` to the inbox once it accepts an answer, from either surface: `gateId`, the answer's `label` (the option's), a form's `changes` (its inputs that moved from where they opened) and `answeredIn` (`slack`, `web`, `minds_eye`). The web draws it under its question — *You chose Save · 3 changes* — so a thread keeps its answers after a reload and on another device. Slack ignores one answered in Slack, whose click already replaced the buttons. Finding the message needs the bot's history scopes (`channels:history`, `groups:history`, `im:history`); without them the listener logs and leaves the message as it is |
 
 ---
 
@@ -832,7 +832,7 @@ for every message, Slack's included; that is how a Slack-started run also appear
 | **PROC** | `PGC_UiMessage` and `enqueueCallback` writing it; `gate_id`; run labels (§2.4); `PGC_Page` with the seeded Home, and `upsert-page.mjs` for the household's pages; `GET /proc/gates`, `GET /proc/inbox`, `GET /proc/pages`, `GET /proc/runs`, `GET /proc/outputs` (§2.6), `GET /proc/workflows`, `GET /proc/me`, `PGC_DomainHelp.display` (`label`), the read-only `records` read behind `GET /sources/{source}/rows`, starting a named workflow | Navigate reads (§3.2), session topics (§2.5), the edit policy and `PGC_RecordEdit`, the `arch-home-brain.md` §3.2 Slack leaks removed |
 | **Contract** | `row`, `column`, `group` on the `human_gate` contract | A gridded form's answer may carry a subset of rows (§5.4) |
 | **Pages** | Sign-in; the shell — 🏠, the *Pages* and *Domains* menus, 🔔, ⚙; the household's pages from `PGC_Page`, read-only — three to start: Home, Money, Inventory; workflow panels — *Start*, runs by label, the run stepped through in place; records panels with the view switch over the `grid` (read-only) and `list` views; summary panels with the `chart`, `metric` and `report` widgets; click-through and report Refresh; domain pages with their workflow panel; the run page and run drawer; Settings › Profile; every gate type of §5.2 | The page editor — *+ New page*, *Edit page*, *+ Add panel*, delete; the `document` view and the editable grid; Novia's region and Novia panels; 🧠 Help; Activity; the command bar; the rest of Settings; ⓘ on panels and terms; *Ask Novia about this*; Novia's `propose_page_change` |
-| **Slack** | `gate_id` on buttons; the ephemeral "already answered" | `GATE_RESOLVED` message update; the Slack pager and pick-one modal (§5.4), with L1's gate-size check narrowed |
+| **Slack** | `gate_id` on buttons; the ephemeral "already answered" | `GATE_ANSWERED` message update; the Slack pager and pick-one modal (§5.4), with L1's gate-size check narrowed |
 | **Domain views** | — | Grid and document views, cell editors, `display` metadata (§6); SERV batch and entity writes with version checks (§6.4) |
 | **First workflow** | `manage_budget` (357): month pick, then one grid grouped by budget type, after Novia's four corrections | — |
 

@@ -715,7 +715,7 @@ the browser through `GET /inbox?after=<id>` (`arch-web-app.md` §2.1, §7.2).
 | channel | text | Slack channel, or the web user's Cognito `sub` |
 | thread_id | text | Slack thread ts. Null for a web run's message: the run is its own thread, named by `workflow_run_id` |
 | workflow_run_id | integer | Nullable, **no FK** — runs are purged independently of the inbox |
-| message_type | text | `HUMAN_GATE`, `HUMAN_NOTIFICATION`, `WORKFLOW_ERROR` |
+| message_type | text | `HUMAN_GATE`, `HUMAN_NOTIFICATION`, `WORKFLOW_ERROR`, `GATE_ANSWERED` (Sprint 18 — the answer a gate was given) |
 | payload | jsonb | The message exactly as enqueued — markdown text, or `gate_type` + `dialog` |
 | created_at | timestamptz | |
 | session_id | integer | Nullable, **no FK** — the minds-eye session the message belongs to, from `payload.sessionId`; a session's conversation is its rows with the person's own `PGC_SessionEntry` entries, by time (Sprint 18) |

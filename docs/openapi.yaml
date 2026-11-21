@@ -105,7 +105,7 @@ components:
         provider:      { type: string, enum: [slack, web] }
         threadId:      { type: string, nullable: true }
         workflowRunId: { type: integer, nullable: true }
-        messageType:   { type: string, enum: [HUMAN_GATE, HUMAN_NOTIFICATION, WORKFLOW_ERROR] }
+        messageType:   { type: string, enum: [HUMAN_GATE, HUMAN_NOTIFICATION, WORKFLOW_ERROR, GATE_ANSWERED], description: "GATE_ANSWERED's payload: { gateId, label, changes?, answeredIn: slack | web | minds_eye } — the answer a gate was given, wherever it was given" }
         payload:       { type: object, description: "The message exactly as enqueued, without its callback — text for a notification, gate_type + dialog for a gate." }
         createdAt:     { type: string, format: date-time }
     MindsEyeSession:
@@ -150,7 +150,7 @@ components:
         seq:         { type: integer, description: "person — the entry's sequence_number." }
         text:        { type: string,  description: "person — what was sent: typed text, answers as paired with their questions, a follow-up." }
         id:          { type: integer, description: "inbox — the PGC_UiMessage id." }
-        messageType: { type: string, enum: [HUMAN_GATE, HUMAN_NOTIFICATION, WORKFLOW_ERROR], description: inbox only. }
+        messageType: { type: string, enum: [HUMAN_GATE, HUMAN_NOTIFICATION, WORKFLOW_ERROR, GATE_ANSWERED], description: inbox only. }
         payload:     { type: object,  description: "inbox — as GET /inbox returns it: a progress line with its turn, a reply with questions and invitesReply, a gate with gate_type and atSeq." }
     Page:
       type: object
