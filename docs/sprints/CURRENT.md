@@ -52,7 +52,7 @@ answers given.
 | # | Status | Criterion | Scope | Threshold |
 |---|---|---|---|---|
 | **AC1** | ✅ | Javear starts a session in Novia's region, she replies, and after a reload the session reopens with its history — **met 2026-11-19, session 1381** (started on the web, two replies, reopened with its history) | 1, 2, 3 | Shown live |
-| **AC2** | ⬜ | Every Novia gate type is answered in the browser, a gated action (e.g. `propose_workflow_fix`) included | 2, 4 | One live session per gate type |
+| **AC2** | ✅ | Every Novia gate type is answered in the browser, a gated action (e.g. `propose_workflow_fix`) included — **met 2026-11-21, session 1381** (web-started): her questions answered (09:08:30), `propose_schema_fix` approved (09:09:30), the continue gate's Continue (09:12:28), `register_workflow` *Apply and test* (09:13:55); after the lost round (fixed `e9dd8e5`) she finished and tested `add_recipe` | 2, 4 | One live session per gate type |
 | **AC3** | 🟡 | A Novia panel on a household page lists its topic's sessions; *New* starts one on that topic | 1, 2, 5 | Shown live |
 | **AC4** | ⬜ | A Slack-started gate answered on the web loses its buttons in Slack, and the answer shows in the run's thread after a reload | 6, 7 | Shown live |
 | **AC5** | 🟡 | Each new endpoint is in `openapi.yaml` before it is built, as its own commit; every minds-eye session read checks the principal and returns `minds_eye` sessions only — a `general_chat` or `llm_call_diagnostic` id is a 404 | all | Review as each lands, and tests |
