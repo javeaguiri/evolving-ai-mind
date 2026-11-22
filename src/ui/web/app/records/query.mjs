@@ -25,9 +25,10 @@ function columnSpecs(config) {
  *
  * @param {object} config  A records panel's config
  * @param {number} [offset] Rows already read — the next page starts after them
+ * @param {boolean} [withVersion] Each row with its version — the grid is being edited
  * @returns {{ source: string, query: Record<string, string|number|undefined> }}
  */
-export function rowsRequest(config, offset = 0) {
+export function rowsRequest(config, offset = 0, withVersion = false) {
   const specs = columnSpecs(config);
   const names = specs && [...new Set([
     ...specs.map(s => s.name),
@@ -42,6 +43,7 @@ export function rowsRequest(config, offset = 0) {
       order_by: config.order_by,
       limit:    config.limit,
       offset:   offset || undefined,
+      ...(withVersion ? { with_version: 'true' } : {}),
     },
   };
 }

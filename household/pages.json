@@ -23,6 +23,7 @@
                     "filter": [{ "column": "deleted_at", "op": "is_null" }],
                     "columns": ["date", "title",
                                 { "name": "amount", "format": "currency", "currency_column": "currency" },
+                                "currency", { "name": "category_id", "label": "Category" },
                                 "payment_method"] } },
       { "id": "expense-flows",  "kind": "workflow", "width": "1/2",  "title": "Expenses and budget",
         "config": { "domain": "budgets_expenses" } },

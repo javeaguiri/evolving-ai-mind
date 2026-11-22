@@ -19,12 +19,14 @@ export class ApiError extends Error {
    * @param {string} code
    * @param {string} message
    * @param {object[]} [fields]
+   * @param {object[]} [conflicts]  version_conflict's rows that moved
    */
-  constructor(status, code, message, fields) {
+  constructor(status, code, message, fields, conflicts) {
     super(message);
-    this.status = status;
-    this.code   = code;
-    this.fields = fields;
+    this.status    = status;
+    this.code      = code;
+    this.fields    = fields;
+    this.conflicts = conflicts;
   }
 }
 
@@ -64,7 +66,7 @@ export function createApiClient({ session, fetch }) {
     if (res.ok) return parsed;
     const error = parsed?.error;
     if (res.status === 502 || !error?.code) throw new ApiError(res.status, 'upstream_unavailable', error?.message ?? "Can't reach the home brain.");
-    throw new ApiError(res.status, error.code, error.message, error.fields);
+    throw new ApiError(res.status, error.code, error.message, error.fields, error.conflicts);
   }
 
   return {
