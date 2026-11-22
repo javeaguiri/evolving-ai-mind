@@ -1091,12 +1091,13 @@ Used by PROC when executing workflow steps that read or write user domain data.
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/v1/serv/entity/getEntity` | POST | Fetch one entity by id — with configured joins and jsonb_agg aggregations |
+| `/api/v1/serv/entity/getEntity` | POST | Fetch one entity by id — with configured joins and jsonb_agg aggregations. With `withVersion` (Sprint 19) the root carries `_version` and the response gains `children`: each child table's rows whole, with `_version`, by table name, ordered by `id`. A child table is a join whose registered foreign key references the root |
 | `/api/v1/serv/entity/listEntities` | POST | List entities — filters, orderBy, limit — entity default filters always applied |
 | `/api/v1/serv/entity/createEntity` | POST | INSERT root row — system cols (id, created_at, updated_at) stripped automatically |
 | `/api/v1/serv/entity/updateEntity` | POST | UPDATE root row — `patch` (default) or `replace` mode — children unaffected |
 | `/api/v1/serv/entity/upsertEntity` | POST | INSERT ... ON CONFLICT DO UPDATE — requires `upsert_key` defined in PGC_EntitySchema |
 | `/api/v1/serv/entity/deleteEntity` | POST | DELETE root row — CASCADE handles children via FK — gated by `allow_delete` |
+| `/api/v1/serv/entity/saveEntity` | POST | A document's save (Sprint 19): the root's changes and each child table's `update`, `insert`, `delete` in one transaction. The root and every child row changed or removed are locked and their versions compared first — `409 version_conflict` names any that moved; a child row of another entity is `404`. A save of children only touches the root's `updated_at`, so the root's version is the document's (the touch is not logged). Without `id` and `version` a new entity: root inserted, then children inserted only. SERV sets each new child's parent key and refuses a row naming it. Gated per table and kind; the root needs `allow_update` for any save of an existing entity. With `changeLog`, logged as `saveRows` is. Returns the document read back inside the transaction |
 
 **Design decisions:**
 - Entity operations only touch the root table. Child rows (e.g. `RecipeIngredient`) are managed
