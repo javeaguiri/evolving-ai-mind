@@ -148,6 +148,16 @@ describe('what a save asks, and what it leaves', () => {
     const body = { columns: [{ name: 'id', type: 'serial' }, { name: 'name', type: 'varchar' }], rows: [{ id: 8, name: 'Travel' }, { id: 3, name: 'Food' }] };
     assert.deepEqual(referenceOptions(body, 'en'), [{ value: '3', label: 'Food' }, { value: '8', label: 'Travel' }]);
   });
+  it('rowsRequest: a panel naming its columns, read for editing, also reads each row\'s id', () => {
+    const config = { source: 'PGD_X', columns: ['day', { name: 'amount', format: 'currency', currency_column: 'cur' }] };
+    assert.equal(rowsRequest(config, 0, true).query.columns, 'id,day,amount,cur');
+    assert.equal(rowsRequest(config).query.columns, 'day,amount,cur');
+  });
+  it('setCell: an edit to one row marks that row only', () => {
+    const e = setCell(noEdits(), ROWS[0], by('amount'), '99');
+    assert.deepEqual(Object.keys(e.changes), ['1']);
+    assert.equal(e.changes[ROWS[1].id], undefined);
+  });
   it('rowsRequest asks for versions only while editing', () => {
     assert.equal(rowsRequest({ source: 'PGD_X' }, 0, true).query.with_version, 'true');
     assert.ok(!('with_version' in rowsRequest({ source: 'PGD_X' }).query));
@@ -201,6 +211,12 @@ describe('drawn', () => {
     assert.match(html, /<tr class="removed">/);
     assert.match(html, /aria-label="Keep #2"[^>]*>↺</);
     assert.ok(html.indexOf('new-1-title') < html.indexOf('1-title"'));
+  });
+
+  it('an edit to one row shows in that row only', () => {
+    const html = grid(setCell(noEdits(), ROWS[0], by('amount'), '99'));
+    assert.equal((html.match(/value="99"/g) ?? []).length, 1);
+    assert.match(html, /<input[^>]*name="2-amount"[^>]*value="5.00"/);
   });
 
   it('without delete, no remove control on a read row', () => {

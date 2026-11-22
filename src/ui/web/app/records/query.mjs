@@ -22,6 +22,7 @@ function columnSpecs(config) {
 /**
  * The query for GET /sources/{source}/rows. With `columns` named, only those are read — and any a
  * currency or the list view needs besides; with none, the read's own default (every readable column).
+ * Read for editing, each row also carries its `id` and version: an edit addresses a row by both.
  *
  * @param {object} config  A records panel's config
  * @param {number} [offset] Rows already read — the next page starts after them
@@ -31,6 +32,7 @@ function columnSpecs(config) {
 export function rowsRequest(config, offset = 0, withVersion = false) {
   const specs = columnSpecs(config);
   const names = specs && [...new Set([
+    ...(withVersion ? ['id'] : []),
     ...specs.map(s => s.name),
     ...specs.map(s => s.currency_column).filter(Boolean),
     ...[config.title_column, ...(config.detail_columns ?? [])].filter(Boolean),
