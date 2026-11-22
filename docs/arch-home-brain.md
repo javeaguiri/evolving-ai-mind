@@ -277,9 +277,9 @@ REST resources, JSON in and out, spec-first in `openapi.yaml` before implementat
 | Method and resource | Purpose | Behind it |
 |---|---|---|
 | `GET /domains` | Domains and their workflows | Domain registry, `PGC_Workflow` |
-| `GET /domains/{domain}/schema` | Columns, types, labels, enums — what the app needs to lay out records | `PGC_Schema` |
-| `GET /domains/{domain}/records` | Records with filter, sort and page parameters in the SERV filter vocabulary | SERV `getRows` |
-| `GET /domains/{domain}/records/{id}` | One record with its child records | SERV entity reads via `PGC_EntitySchema` |
+| `GET /sources/{source}/schema` | A table's or entity's columns, types, labels, foreign key targets, and what the edit policy opens — what the app needs to lay out and edit records. A source is a table, view or entity name | `PGC_Schema`, `PGC_EntitySchema`, `PGC_EditPolicy` |
+| `GET /sources/{source}/rows` | Records with filter, sort and page parameters in the SERV filter vocabulary; `with_version` for a grid that saves | SERV `getRows` |
+| `GET /sources/{entity}/records/{id}` | One document — the root and its child rows, each with its version | SERV `getEntity` `withVersion` |
 | `GET /gates` | Gates waiting on a person | Runs at `awaiting_human_gate` |
 | `GET /runs`, `GET /runs/{runId}` | Activity and a run's steps | `PGC_WorkflowRun`, `PGC_WorkflowRunStep` |
 | `GET /minds-eye/sessions`, `GET /minds-eye/sessions/{id}/messages` | Sessions, and a conversation's history | `PGC_Session`, `PGC_SessionEntry` |
@@ -295,14 +295,15 @@ pushed:
 | `POST /gates/{runId}/responses` | Answer a gate | `resume_gate` |
 | `POST /minds-eye/sessions`, `POST /minds-eye/sessions/{id}/messages` | Open a session; send a message | `MINDS_EYE` / `MINDS_EYE_RESUME` |
 
-**Edit** — direct record edits under the edit policy (§4.8); synchronous, returning the record as
-written:
+**Edit** — direct record edits under the edit policy (§4.8); synchronous, each save one transaction
+checked against the versions read, returning what was written. A source's domain comes from the
+registry, never the request:
 
 | Method and resource | Purpose | Behind it |
 |---|---|---|
-| `PATCH /domains/{domain}/records/{id}` | Change editable fields; `If-Match` carries the version read | Policy check, then SERV `updateRows` |
-| `POST /domains/{domain}/records` | Add a record, where the table allows it | Policy check, then SERV `insertRow` |
-| `DELETE /domains/{domain}/records/{id}` | Delete a record, where the table allows it; `If-Match` as for `PATCH` | Policy check, then SERV `deleteRows` |
+| `POST /sources/{table}/rows` | A grid's save — changed, new and removed rows, each changed or removed row with its version | Policy check, then SERV `saveRows` |
+| `POST /sources/{entity}/records/{id}` | A document's save — the root's fields and each child table's rows, with the root's version | Policy check, then SERV `saveEntity` |
+| `POST /sources/{entity}/records` | A new document, where the root table allows adding | Policy check, then SERV `saveEntity` |
 
 ### 4.8 Direct edits and the edit policy
 

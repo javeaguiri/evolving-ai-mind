@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: evolving-mind-ai
-  version: 3.12.0
+  version: 3.13.0
   description: >
     Self-evolving cognitive automation system.
     Slack → Lambda → PostgreSQL → LLM pipeline.
@@ -232,6 +232,17 @@ components:
                 properties:
                   name:    { type: string }
                   problem: { type: string }
+            conflicts:
+              type: array
+              description: >
+                With version_conflict (409): the rows that changed or were removed since they
+                were read — VersionConflict's items, passed through from PROC.
+              items:
+                type: object
+                properties:
+                  table:  { type: string }
+                  id:     { type: integer }
+                  reason: { type: string, enum: [changed, deleted] }
 
     CorrelationResponse:
       type: object
@@ -606,6 +617,57 @@ components:
         error: version_conflict
         conflicts:
           - { table: PGD_Expenses, id: 381, reason: changed }
+
+    SourceColumn:
+      type: object
+      description: >
+        A column as the web lays it out and edits it. `editable` is the edit policy's answer for
+        the direct path (docs/arch-home-brain.md §4.8): false for every column of a table without
+        a policy row or without versions, and always false for a column the system maintains.
+      required: [name, type, label, labelFallback, nullable, editable]
+      properties:
+        name:          { type: string }
+        type:          { type: string }
+        label:         { type: string }
+        labelFallback: { type: boolean, description: "true while the label is the humanised name (docs/arch-web-app.md §13)" }
+        nullable:      { type: boolean }
+        editable:      { type: boolean }
+        references:
+          type: object
+          description: The registered foreign key's target — what a picker offers (existing rows only)
+          properties:
+            table:  { type: string }
+            column: { type: string }
+
+    SourceTable:
+      type: object
+      description: One table's layout and what the edit policy lets the web do to it.
+      required: [table, versioned, columns, addRows, deleteRows]
+      properties:
+        table:      { type: string }
+        versioned:  { type: boolean, description: The table has updated_at — without it, nothing is edited directly }
+        columns:    { type: array, items: { $ref: '#/components/schemas/SourceColumn' } }
+        addRows:    { type: boolean }
+        deleteRows: { type: boolean }
+        parentKey:
+          type: string
+          description: A child table's column holding its parent's id — set by the server, never edited
+
+    SourceSchema:
+      type: object
+      description: >
+        What the web needs to lay out and edit a source. A table or view is `table`; an entity
+        is its root as `table` and its child tables — joins whose registered foreign key
+        references the root — as `children`, each with its `parentKey`.
+      required: [source, kind, domain, table]
+      properties:
+        source: { type: string }
+        kind:   { type: string, enum: [table, view, entity] }
+        domain: { type: string, nullable: true }
+        table:  { $ref: '#/components/schemas/SourceTable' }
+        children:
+          type: array
+          items: { $ref: '#/components/schemas/SourceTable' }
 
     FilterItem:
       type: object
@@ -1919,6 +1981,7 @@ paths:
         - { name: order_by, in: query, required: false, schema: { type: string } }
         - { name: limit,    in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
         - { name: offset,   in: query, required: false, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: with_version, in: query, required: false, schema: { type: boolean, default: false } }
       responses:
         '200': { description: "{ columns: [{ name, type, label, labelFallback }], rows, more, totalMatching? } — as GET /proc/sources/{source}/rows" }
         '400': { description: invalid_query, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
@@ -1926,6 +1989,93 @@ paths:
         '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
         '403': { description: household_required, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '404': { description: source_not_found, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+    post:
+      summary: A grid's save — one table's changed, new and removed rows
+      description: POST /proc/sources/{source}/rows, the body passed through.
+      operationId: webSaveSourceRows
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      parameters:
+        - { name: source, in: path, required: true, schema: { type: string } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RowWrites' } } } }
+      responses:
+        '200': { description: "{ updated, inserted, deleted, batchId? } — as POST /proc/sources/{source}/rows" }
+        '400': { description: "invalid_writes, not_a_table", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
+        '403': { description: "household_required; not_editable, its fields naming each refusal", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '404': { description: source_not_found, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '409': { description: "version_conflict, its conflicts naming what moved", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+
+  /api/v1/ui/web/sources/{source}/schema:
+    get:
+      summary: How a source is laid out, and what the edit policy lets the web change
+      description: GET /proc/sources/{source}/schema.
+      operationId: webReadSourceSchema
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      parameters:
+        - { name: source, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: SourceSchema, content: { application/json: { schema: { $ref: '#/components/schemas/SourceSchema' } } } }
+        '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
+        '403': { description: household_required, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '404': { description: source_not_found, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+
+  /api/v1/ui/web/sources/{source}/records:
+    post:
+      summary: Create a document — an entity's root and its child rows
+      description: POST /proc/sources/{source}/records, the body passed through.
+      operationId: webCreateSourceRecord
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      parameters:
+        - { name: source, in: path, required: true, schema: { type: string } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses:
+        '200': { description: "{ entity, children, batchId? } — as POST /proc/sources/{source}/records" }
+        '400': { description: "invalid_writes, not_an_entity", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
+        '403': { description: "household_required; not_editable, its fields naming each refusal", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '404': { description: source_not_found, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+
+  /api/v1/ui/web/sources/{source}/records/{id}:
+    get:
+      summary: A document — an entity's root and child rows, each with its version
+      description: GET /proc/sources/{source}/records/{id}.
+      operationId: webReadSourceRecord
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      parameters:
+        - { name: source, in: path, required: true, schema: { type: string } }
+        - { name: id,     in: path, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: "{ entity, children } — as GET /proc/sources/{source}/records/{id}" }
+        '400': { description: not_an_entity, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
+        '403': { description: household_required, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '404': { description: "source_not_found, record_not_found", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+    post:
+      summary: Save a document, checked against the version it was read at
+      description: POST /proc/sources/{source}/records/{id}, the body passed through.
+      operationId: webSaveSourceRecord
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      parameters:
+        - { name: source, in: path, required: true, schema: { type: string } }
+        - { name: id,     in: path, required: true, schema: { type: integer } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses:
+        '200': { description: "{ entity, children, batchId? } — as POST /proc/sources/{source}/records/{id}" }
+        '400': { description: "invalid_writes, not_an_entity", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
+        '403': { description: "household_required; not_editable, its fields naming each refusal", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '404': { description: "source_not_found, record_not_found", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '409': { description: "version_conflict, its conflicts naming what moved", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
 
   /api/v1/ui/web/outputs/{workflow}:
     get:
@@ -2735,13 +2885,148 @@ paths:
         - { name: order_by, in: query, required: false, schema: { type: string }, description: "SQL ORDER BY terms, e.g. \"date DESC\"." }
         - { name: limit,    in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
         - { name: offset,   in: query, required: false, schema: { type: integer, minimum: 0, default: 0 }, description: "Rows skipped — the next page is offset plus the rows read. A table's `id` ends the order, so pages neither repeat nor skip a row." }
+        - { name: with_version, in: query, required: false, schema: { type: boolean, default: false }, description: "Each row also carries `_version` (RowVersion), what a save sends back. invalid_query on a source without updated_at." }
       responses:
         '200':
           description: "{ columns: [{ name, type, label, labelFallback }], rows, more, totalMatching? } — `more` is true while rows remain past this page"
-        '400': { description: "invalid_query — a malformed filter, an unregistered column, or limit out of range." }
+        '400': { description: "invalid_query — a malformed filter, an unregistered column, limit out of range, or with_version on a source without versions." }
         '401': { description: principal_required }
         '403': { description: household_required }
         '404': { description: source_not_found }
+    post:
+      summary: A grid's save — a table's changed, new and removed rows, under the edit policy
+      description: >
+        The direct path (docs/arch-home-brain.md §4.8). `source` is a registered PGD_ table. Every
+        part of the request is checked against the table's edit policy before anything is
+        written, and the request is refused whole if any part is not open: each update's and
+        insert's columns must be open, an insert needs `add_rows`, a delete `delete_rows`. Then
+        SERV `saveRows`, logged to PGC_ChangeLog with the principal as `actor`, `via: web`, and
+        the table's domain from the registry. A row that moved since it was read fails the save
+        whole (409). The household role is required.
+      operationId: saveSourceRows
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+        - { name: source, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RowWrites' }
+      responses:
+        '200': { description: "{ updated, inserted, deleted, batchId? } — SERV saveRows' result: changed and new rows whole with their new `_version`" }
+        '400': { description: "invalid_writes — SERV refused the request's shape or a column, its message passed on; not_a_table — the source is a view or an entity" }
+        '401': { description: principal_required }
+        '403': { description: "household_required; not_editable — `fields` names each refusal: { name: '<table>.<column>', problem: column_not_editable } or { name: '<table>', problem: table_not_editable | add_rows | delete_rows }" }
+        '404': { description: source_not_found }
+        '409': { description: "version_conflict — `conflicts` as SERV's VersionConflict; nothing written" }
+
+  /api/v1/proc/sources/{source}/schema:
+    get:
+      summary: How a source is laid out, and what the edit policy lets the web change
+      description: >
+        A table's or view's columns, or an entity's root and child tables, each column with its
+        label, nullability, registered foreign key target and `editable` — the edit policy's
+        answer (docs/arch-home-brain.md §4.8) — and each table's `addRows`, `deleteRows`. The web
+        offers edit controls only where this allows them; the saves check the policy again.
+        Vector columns are left out. The household role is required.
+      operationId: readSourceSchema
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+        - { name: source, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: SourceSchema, content: { application/json: { schema: { $ref: '#/components/schemas/SourceSchema' } } } }
+        '401': { description: principal_required }
+        '403': { description: household_required }
+        '404': { description: source_not_found }
+
+  /api/v1/proc/sources/{source}/records:
+    post:
+      summary: Create a document — an entity's root and its child rows, under the edit policy
+      description: >
+        `source` is an entity name. Body `{ root: { changes }, children? }` as SERV saveEntity
+        without `id` and `version`. The root table's policy must allow `add_rows` and open each
+        root column; each child table's writes are checked as a grid's. Refused whole if any part
+        is not open. Logged as the grid's save is. The household role is required.
+      operationId: createSourceRecord
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+        - { name: source, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [root]
+              properties:
+                root:     { type: object, properties: { changes: { type: object } } }
+                children: { type: object, additionalProperties: { $ref: '#/components/schemas/RowWrites' } }
+      responses:
+        '200': { description: "{ entity, children, batchId? } — the document read back, each row with its `_version`" }
+        '400': { description: "invalid_writes — SERV refused the request's shape or a column; not_an_entity" }
+        '401': { description: principal_required }
+        '403': { description: "household_required; not_editable, as for the grid's save" }
+        '404': { description: source_not_found }
+
+  /api/v1/proc/sources/{source}/records/{id}:
+    get:
+      summary: A document — an entity's root and child rows, each with its version
+      description: >
+        SERV getEntity with `withVersion`: the root with `_version`, and `children` by table name.
+        `source` is an entity name. The household role is required.
+      operationId: readSourceRecord
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+        - { name: source, in: path, required: true, schema: { type: string } }
+        - { name: id,     in: path, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: "{ entity, children }" }
+        '400': { description: not_an_entity }
+        '401': { description: principal_required }
+        '403': { description: household_required }
+        '404': { description: "source_not_found, record_not_found" }
+    post:
+      summary: Save a document, checked against the version it was read at, under the edit policy
+      description: >
+        Body `{ version, root?: { changes }, children? }` as SERV saveEntity, `id` from the path.
+        Each root column must be open on the root table; each child table's writes are checked
+        as a grid's. A save of children only needs nothing open on the root — SERV touches it so
+        its version is the document's. Refused whole if any part is not open. The root or a
+        child row that moved since it was read fails the save whole (409). Logged as the grid's
+        save is. The household role is required.
+      operationId: saveSourceRecord
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+        - { name: source, in: path, required: true, schema: { type: string } }
+        - { name: id,     in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                version:  { $ref: '#/components/schemas/RowVersion' }
+                root:     { type: object, properties: { changes: { type: object } } }
+                children: { type: object, additionalProperties: { $ref: '#/components/schemas/RowWrites' } }
+      responses:
+        '200': { description: "{ entity, children, batchId? } — the document read back, each row with its `_version`" }
+        '400': { description: "invalid_writes — SERV refused the request's shape or a column; not_an_entity" }
+        '401': { description: principal_required }
+        '403': { description: "household_required; not_editable, as for the grid's save" }
+        '404': { description: "source_not_found; record_not_found — the root, or a child row not this document's" }
+        '409': { description: "version_conflict — `conflicts` as SERV's VersionConflict; nothing written" }
 
   /api/v1/proc/minds-eye/sessions:
     get:
