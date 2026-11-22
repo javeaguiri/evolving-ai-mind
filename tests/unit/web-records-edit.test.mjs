@@ -82,6 +82,13 @@ describe('a cell, as text and as saved', () => {
     assert.deepEqual(readCell('  ', by('amount')), { value: null });
     assert.deepEqual(readCell('', by('title')), { problem: 'is required' });
   });
+  it('readCell: text without its leading and trailing spaces — a code typed "EUR " is "EUR"', () => {
+    assert.deepEqual([readCell('EUR ', by('title')), readCell('  Shop  A ', by('title'))], [{ value: 'EUR' }, { value: 'Shop  A' }]);
+  });
+  it('writesOf: a new row\'s text cell sent trimmed', () => {
+    const e = setAddedCell(addRow(noEdits(), 'new-1'), 'new-1', by('title'), 'Shop C ');
+    assert.deepEqual(writesOf(e, ROWS, COLUMNS).insert, [{ title: 'Shop C' }]);
+  });
   it('readCell: a foreign key as its id, a boolean, a date', () => {
     assert.deepEqual([readCell('9', by('kind_id')), readCell('true', by('done')), readCell('2026-12-01', by('day')), readCell('1/12', by('day'))],
       [{ value: 9 }, { value: true }, { value: '2026-12-01' }, { problem: 'must be a date' }]);

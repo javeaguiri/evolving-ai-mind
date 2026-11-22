@@ -75,7 +75,8 @@ export function cellText(value, column) {
 
 /**
  * A cell's text read as the value saved, or the problem with it. Empty is null where the column
- * allows it.
+ * allows it. Text is saved without its leading and trailing spaces, as a form input is — a code
+ * typed `EUR ` is `EUR`.
  *
  * @returns {{ value: any } | { problem: string }}
  */
@@ -91,7 +92,7 @@ export function readCell(text, column) {
     return read.problem ? { problem: read.problem } : { value: read.value };
   }
   if (type === 'date') return /^\d{4}-\d{2}-\d{2}$/.test(raw.trim()) ? { value: raw.trim() } : { problem: 'must be a date' };
-  return { value: raw };
+  return { value: raw.trim() };
 }
 
 /** No edits: nothing changed, added or removed. */
