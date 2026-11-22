@@ -48,11 +48,11 @@ needs to see and correct them on the web.
 
 | # | Status | Criterion | Scope | Threshold |
 |---|---|---|---|---|
-| **AC1** | ⬜ | Javear edits several expenses in a grid, adds one and deletes one, saves once; a reload shows the changes | 1, 3, 5, 6 | Shown live |
+| **AC1** | 🟡 | Javear edits several expenses in a grid, adds one and deletes one, saves once; a reload shows the changes | 1, 3, 5, 6 | Shown live |
 | **AC2** | ⬜ | Javear opens a recipe as a document, changes a field, an ingredient line and a step, adds a step, saves once; a reload shows the changes | 2, 3, 5, 7 | Shown live |
 | **AC3** | ⬜ | A record changed after it was read is refused (`409`) and the grid or document re-reads, naming what moved | 1, 2, 5, 6, 7 | Tests through the route, and once live |
 | **AC4** | 🟡 | A field or table the policy does not open is refused whole on the server, and the web offers no edit control for it | 3, 5, 6, 7 | Tests through the route |
-| **AC5** | ⬜ | Every direct edit leaves a `PGC_ChangeLog` row with each field's old and new value | 4, 5 | Read back after AC1 and AC2 |
+| **AC5** | 🟡 | Every direct edit leaves a `PGC_ChangeLog` row with each field's old and new value | 4, 5 | Read back after AC1 and AC2 |
 | **AC6** | ⬜ | `/d/recipes` lists the recipes and opens one as a document | 7, 8 | Shown live |
 | **AC7** | 🟡 | Each new endpoint is in `openapi.yaml` before it is built, its own commit, bumping the spec's version; every refusal is tested through its route | all | Review as each lands, and tests |
 | **AC8** | ⬜ | No view switch offers `list`; Inventory's panel opens as a grid | 9 | Shown live |
