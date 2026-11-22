@@ -11,7 +11,8 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert                                  from 'node:assert/strict';
 import pg                                      from 'pg';
 
-import { handle, checkRowWrites, findVersionConflicts, fieldChanges } from '../../src/serv/table.mjs';
+import { handle, checkRowWrites }              from '../../src/serv/table.mjs';
+import { findVersionConflicts, fieldChanges } from '../../src/serv/row-writes.mjs';
 
 const V1 = '2026-11-21 10:02:11.120391+00';
 const V2 = '2026-11-22 09:14:03.551210+00';   // the save's transaction time

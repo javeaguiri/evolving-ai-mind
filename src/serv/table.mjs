@@ -27,12 +27,15 @@
 //     (SELECT/WITH-only, keyword-denylisted, same guard as createView's selectSql) for
 //     ad hoc read-only validation queries — never write-capable
 
-import { randomUUID } from 'node:crypto';
-import { ok, err, respond } from '../shared/lambda-utils.mjs';
+import { ok, err }    from '../shared/lambda-utils.mjs';
 import { getClient }  from './init-brain.mjs';
 import { embedText }  from '../shared/embed-client.mjs';
 import { validateReadOnlySql } from './schema.mjs';
 import { normalizeOrderBy, buildOrderClause, resolveReadLimit, resolveReadOffset } from './query-utils.mjs';
+import {
+  resolveEmbedding, getEmbedColumns, checkRowWriteLists, checkChangeLog, writeCount, writtenRows,
+  checkWriteColumns, refusedKind, findVersionConflicts, lockRows, writeRows, writeChangeLog, versionConflict,
+} from './row-writes.mjs';
 
 // ---------------------------------------------------------------------------
 // Allowed filter operators — security gate.
@@ -298,90 +301,6 @@ async function getRows(req) {
     await pgdClient?.end();
     await pgcClient.end();
   }
-}
-
-// ---------------------------------------------------------------------------
-// normalizeEmbedText — clean a single field value for embedding
-// ---------------------------------------------------------------------------
-
-/**
- * Convert a row field value to a normalised text fragment for embedding.
- * Underscores are replaced with spaces so snake_case identifiers (domain names,
- * alias keys) are tokenised correctly by the embedding model.
- *
- * @param {*} v  Raw field value from row
- * @returns {string}
- */
-function normalizeEmbedText(v) {
-  if (v === null || v === undefined) return '';
-  let text;
-  if (Array.isArray(v)) {
-    text = v.map(item => String(item ?? '')).join(' ');
-  } else if (typeof v === 'object') {
-    // jsonb objects not caught by Array.isArray — unlikely in embed_source
-    // but handled defensively by extracting string values only.
-    text = Object.values(v).filter(x => typeof x === 'string').join(' ');
-  } else {
-    text = String(v);
-  }
-  return text.replace(/_/g, ' ');
-}
-
-// ---------------------------------------------------------------------------
-// resolveEmbedding — build focused embed text from array source fields only
-// ---------------------------------------------------------------------------
-
-/**
- * Build a single normalised text string from array-type embed_source fields
- * (e.g. aliases) and embed it as one unit via embedText().
- *
- * Only array fields are used. Scalar fields (domain name, description) are
- * excluded because:
- *   - domain is already represented in the aliases
- *   - description is generic system text ("Manage your data") that pulls the
- *     centroid away from the user-vocabulary terms in the aliases
- *
- * If no array fields are found, falls back to all fields concatenated.
- * This keeps the document tightly focused on what users would type.
- *
- * @param {{ name: string, embed_source: string[] }} vectorCol
- * @param {object} row  Complete row data (merged current + updates for updateRows)
- * @param {string} traceId
- * @returns {Promise<number[]>}
- */
-async function resolveEmbedding(vectorCol, row, traceId) {
-  // Prefer array fields (aliases) — they are the user-vocabulary source of truth.
-  const arrayTexts = [];
-  const scalarTexts = [];
-
-  for (const key of vectorCol.embed_source) {
-    const v = row[key];
-    if (v === null || v === undefined) continue;
-    if (Array.isArray(v)) {
-      arrayTexts.push(normalizeEmbedText(v));
-    } else {
-      scalarTexts.push(normalizeEmbedText(v));
-    }
-  }
-
-  const parts = arrayTexts.length > 0 ? arrayTexts : scalarTexts;
-  const text  = parts.join(' ').replace(/\s+/g, ' ').trim();
-
-  if (!text) return null;
-  return embedText(text, traceId);
-}
-
-/**
- * Return vector columns that have embed_source defined in their schema definition.
- * These are automatically populated by SERV on insert/update.
- *
- * @param {object[]} schemaColumns  Columns array from PGC_Schema
- * @returns {object[]}
- */
-function getEmbedColumns(schemaColumns) {
-  return schemaColumns.filter(
-    c => c.type?.startsWith('vector') && Array.isArray(c.embed_source) && c.embed_source.length > 0
-  );
 }
 
 /**
@@ -971,142 +890,30 @@ async function upsertRows(req) {
 // ---------------------------------------------------------------------------
 // POST /serv/table/saveRows
 //
-// A grid's save. Rows to change or remove are locked and their versions compared before
-// anything is written; one that moved fails the whole save with 409. With changeLog, every
-// row written is logged to PGC_ChangeLog in the same transaction, through the same
-// connection — PGC and PGD are one database (arch-data.md §4.3.7).
+// A grid's save: one table's changed, new and removed rows in one transaction, each checked
+// against the version it was read at, optionally logged (row-writes.mjs).
 // ---------------------------------------------------------------------------
-
-// A version is updated_at as PostgreSQL text, to the microsecond (`updated_at::text`).
-const VERSION_TEXT   = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{1,6})?[+-]\d{2}(:\d{2}){0,2}$/;
-const SYSTEM_COLUMNS = new Set(['id', 'created_at', 'updated_at']);
-
-const isRecord = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 /**
  * The request's shape, before anything is read: an error string, or null.
  * Pure — exported for test.
  */
 export function checkRowWrites(body) {
-  const { tableName, update = [], insert = [], delete: remove = [], changeLog } = body ?? {};
+  const { tableName, changeLog } = body ?? {};
   if (typeof tableName !== 'string' || !/^PGD_[A-Za-z][A-Za-z0-9_]*$/.test(tableName)) {
     return 'tableName must name a PGD_ table';
   }
-  for (const [key, list] of [['update', update], ['insert', insert], ['delete', remove]]) {
-    if (!Array.isArray(list)) return `${key} must be an array`;
-  }
-  if (update.length + insert.length + remove.length === 0) {
-    return 'nothing to write — update, insert and delete are all empty';
-  }
-  const versioned = (r, at) => {
-    if (!isRecord(r) || !Number.isInteger(r.id)) return `${at}.id must be an integer`;
-    if (typeof r.version !== 'string' || !VERSION_TEXT.test(r.version)) {
-      return `${at}.version must be the version the row was read at (updated_at as text)`;
-    }
-    return null;
-  };
-  for (const [i, r] of update.entries()) {
-    const e = versioned(r, `update[${i}]`);
-    if (e) return e;
-    if (!isRecord(r.changes) || Object.keys(r.changes).length === 0) {
-      return `update[${i}].changes must be an object with at least one column`;
-    }
-  }
-  for (const [i, r] of insert.entries()) {
-    if (!isRecord(r) || Object.keys(r).length === 0) return `insert[${i}] must be an object with at least one column`;
-  }
-  for (const [i, r] of remove.entries()) {
-    const e = versioned(r, `delete[${i}]`);
-    if (e) return e;
-  }
-  const ids = [...update, ...remove].map(r => r.id);
-  const twice = ids.find((id, i) => ids.indexOf(id) !== i);
-  if (twice !== undefined) return `row ${twice} appears more than once`;
-  if (changeLog !== undefined) {
-    if (!isRecord(changeLog)) return 'changeLog must be an object';
-    if (changeLog.via !== 'web') return 'changeLog.via must be "web"';
-    if (typeof changeLog.domain !== 'string' || !changeLog.domain) return 'changeLog.domain is required';
-    if (changeLog.actor != null && typeof changeLog.actor !== 'string') return 'changeLog.actor must be a string or null';
-    if (changeLog.runId != null && !Number.isInteger(changeLog.runId)) return 'changeLog.runId must be an integer or null';
-  }
-  return null;
-}
-
-/**
- * The columns a save writes, against the table's schema: an error string, or null. A table
- * without updated_at has no versions; system and vector columns are never written directly.
- * Pure — exported for test.
- */
-export function checkWriteColumns(body, schemaColumns) {
-  const types = new Map(schemaColumns.map(c => [c.name, c.type]));
-  if (!types.has('updated_at')) return `"${body.tableName}" has no updated_at column — it accepts no versioned writes`;
-  const writes = [
-    ...(body.update ?? []).map((r, i) => [`update[${i}].changes`, r.changes]),
-    ...(body.insert ?? []).map((r, i) => [`insert[${i}]`, r]),
-  ];
-  for (const [at, row] of writes) {
-    for (const col of Object.keys(row)) {
-      if (!types.has(col)) return `${at}: column "${col}" not found in schema for "${body.tableName}"`;
-      if (SYSTEM_COLUMNS.has(col) || types.get(col)?.startsWith('vector')) {
-        return `${at}: column "${col}" is maintained by the system`;
-      }
-    }
-  }
-  return null;
-}
-
-/**
- * The rows that moved since they were read — gone, or at another version.
- * Pure — exported for test.
- *
- * @param {string} tableName
- * @param {{ id: number, version: string }[]} claimed  the rows to change or remove, as read
- * @param {Map<number, { version: string }>} current  the same rows now, locked
- */
-export function findVersionConflicts(tableName, claimed, current) {
-  return claimed.flatMap(({ id, version }) => {
-    const now = current.get(id);
-    if (!now)                    return [{ table: tableName, id, reason: 'deleted' }];
-    if (now.version !== version) return [{ table: tableName, id, reason: 'changed' }];
-    return [];
-  });
-}
-
-/**
- * A change log row's `changes`: each field's old and new value — an insert new only, a delete
- * old only, an update the columns it set whose value differs. Rows are as `to_jsonb` gives
- * them, so a timestamp keeps its microseconds. `skip` holds updated_at and vector columns.
- * Pure — exported for test.
- */
-export function fieldChanges(operation, oldRow, newRow, skip, columns) {
-  const changes = {};
-  if (operation === 'insert') {
-    for (const [col, v] of Object.entries(newRow)) if (!skip.has(col)) changes[col] = { new: v };
-  } else if (operation === 'delete') {
-    for (const [col, v] of Object.entries(oldRow)) if (!skip.has(col)) changes[col] = { old: v };
-  } else {
-    for (const col of columns) {
-      if (skip.has(col)) continue;
-      const before = oldRow[col] ?? null;
-      const after  = newRow[col] ?? null;
-      if (JSON.stringify(before) !== JSON.stringify(after)) changes[col] = { old: before, new: after };
-    }
-  }
-  return changes;
-}
-
-/** A value as pg takes it for a column: objects, and strings bound for jsonb, as JSON text. */
-function toParam(v, colType) {
-  if (v !== null && typeof v === 'object') return JSON.stringify(v);
-  if (typeof v === 'string' && colType === 'jsonb') return JSON.stringify(v);
-  return v;
+  const listError = checkRowWriteLists(body);
+  if (listError) return listError;
+  if (writeCount(body) === 0) return 'nothing to write — update, insert and delete are all empty';
+  return checkChangeLog(changeLog);
 }
 
 async function saveRows(req) {
   const shapeError = checkRowWrites(req.body);
   if (shapeError) return err(400, shapeError, req.correlationId);
 
-  const { tableName, update = [], insert = [], delete: remove = [], changeLog } = req.body;
+  const { tableName, update = [], delete: remove = [], changeLog } = req.body;
 
   const pgcClient = getClient(process.env.PGC_DATABASE_URL);
   let   pgdClient = null;
@@ -1125,123 +932,45 @@ async function saveRows(req) {
     if (gate.rows.length === 0) {
       return err(404, `Table "${tableName}" not registered in PGC_TableMap`, req.correlationId);
     }
-    const { allow_insert, allow_update, allow_delete, target, columns: schemaColumns } = gate.rows[0];
-    for (const [kind, rows, allowed] of [['UPDATE', update, allow_update], ['INSERT', insert, allow_insert], ['DELETE', remove, allow_delete]]) {
-      if (rows.length > 0 && !allowed) return err(403, `${kind} not permitted on "${tableName}"`, req.correlationId);
-    }
+    const { target, columns: schemaColumns } = gate.rows[0];
+    const refused = refusedKind(req.body, gate.rows[0]);
+    if (refused) return err(403, `${refused} not permitted on "${tableName}"`, req.correlationId);
 
-    const columnError = checkWriteColumns(req.body, schemaColumns);
+    const columnError = checkWriteColumns(tableName, writtenRows(req.body), schemaColumns);
     if (columnError) return err(400, columnError, req.correlationId);
-
-    const colTypeMap = Object.fromEntries(schemaColumns.map(c => [c.name, c.type]));
-    const embedCols  = getEmbedColumns(schemaColumns);
-    const skip       = new Set(['updated_at', ...schemaColumns.filter(c => c.type?.startsWith('vector')).map(c => c.name)]);
 
     if (target === 'pgd') pgdClient = getClient(process.env.PGD_DATABASE_URL);
     const dbClient = pgdClient ?? pgcClient;
     if (target === 'pgd') await dbClient.connect();
 
-    // Each written row comes back whole, with its new version and as to_jsonb for the log.
-    const returning = `RETURNING t.*, t."updated_at"::text AS "_version", to_jsonb(t) AS "_json"`;
-    const withEmbeddings = async (row, changed) => {
-      const effective = { ...changed };
-      for (const vc of embedCols) {
-        if (!vc.embed_source.some(k => k in changed)) continue;
-        const vec = await resolveEmbedding(vc, { ...row, ...changed }, req.correlationId);
-        if (vec !== null) effective[vc.name] = vec;
-      }
-      return effective;
-    };
-
-    const updated  = [];
-    const inserted = [];
-    const logRows  = [];
-
     try {
       await dbClient.query('BEGIN');
 
       // --- Lock the rows to change or remove, and compare their versions ---
-      const current = new Map();
-      const claimed = [...update, ...remove];
-      if (claimed.length > 0) {
-        const locked = await dbClient.query(
-          `SELECT to_jsonb(t) AS "row", t."updated_at"::text AS "version"
-             FROM "${tableName}" AS t WHERE t."id" = ANY($1) FOR UPDATE`,
-          [claimed.map(r => r.id)]
-        );
-        for (const { row, version } of locked.rows) current.set(row.id, { row, version });
-      }
+      const claimed   = [...update, ...remove];
+      const current   = await lockRows(dbClient, tableName, claimed.map(r => r.id));
       const conflicts = findVersionConflicts(tableName, claimed, current);
       if (conflicts.length > 0) {
         await dbClient.query('ROLLBACK');
         console.info(`table saveRows: version conflict on ${tableName}`, { conflicts });
-        return respond(409, { success: false, error: 'version_conflict', conflicts, correlationId: req.correlationId }, req.correlationId);
+        return versionConflict(conflicts, req.correlationId);
       }
 
-      for (const { id, changes } of update) {
-        const old       = current.get(id).row;
-        const effective = await withEmbeddings(old, changes);
-        const cols      = Object.keys(effective);
-        const result    = await dbClient.query(
-          `UPDATE "${tableName}" AS t SET ${cols.map((c, i) => `"${c}" = $${i + 1}`).join(', ')}
-            WHERE t."id" = $${cols.length + 1} ${returning}`,
-          [...cols.map(c => toParam(effective[c], colTypeMap[c])), id]
-        );
-        const { _json, ...row } = result.rows[0];
-        updated.push(row);
-        logRows.push({ id, operation: 'update', changes: fieldChanges('update', old, _json, skip, Object.keys(changes)) });
-      }
-
-      for (const raw of insert) {
-        const effective = await withEmbeddings({}, raw);
-        const cols      = Object.keys(effective);
-        const result    = await dbClient.query(
-          `INSERT INTO "${tableName}" AS t (${cols.map(c => `"${c}"`).join(', ')})
-           VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')}) ${returning}`,
-          cols.map(c => toParam(effective[c], colTypeMap[c]))
-        );
-        const { _json, ...row } = result.rows[0];
-        inserted.push(row);
-        logRows.push({ id: row.id, operation: 'insert', changes: fieldChanges('insert', null, _json, skip) });
-      }
-
-      if (remove.length > 0) {
-        await dbClient.query(`DELETE FROM "${tableName}" WHERE "id" = ANY($1)`, [remove.map(r => r.id)]);
-        for (const { id } of remove) {
-          logRows.push({ id, operation: 'delete', changes: fieldChanges('delete', current.get(id).row, null, skip) });
-        }
-      }
-
-      // --- The log, in the same transaction: an update that changed nothing is not a change ---
-      let batchId;
-      const logged = logRows.filter(r => Object.keys(r.changes).length > 0);
-      if (changeLog && logged.length > 0) {
-        batchId = randomUUID();
-        const values = [];
-        const tuples = logged.map(r => {
-          values.push(batchId, changeLog.actor ?? null, changeLog.via, changeLog.runId ?? null, changeLog.domain,
-                      tableName, String(r.id), r.operation, JSON.stringify(r.changes));
-          const at = values.length - 9;
-          return `(${Array.from({ length: 9 }, (_, i) => `$${at + i + 1}`).join(', ')})`;
-        });
-        await dbClient.query(
-          `INSERT INTO "PGC_ChangeLog"
-             (batch_id, actor, via, run_id, domain, table_name, record_id, operation, changes)
-           VALUES ${tuples.join(', ')}`,
-          values
-        );
-      }
+      const written = await writeRows(dbClient, {
+        tableName, schemaColumns, writes: req.body, current, correlationId: req.correlationId,
+      });
+      const batchId = await writeChangeLog(dbClient, changeLog, written.log);
 
       await dbClient.query('COMMIT');
 
-      console.info(`table: saved ${tableName} — updated ${updated.length}, inserted ${inserted.length}, deleted ${remove.length}`);
+      console.info(`table: saved ${tableName} — updated ${written.updated.length}, inserted ${written.inserted.length}, deleted ${written.deleted.length}`);
       return ok({
         success:       true,
         tableName,
         ...(batchId ? { batchId } : {}),
-        updated:       truncateVectorColumns(updated, schemaColumns),
-        inserted:      truncateVectorColumns(inserted, schemaColumns),
-        deleted:       remove.map(r => r.id),
+        updated:       truncateVectorColumns(written.updated, schemaColumns),
+        inserted:      truncateVectorColumns(written.inserted, schemaColumns),
+        deleted:       written.deleted,
         correlationId: req.correlationId,
       }, req.correlationId);
     } catch (innerError) {
