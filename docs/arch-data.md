@@ -1068,6 +1068,7 @@ DML executor gated by `PGC_TableMap`. All four operations live.
 | `/api/v1/serv/table/insertRow` | POST | Single INSERT RETURNING * — gated by `allow_insert` |
 | `/api/v1/serv/table/updateRows` | POST | Parameterised UPDATE RETURNING * — gated by `allow_update` |
 | `/api/v1/serv/table/deleteRows` | POST | Parameterised DELETE — gated by `allow_delete` |
+| `/api/v1/serv/table/saveRows` | POST | A grid's save (Sprint 19): `update`, `insert`, `delete` in one transaction. Rows to change or remove are read `FOR UPDATE` and their versions (`updated_at::text`, from `getRows` `withVersion`) compared first; any that moved fail the whole save with `409 version_conflict` naming them. Gated by `allow_*` per kind present; system and vector columns refused; a table without `updated_at` refused. With `changeLog`, each written row is logged to `PGC_ChangeLog` in the same transaction, one `batch_id` per save; an update that changed no value is not logged |
 
 Security gate on all operations:
 - Table must be registered in `PGC_TableMap`
