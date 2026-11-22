@@ -27,7 +27,7 @@ needs to see and correct them on the web.
 | **AA — the change log** (Javear: more general than a record-edit table) | `PGC_ChangeLog` in place of the designed `PGC_RecordEdit`: one row per change to a record — who (`actor`), how it came (`via`), a nullable `run_id`, the domain, table and record, the operation, each field's old and new value. Shaped for any source; this sprint writes the web's direct edits only — workflow writes stay traced by their run steps until logging them is wanted. Column names settle at the spec |
 | **AB — where the edit policy lives** (Javear, 2026-11-22) | Its own table, `PGC_EditPolicy`, one row per `PGD_` table: `columns` (`{ "<col>": true }`), `add`, `delete` — not inside `PGC_Schema`, which describes a table's shape shared by every home. Kept open for tenancy (a `tenant` column: none is a domain's default, a home's row overrides) and for roles (`true` becomes a list of roles); checked by one pure function given the whole principal; system-maintained columns never opened by any row. `arch-home-brain.md` §4.8 corrected |
 | **The save shapes** (Javear, 2026-11-22) | `withVersion` on `getRows` and `getEntity` gives each row `_version`, `updated_at::text`; `getEntity` then also returns `children` by table name — a joined table whose registered foreign key references the root. `POST /serv/table/saveRows` and `POST /serv/entity/saveEntity`: rows read `FOR UPDATE`, versions compared, `409 version_conflict` naming the rows, nothing written. Any document save touches the root's `updated_at`, so the root's version is the document's. SERV writes `PGC_ChangeLog` in the same transaction from a `changeLog` the caller passes (`actor`, `via`, `runId`, `domain`), one `batch_id` per save |
-| **Versions** | A record's version is its `updated_at`. Every PGD table has one, kept by `set_updated_at` (checked 2026-11-22, all 14 tables); a table without it accepts no direct edits |
+| **Versions** (Javear, 2026-11-22: stay with `updated_at`) | Optimistic locking: read without a lock, the version sent back with the save, checked under a short `FOR UPDATE` inside the save's transaction — which also yields the old values for the change log. An integer `row_version` per table was offered (no clock in the question) and not chosen: `set_updated_at` sets `now()`, the transaction's start, and a miss needs a write whose transaction began in the microsecond that made the version read. A record's version is its `updated_at`. Every PGD table has one, kept by `set_updated_at` (checked 2026-11-22, all 14 tables); a table without it accepts no direct edits |
 | **Names** | The registry says entity (`PGC_EntitySchema`); a person reads *document* |
 
 ## Scope
@@ -86,3 +86,9 @@ table checked for `updated_at` and its `set_updated_at` trigger — all 14 have 
 (`PGC_EditPolicy`) and the save shapes agreed; spec 3.12.0 written with the design docs
 (`arch-data.md` §4.3.7 `PGC_ChangeLog` and `PGC_EditPolicy` replacing `PGC_RecordEdit`,
 `arch-home-brain.md` §4.8, `arch-web-app.md` §6.3–6.4).
+
+**Next (session 2):** item 1. First `PGC_ChangeLog` — template, `seed_PGC_Schema.json`, created
+live through SERV `createTable` (never bootstrap). Then `withVersion` on `getRows` and `saveRows`
+in SERV per spec 3.12.0, tests through the real route against a stubbed database client: a clean
+save, a conflict rolling everything back, each refusal, the log rows. Unit tests before push.
+
