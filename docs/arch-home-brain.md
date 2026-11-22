@@ -325,7 +325,7 @@ artifact beside the table's `PGC_Schema` row:
 | Level | Declares | Where |
 |---|---|---|
 | **Field** | Open to direct edits, or not | `PGC_EditPolicy.columns` — a column named `true` is open |
-| **Table** | Whether direct add and direct delete are allowed | `PGC_EditPolicy.add`, `.delete` |
+| **Table** | Whether direct add and direct delete are allowed | `PGC_EditPolicy.add_rows`, `.delete_rows` |
 
 Illustrations: flashcard front and back are editable while session results are read-only; a
 portfolio's holdings are editable, with add and delete allowed; a session table allows neither.

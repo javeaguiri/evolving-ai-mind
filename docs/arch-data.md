@@ -781,12 +781,15 @@ The household's rows are written from `household/edit-policy.json`.
 | id | serial PK | |
 | table_name | text UNIQUE | The `PGD_` table |
 | columns | jsonb | `{ "<column>": true }` — the columns open to direct edits |
-| add | boolean | Rows may be added directly. Default false |
-| delete | boolean | Rows may be removed directly. Default false |
-| created_at, updated_at | timestamptz | |
+| add_rows | boolean | Rows may be added directly. Default false |
+| delete_rows | boolean | Rows may be removed directly. Default false |
+| created_at, updated_at | timestamptz | `updated_at` kept by `set_updated_at` |
 
-Columns the system maintains — `id`, `created_at`, `updated_at`, vector columns, the soft-delete
-column — are never editable directly, whatever a row says.
+Columns the system maintains — `id`, `created_at`, `updated_at`, vector columns — are never
+editable directly, whatever a row says (`src/proc/edit-policy.mjs` `systemMaintained`). A table
+without `updated_at` has no versions and no row may open it. Written by
+`dev_scripts/upsert-edit-policy.mjs` from `household/edit-policy.json` — there is no system seed,
+a policy naming a household's tables.
 
 ##### Changes to existing tables
 
@@ -827,7 +830,7 @@ edits (`arch-home-brain.md` §4.8).
 | 17 | PGC_UiMessage | Web app inbox — every message to a person, all providers; see §4.3.7. Built Sprint 16 |
 | 18 | PGC_ChangeLog | One row per change to a record — the web's direct edits; see §4.3.7. Template and registry Sprint 19 |
 | 19 | PGC_Page | The household's pages of panels — the web app's navigation; see §4.3.7. Built Sprint 16 |
-| 20 | PGC_EditPolicy | What the web may change directly, per table; see §4.3.7. **Sprint 19, not yet built** |
+| 20 | PGC_EditPolicy | What the web may change directly, per table; see §4.3.7. Built Sprint 19 |
 | — | PGC_WorkflowStats | SQL view — not a physical table |
 
 **Total: 18 physical PGC tables (14 bootstrapped + 2 session added in v3.2 + 2 web app added in

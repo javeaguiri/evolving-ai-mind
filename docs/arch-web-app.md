@@ -656,7 +656,7 @@ registry fact.
 | `default_filter` | Table | The filter a grid opens on — e.g. the current month |
 
 The edit policy (`arch-home-brain.md` §4.8) sits beside it, in `PGC_EditPolicy`: the columns open
-to direct edits, and add and delete, per table.
+to direct edits, and `add_rows` and `delete_rows`, per table.
 
 ### 6.4 Saving
 

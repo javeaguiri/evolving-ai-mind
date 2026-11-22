@@ -8,3 +8,4 @@ data never appears in system artifacts). Committed so it is versioned and review
 |---|---|---|
 | `pages.json` | `PGC_Page` — the web app's Home, Money and Inventory pages (`docs/arch-web-app.md` §2.3, §4.2) | `node dev_scripts/upsert-page.mjs household/pages.json` (`--check` to validate against the live registry and write nothing) |
 | `domains.json` | `PGC_DomainHelp.display` — each domain's name in the web app's *Domains* menu (`docs/arch-web-app.md` §3.1) | `node dev_scripts/upsert-domain-display.mjs household/domains.json` (`--check` to compare with the live rows and write nothing) |
+| `edit-policy.json` | `PGC_EditPolicy` — per table, the columns the web may change directly, and whether it may add and delete rows (`docs/arch-home-brain.md` §4.8). A table not listed is read-only | `node dev_scripts/upsert-edit-policy.mjs household/edit-policy.json` (`--check` to validate against the live registry and write nothing) |
