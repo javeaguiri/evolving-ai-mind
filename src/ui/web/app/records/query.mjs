@@ -4,15 +4,15 @@
 // src/ui/web/app/records/query.mjs
 //
 // A records panel's decisions (docs/arch-web-app.md §4.2), pure: what to ask GET /sources for,
-// which columns each view shows and how they are labelled, and which view the panel opens on.
+// which columns the grid shows and how they are labelled, and which view the panel opens on.
 // One config serves every view, and no view needs an option: each falls back to the registry —
 // the columns read, the table's label column (pickLabelColumn, the rule PROC uses).
 
-import { pickLabelColumn, isReadableColumn } from '../../../../shared/schema-utils.mjs';
+import { pickLabelColumn }    from '../../../../shared/schema-utils.mjs';
 import { resolveLanguageMap }                 from '../../../../shared/language-map.mjs';
 
-/** The views every records panel offers. */
-export const RECORD_VIEWS = ['grid', 'list'];
+/** The view every records panel offers. */
+export const RECORD_VIEWS = ['grid'];
 
 /** An entity's records also open as a document: its root and child tables together (§6.2). */
 export const DOCUMENT_VIEW = 'document';
@@ -24,7 +24,7 @@ function columnSpecs(config) {
 
 /**
  * The query for GET /sources/{source}/rows. With `columns` named, only those are read — and any a
- * currency or the list view needs besides; with none, the read's own default (every readable column).
+ * currency or a record's title needs besides; with none, the read's own default (every readable column).
  * Read for editing, each row also carries its `id` and version: an edit addresses a row by both.
  *
  * @param {object} config  A records panel's config
@@ -38,7 +38,7 @@ export function rowsRequest(config, offset = 0, withVersion = false) {
     ...(withVersion ? ['id'] : []),
     ...specs.map(s => s.name),
     ...specs.map(s => s.currency_column).filter(Boolean),
-    ...[config.title_column, ...(config.detail_columns ?? [])].filter(Boolean),
+    ...[config.title_column].filter(Boolean),
   ])];
   return {
     source: config.source ?? config.entity,
@@ -105,18 +105,15 @@ export function mergeColumns(config, read, language) {
 }
 
 /**
- * The list view's title and up to two details: the panel's `title_column` and `detail_columns`,
- * else the table's label column and the next readable columns the grid shows.
+ * The column that titles a record shown alone — the record drawer's heading: the panel's
+ * `title_column`, else the table's label column.
  *
  * @param {object} config
  * @param {object[]} columns  mergeColumns' result
- * @returns {{ title: string|null, details: string[] }}
+ * @returns {string|null}
  */
-export function listFields(config, columns) {
-  const title   = config.title_column ?? pickLabelColumn(columns);
-  const details = config.detail_columns
-    ?? columns.filter(c => c.shown && c.name !== title && isReadableColumn(c)).slice(0, 2).map(c => c.name);
-  return { title, details };
+export function titleColumn(config, columns) {
+  return config.title_column ?? pickLabelColumn(columns);
 }
 
 /**

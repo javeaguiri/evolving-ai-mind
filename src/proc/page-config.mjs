@@ -21,7 +21,7 @@
 import { isLabel } from './workflow-display.mjs';
 
 export const PANEL_WIDTHS = ['1/3', '1/2', '2/3', 'full'];
-export const VIEWS        = ['grid', 'list', 'document'];
+export const VIEWS        = ['grid', 'document'];
 export const WIDGETS      = ['chart', 'metric', 'report'];
 const CHART_KINDS = ['bar', 'line', 'pie'];
 export const COLUMN_FORMATS = ['currency', 'percent', 'date'];
@@ -29,7 +29,7 @@ const COLUMN_KEYS = ['name', 'label', 'format', 'currency_column', 'currency'];
 
 const KIND_KEYS = {
   workflow: ['workflow', 'domain', 'limit', 'show_output'],
-  records:  ['source', 'entity', 'view', 'columns', 'filter', 'order_by', 'limit', 'title_column', 'detail_columns', 'picker_column'],
+  records:  ['source', 'entity', 'view', 'columns', 'filter', 'order_by', 'limit', 'title_column', 'picker_column'],
   minds_eye: ['domain', 'topic'],
 };
 const WIDGET_KEYS = {
@@ -48,7 +48,7 @@ const isWhole = (v, min, max) => Number.isInteger(v) && v >= min && v <= max;
  * @param {'table'|'view'|'entity'} type
  */
 export function viewsFor(type) {
-  return type === 'view' ? ['grid', 'list'] : VIEWS;
+  return type === 'view' ? ['grid'] : VIEWS;
 }
 
 /**
@@ -170,7 +170,7 @@ function recordsProblems(config, registry, report) {
   unknownKeys(config, KIND_KEYS.records, report);
   const source = resolveSource(config, registry, report, { entityAllowed: true });
   if (!source) return;
-  const { view, columns, limit, title_column: titleColumn, detail_columns: detailColumns, picker_column: pickerColumn } = config;
+  const { view, columns, limit, title_column: titleColumn, picker_column: pickerColumn } = config;
 
   if (view !== undefined && !viewsFor(source.type).includes(view)) {
     report(`view is one of ${viewsFor(source.type).join(', ')} for a ${source.type}`);
@@ -182,10 +182,6 @@ function recordsProblems(config, registry, report) {
     if (value === undefined) continue;
     if (!isText(value)) report(`${key} is a column name`);
     else columnProblems([value], source, report);
-  }
-  if (detailColumns !== undefined) {
-    if (!Array.isArray(detailColumns)) report('detail_columns is an array');
-    else columnProblems(detailColumns, source, report);
   }
 }
 

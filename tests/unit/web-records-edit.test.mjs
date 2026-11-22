@@ -242,7 +242,7 @@ describe('drawn', () => {
 
   it('view mode shows a foreign key by the label of the row it names', () => {
     const html = ui.renderToString(ui.createElement(ui.RecordsBody, {
-      config: { source: 'PGD_X', columns: ['title', 'kind_id'] }, view: 'grid', where, onOpen() {}, options,
+      config: { source: 'PGD_X', columns: ['title', 'kind_id'] }, where, onOpen() {}, options,
       body: { columns: [{ name: 'title', type: 'varchar', label: 'Title' }, { name: 'kind_id', type: 'integer', label: 'Kind' }], rows: ROWS, more: false },
     }));
     assert.match(html, /<th scope="col">Title<\/th><th scope="col">Kind<\/th>/);

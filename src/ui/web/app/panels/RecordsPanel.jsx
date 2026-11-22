@@ -3,13 +3,12 @@
 // See LICENSE file in the project root for full license terms.
 // src/ui/web/app/panels/RecordsPanel.jsx
 //
-// A records panel (docs/arch-web-app.md §4.2, §9), read-only in Phase 0: a table, view or entity
-// read through GET /sources/{source}/rows, shown in one view at a time — grid or list — with the
-// switch in its header. The viewer's choice is remembered per panel in this browser and never
-// changes the page. A long read scrolls inside the panel, its header in place, and reads on as its
-// end comes into view, a page at a time, until there is no more (*Show more* does the same). A row opens a
-// read-only record drawer beside the page, which follows the next row clicked. A bounded read says
-// so; a source that is gone draws a frame naming it, and the rest of the page draws normally.
+// A records panel (docs/arch-web-app.md §4.2, §9): a table, view or entity read through
+// GET /sources/{source}/rows and shown as a grid. A long read scrolls inside the panel, its header
+// in place, and reads on as its end comes into view, a page at a time, until there is no more
+// (*Show more* does the same). A table's row opens a read-only record drawer beside the page,
+// which follows the next row clicked. A bounded read says so; a source that is gone draws a frame
+// naming it, and the rest of the page draws normally.
 //
 // Edit (§6.1, §6.4): a table whose edit policy opens a column the panel shows, or lets rows be
 // added or removed, offers Edit — the source's schema says so (GET /sources/{source}/schema). In
@@ -17,15 +16,16 @@
 // (records/EditGrid.jsx); Save sends every edit at once (POST /sources/{source}/rows). A refusal
 // names what was refused; a row that moved since it was read is named, its edits dropped, and
 // the rows read again. A foreign key shows the row it names, by its label column, in either mode.
-// An entity's panel also offers Document: one record and its child tables, edited and saved
-// together (records/DocumentView.jsx).
+// An entity's panel also offers Document — one record and its child tables, edited and saved
+// together (records/DocumentView.jsx) — and its row opens there; Grid and Document are its view
+// switch, the viewer's choice remembered per panel in this browser, never changing the page.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation }      from 'react-i18next';
 import { SignInRequired }      from '../auth/session.mjs';
 import { Drawer }              from '../shell/Drawer.jsx';
 import { formatValue, isNumericColumn } from '../records/format.mjs';
-import { rowsRequest, addPageTo, mergeColumns, listFields, initialView, viewKey, RECORD_VIEWS, DOCUMENT_VIEW } from '../records/query.mjs';
+import { rowsRequest, addPageTo, mergeColumns, titleColumn, initialView, viewKey, RECORD_VIEWS, DOCUMENT_VIEW } from '../records/query.mjs';
 import { withSchema, canEdit, noEdits, hasEdits, setCell, addRow, setAddedCell, dropAdded, toggleRemoved, editProblems,
          writesOf, applySaved, afterConflict, movedRows, referenceOptions } from '../records/edits.mjs';
 import { EditGrid }            from '../records/EditGrid.jsx';
@@ -126,7 +126,7 @@ function useSchema(api, config, locale, onSignInRequired) {
  * The end of a read that has more: read on when it scrolls into view (unless the last page was
  * refused — then only the button tries again), or when *Show more* is pressed.
  */
-function MoreRows({ onMore, paging, as: Tag = 'div' }) {
+function MoreRows({ onMore, paging }) {
   const { t } = useTranslation();
   const at = useRef(null);
   useEffect(() => {
@@ -138,11 +138,11 @@ function MoreRows({ onMore, paging, as: Tag = 'div' }) {
     return () => seen.disconnect();
   }, [onMore, paging.failed]);
   return (
-    <Tag ref={at} className="more">
+    <div ref={at} className="more">
       {paging.busy
         ? <span className="muted">{t('shell.loading')}</span>
         : <button type="button" className="btn" onClick={onMore}>{paging.failed ? t('records.moreFailed') : t('records.more')}</button>}
-    </Tag>
+    </div>
   );
 }
 
@@ -153,7 +153,6 @@ function MoreRows({ onMore, paging, as: Tag = 'div' }) {
  * @param {object} props
  * @param {object} props.config
  * @param {{ columns: object[], rows: object[], more: boolean, totalMatching?: number }} props.body
- * @param {'grid'|'list'} props.view
  * @param {{ locale: string, timeZone: string }} props.where
  * @param {(row: object) => void} props.onOpen
  * @param {object|null} [props.selected]  The row the record drawer shows
@@ -161,7 +160,7 @@ function MoreRows({ onMore, paging, as: Tag = 'div' }) {
  * @param {{ busy: boolean, failed: boolean }} [props.paging]
  * @param {Record<string, {value: string, label: string}[]>} [props.options]  A foreign key's rows, by column: shown by label
  */
-export function RecordsBody({ config, body, view, where, onOpen, selected = null, onMore = null, paging = { busy: false, failed: false }, options = {} }) {
+export function RecordsBody({ config, body, where, onOpen, selected = null, onMore = null, paging = { busy: false, failed: false }, options = {} }) {
   const { t, i18n } = useTranslation();
   const columns = mergeColumns(config, body.columns, i18n.language);
   const shown   = columns.filter(c => c.shown);
@@ -173,29 +172,9 @@ export function RecordsBody({ config, body, view, where, onOpen, selected = null
   const footer = body.more && (
     <p className="pfoot">{t('records.showing', { shown: body.rows.length, total: body.totalMatching ?? body.rows.length })}</p>
   );
-  const end = (as) => body.more && onMore && <MoreRows onMore={onMore} paging={paging} as={as} />;
+
   const onKey = row => e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(row); } };
 
-  if (view === 'list') {
-    const { title, details } = listFields(config, columns);
-    const byName = new Map(columns.map(c => [c.name, c]));
-    return (
-      <>
-        <ul className="rlist pbody">
-          {body.rows.map((row, i) => (
-            <li key={row.id ?? i}>
-              <button type="button" onClick={() => onOpen(row)} aria-current={row === selected ? 'true' : undefined}>
-                <span className="rt">{title ? cell(row, byName.get(title)) : ''}</span>
-                <span className="rd">{details.map(d => cell(row, byName.get(d))).filter(Boolean).join(' · ')}</span>
-              </button>
-            </li>
-          ))}
-          {end('li')}
-        </ul>
-        {footer}
-      </>
-    );
-  }
   return (
     <>
       <div className="tablewrap pbody">
@@ -211,7 +190,7 @@ export function RecordsBody({ config, body, view, where, onOpen, selected = null
             ))}
           </tbody>
         </table>
-        {end('div')}
+        {body.more && onMore && <MoreRows onMore={onMore} paging={paging} />}
       </div>
       {footer}
     </>
@@ -312,7 +291,7 @@ export function RecordsPanel({ pageKey, panel, title, context }) {
     <span className="vsw" role="group" aria-label={t('records.view')}>
       {views.map(v => (
         <button key={v} type="button" aria-pressed={v === shownView} onClick={() => choose(v)}>
-          {v === 'grid' ? t('records.grid') : v === 'list' ? t('records.list') : t('records.document')}
+          {v === 'grid' ? t('records.grid') : t('records.document')}
         </button>
       ))}
     </span>
@@ -327,7 +306,7 @@ export function RecordsPanel({ pageKey, panel, title, context }) {
     )
     : (
       <>
-        {viewSwitch}
+        {views.length > 1 && viewSwitch}
         {editable && shownView !== DOCUMENT_VIEW && <button type="button" className="btn sm" onClick={startEditing}>{t('records.edit')}</button>}
       </>
     );
@@ -363,12 +342,12 @@ export function RecordsPanel({ pageKey, panel, title, context }) {
   } else if (state.status === 'failed') {
     body = <p className="muted">{t('records.failed')}</p>;
   } else {
-    body = <RecordsBody config={panel.config} body={state.body} view={shownView} where={where} onOpen={openRow} selected={open}
+    body = <RecordsBody config={panel.config} body={state.body} where={where} onOpen={openRow} selected={open}
       onMore={state.more} paging={state.paging} options={options} />;
   }
 
   const titleOf = row => {
-    const name = listFields(panel.config, columns).title;
+    const name = titleColumn(panel.config, columns);
     const column = columns.find(c => c.name === name);
     return (column && formatValue(row[name], column, row, where)) || title;
   };

@@ -43,8 +43,8 @@ describe('pageProblems — a valid page', () => {
   });
 
   it('a view has no document view', () => {
-    assert.deepEqual(viewsFor('view'), ['grid', 'list']);
-    assert.deepEqual(viewsFor('table'), ['grid', 'list', 'document']);
+    assert.deepEqual(viewsFor('view'), ['grid']);
+    assert.deepEqual(viewsFor('table'), ['grid', 'document']);
   });
 });
 
@@ -58,7 +58,9 @@ describe('pageProblems — refused, not stored', () => {
   });
 
   it('a view that does not fit, and names the registry does not hold', () => {
-    assert.match(problemsOf(panel('records', { source: 'PGD_ItemSummary', view: 'document' }))[0], /view is one of grid, list for a view/);
+    assert.match(problemsOf(panel('records', { source: 'PGD_ItemSummary', view: 'document' }))[0], /view is one of grid for a view/);
+    assert.match(problemsOf(panel('records', { source: 'PGD_Items', view: 'list' }))[0], /view is one of grid, document for a table/, 'the list view is retired');
+    assert.match(problemsOf(panel('records', { source: 'PGD_Items', detail_columns: ['name'] }))[0], /detail_columns/, 'list-only, retired with it');
     assert.match(problemsOf(panel('records', { source: 'PGD_Nope' }))[0], /no table or view "PGD_Nope"/);
     assert.match(problemsOf(panel('records', { source: 'PGD_Items', title_column: 'colour' }))[0], /no column "colour"/);
     assert.match(problemsOf(panel('summary', { widget: 'report', workflow: 'gone' }))[0], /no workflow "gone"/);

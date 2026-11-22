@@ -217,25 +217,8 @@ table.grid tbody tr:hover { background: var(--ground); }
 table.grid tbody tr[aria-selected="true"] { background: var(--accent-soft); }
 table.grid .num { text-align: end; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-.rlist { list-style: none; margin: 0; padding: 0; max-inline-size: 36rem; }   /* a wide panel keeps each detail near its title */
-.rlist button {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  inline-size: 100%;
-  border: 0;
-  border-block-end: 1px solid var(--soft);
-  background: transparent;
-  padding-block: 7px;
-  padding-inline: 2px;
-  text-align: start;
-}
-.rlist button:hover { background: var(--ground); }
-.rlist button[aria-current="true"] { background: var(--accent-soft); }
-.rlist .rd { color: var(--muted); text-align: end; }
 /* a read that has more ends on this: it reads on as it scrolls into view */
 .more { display: flex; justify-content: center; padding-block: 10px; }
-.rlist .more .btn { inline-size: auto; border: 1px solid var(--control); background: var(--paper); padding-inline: 14px; }
 
 .skeleton { display: flex; flex-direction: column; gap: 8px; }
 .skeleton i { display: block; block-size: 14px; border-radius: 4px; background: var(--soft); }

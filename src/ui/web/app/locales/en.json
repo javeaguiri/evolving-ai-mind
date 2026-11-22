@@ -25,7 +25,6 @@
   "records": {
     "view": "View",
     "grid": "Grid",
-    "list": "List",
     "empty": "Nothing here yet",
     "showing": "Showing {shown, number} of {total, number}",
     "more": "Show more",

@@ -9,8 +9,8 @@
       { "id": "budget",        "kind": "workflow", "width": "1/2", "title": "Budget",
         "config": { "workflow": "edit_budget" } },
       { "id": "stock",         "kind": "records",  "width": "full", "title": "Stock",
-        "config": { "source": "PGD_Inventory", "view": "list", "order_by": "name ASC",
-                    "columns": ["name", "quantity", "unit"], "title_column": "name", "detail_columns": ["quantity", "unit"] } }
+        "config": { "source": "PGD_Inventory", "order_by": "name ASC",
+                    "columns": ["name", "quantity", "unit"], "title_column": "name" } }
     ]
   },
   {
