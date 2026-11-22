@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: evolving-mind-ai
-  version: 3.13.0
+  version: 3.14.0
   description: >
     Self-evolving cognitive automation system.
     Slack → Lambda → PostgreSQL → LLM pipeline.
@@ -652,6 +652,28 @@ components:
         parentKey:
           type: string
           description: A child table's column holding its parent's id — set by the server, never edited
+
+    DomainSources:
+      type: object
+      description: >
+        A domain's records, from the registry (docs/arch-web-app.md §4.4): what its domain page
+        draws a records panel for. An entity with child tables — joins whose registered foreign
+        key references its root — is one source and replaces its root table; every other table
+        and view of the domain is its own source, child tables included. Entities first, then
+        tables, then views, each by label.
+      required: [domain, sources]
+      properties:
+        domain: { type: string }
+        sources:
+          type: array
+          items:
+            type: object
+            required: [source, kind, label, labelFallback]
+            properties:
+              source:        { type: string, description: "What GET /sources/{source}/… reads — a table, view or entity name" }
+              kind:          { type: string, enum: [entity, table, view] }
+              label:         { type: string, description: "An entity's by its root table — PGD_Recipes is Recipes" }
+              labelFallback: { type: boolean, description: "true while the label is derived from the table's name (docs/arch-web-app.md §13)" }
 
     SourceSchema:
       type: object
@@ -2007,6 +2029,21 @@ paths:
         '404': { description: source_not_found, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '409': { description: "version_conflict, its conflicts naming what moved", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
 
+  /api/v1/ui/web/domains/{domain}:
+    get:
+      summary: A domain's records — what its domain page draws
+      description: GET /proc/domains/{domain}.
+      operationId: webGetDomain
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      parameters:
+        - { name: domain, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: DomainSources, content: { application/json: { schema: { $ref: '#/components/schemas/DomainSources' } } } }
+        '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
+        '403': { description: household_required, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+
   /api/v1/ui/web/sources/{source}/schema:
     get:
       summary: How a source is laid out, and what the edit policy lets the web change
@@ -2921,6 +2958,26 @@ paths:
         '403': { description: "household_required; not_editable — `fields` names each refusal: { name: '<table>.<column>', problem: column_not_editable } or { name: '<table>', problem: table_not_editable | add_rows | delete_rows }" }
         '404': { description: source_not_found }
         '409': { description: "version_conflict — `conflicts` as SERV's VersionConflict; nothing written" }
+
+  /api/v1/proc/domains/{domain}:
+    get:
+      summary: A domain's records, from the registry — what its domain page draws
+      description: >
+        The domain's tables and views (PGC_Schema.domain) and its entities
+        (PGC_EntitySchema.domain), as DomainSources: an entity with child tables replaces its
+        root table; every other table and view is its own source. Never stored — a household
+        cannot break a domain page by editing it (docs/arch-web-app.md §4.4). A domain with no
+        records is an empty list. The household role is required.
+      operationId: getDomain
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+        - { name: domain, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: DomainSources, content: { application/json: { schema: { $ref: '#/components/schemas/DomainSources' } } } }
+        '401': { description: principal_required }
+        '403': { description: household_required }
 
   /api/v1/proc/sources/{source}/schema:
     get:
