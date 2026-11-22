@@ -4,15 +4,18 @@
 // src/ui/web/app/records/query.mjs
 //
 // A records panel's decisions (docs/arch-web-app.md §4.2), pure: what to ask GET /sources for,
-// which columns each view shows and how they are labelled, and which view the panel opens on.
+// which columns the grid shows and how they are labelled, and which view the panel opens on.
 // One config serves every view, and no view needs an option: each falls back to the registry —
 // the columns read, the table's label column (pickLabelColumn, the rule PROC uses).
 
-import { pickLabelColumn, isReadableColumn } from '../../../../shared/schema-utils.mjs';
+import { pickLabelColumn }    from '../../../../shared/schema-utils.mjs';
 import { resolveLanguageMap }                 from '../../../../shared/language-map.mjs';
 
-/** The views Phase 0 draws; `document` is Phase 1. */
-export const RECORD_VIEWS = ['grid', 'list'];
+/** The view every records panel offers. */
+export const RECORD_VIEWS = ['grid'];
+
+/** An entity's records also open as a document: its root and child tables together (§6.2). */
+export const DOCUMENT_VIEW = 'document';
 
 /** A panel's `columns`, each as { name, label?, format?, … }, or null when it names none. */
 function columnSpecs(config) {
@@ -21,18 +24,21 @@ function columnSpecs(config) {
 
 /**
  * The query for GET /sources/{source}/rows. With `columns` named, only those are read — and any a
- * currency or the list view needs besides; with none, the read's own default (every readable column).
+ * currency or a record's title needs besides; with none, the read's own default (every readable column).
+ * Read for editing, each row also carries its `id` and version: an edit addresses a row by both.
  *
  * @param {object} config  A records panel's config
  * @param {number} [offset] Rows already read — the next page starts after them
+ * @param {boolean} [withVersion] Each row with its version — the grid is being edited
  * @returns {{ source: string, query: Record<string, string|number|undefined> }}
  */
-export function rowsRequest(config, offset = 0) {
+export function rowsRequest(config, offset = 0, withVersion = false) {
   const specs = columnSpecs(config);
   const names = specs && [...new Set([
+    ...(withVersion ? ['id'] : []),
     ...specs.map(s => s.name),
     ...specs.map(s => s.currency_column).filter(Boolean),
-    ...[config.title_column, ...(config.detail_columns ?? [])].filter(Boolean),
+    ...[config.title_column].filter(Boolean),
   ])];
   return {
     source: config.source ?? config.entity,
@@ -42,6 +48,7 @@ export function rowsRequest(config, offset = 0) {
       order_by: config.order_by,
       limit:    config.limit,
       offset:   offset || undefined,
+      ...(withVersion ? { with_version: 'true' } : {}),
     },
   };
 }
@@ -58,10 +65,27 @@ export function appendPage(body, page) {
   return { ...body, rows: [...body.rows, ...page.rows], more: page.more, ...(totalMatching !== undefined ? { totalMatching } : {}) };
 }
 
+/** Columns the system keeps, never shown unless a panel names them (§6.1). */
+const SYSTEM_COLUMNS = new Set(['id', 'created_at', 'updated_at']);
+
+/**
+ * A panel's read with a page added — only to the read the page continues. A page asked for
+ * while the rows were current can arrive after a new read has started (Edit reads the rows
+ * again, with their versions): it belongs to rows that are gone, and is dropped.
+ *
+ * @param {{ status: string, read?: number, body?: object }} state  The panel's read as it stands
+ * @param {object} page   The page that arrived
+ * @param {number} read   The read it continues — the one whose rows asked for it
+ */
+export function addPageTo(state, page, read) {
+  if (state.status !== 'ready' || state.read !== read) return state;
+  return { ...state, body: appendPage(state.body, page) };
+}
+
 /**
  * Every column read, each with the panel's own label and format where it gives them, in the
- * panel's order, then the rest. `shown`: the grid draws it — those the panel names, or every one
- * when it names none.
+ * panel's order, then the rest. `shown`: the grid draws it — those the panel names, or, when it
+ * names none, every one but the system's (§6.1: a key and timestamps are not shown).
  *
  * @param {object} config
  * @param {{ name: string, type: string, label: string }[]} read  The read's `columns`
@@ -76,34 +100,43 @@ export function mergeColumns(config, read, language) {
     label: s.label !== undefined ? resolveLanguageMap(s.label, language) : byName.get(s.name).label,
     shown: true,
   }));
-  const rest = read.filter(c => !named.some(n => n.name === c.name)).map(c => ({ ...c, shown: !specs }));
+  const rest = read.filter(c => !named.some(n => n.name === c.name)).map(c => ({ ...c, shown: !specs && !SYSTEM_COLUMNS.has(c.name) }));
   return [...named, ...rest];
 }
 
 /**
- * The list view's title and up to two details: the panel's `title_column` and `detail_columns`,
- * else the table's label column and the next readable columns the grid shows.
+ * The column that titles a record shown alone — the record drawer's heading: the panel's
+ * `title_column`, else the table's label column.
  *
  * @param {object} config
  * @param {object[]} columns  mergeColumns' result
- * @returns {{ title: string|null, details: string[] }}
+ * @returns {string|null}
  */
-export function listFields(config, columns) {
-  const title   = config.title_column ?? pickLabelColumn(columns);
-  const details = config.detail_columns
-    ?? columns.filter(c => c.shown && c.name !== title && isReadableColumn(c)).slice(0, 2).map(c => c.name);
-  return { title, details };
+export function titleColumn(config, columns) {
+  return config.title_column ?? pickLabelColumn(columns);
 }
 
 /**
  * The view a panel opens on: the viewer's last choice, else the panel's `view`, else `grid` —
- * whichever of them Phase 0 draws.
+ * whichever of them is a view. `document` draws only for an entity, which the panel learns from
+ * its schema; a table falls back to the grid.
  *
  * @param {object} config
  * @param {string|null} remembered
  */
 export function initialView(config, remembered) {
-  return [remembered, config.view, 'grid'].find(v => RECORD_VIEWS.includes(v));
+  return [remembered, config.view, 'grid'].find(v => [...RECORD_VIEWS, DOCUMENT_VIEW].includes(v));
+}
+
+/**
+ * A domain page's records panels (§4.4), one per source GET /domains/{domain} lists, in its order,
+ * each full width, titled by its label, naming its source and nothing else — every view falls
+ * back to the registry.
+ *
+ * @param {{ source: string, label: string }[]} sources
+ */
+export function domainPanels(sources) {
+  return sources.map(s => ({ id: s.source, kind: 'records', width: 'full', title: s.label, config: { source: s.source } }));
 }
 
 /** Where the viewer's choice is kept, per panel, in this browser (§4.2). */

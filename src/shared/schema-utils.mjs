@@ -57,3 +57,34 @@ export function isReadableColumn(column) {
     && !/embedding/i.test(column.name)
     && !UNREADABLE_TYPES.has(String(column.type ?? '').toLowerCase());
 }
+
+/**
+ * An entity's child tables: those of its joins whose registered foreign key references the root
+ * table, each with the column that holds the parent's id. A join without one is not a child
+ * collection. `tables` are PGC_Schema rows (SERV passes them with their PGC_TableMap flags, kept
+ * as `gate`). Shared by SERV's saveEntity and PROC's record routes.
+ *
+ * @param {{ root_table: string, joins?: { table: string }[] }} entity  a PGC_EntitySchema row
+ * @param {object[]} tables  PGC_Schema rows { table_name, columns, foreign_keys }
+ * @returns {{ tableName: string, parentKey: string, columns: object[], gate: object }[]}
+ */
+export function childTablesOf(entity, tables) {
+  const joined = new Set((entity.joins ?? []).map(j => j.table));
+  return tables.filter(t => joined.has(t.table_name)).flatMap(t => {
+    const fk = (t.foreign_keys ?? []).find(f => f.references?.table === entity.root_table);
+    return fk ? [{ tableName: t.table_name, parentKey: fk.column, columns: t.columns, gate: t }] : [];
+  });
+}
+
+/**
+ * A table's name as a person reads it, until the registry holds table labels: `PGD_RecipeSteps`
+ * is "Recipe steps". Shared by PROC (a domain's sources) and the web app (a document's headings).
+ *
+ * @param {string} name
+ * @returns {string}
+ */
+export function tableLabel(name) {
+  const words = String(name).replace(/^PG[CD]_/, '').replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(/[\s_]+/).filter(Boolean);
+  const text  = words.join(' ').toLowerCase();
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}

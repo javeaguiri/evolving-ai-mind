@@ -11,6 +11,7 @@
 
 const RUN_ID     = /^[1-9][0-9]{0,15}$/;
 const SESSION_ID = RUN_ID;
+const RECORD_ID  = RUN_ID;
 const NAME       = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
 
 /**
@@ -27,7 +28,13 @@ export const WEB_ROUTES = [
   { operationId: 'webGetMe',          method: 'GET',  path: ['me'] },
   { operationId: 'webListWorkflows',  method: 'GET',  path: ['workflows'] },
   { operationId: 'webListPages',      method: 'GET',  path: ['pages'] },
-  { operationId: 'webReadSourceRows', method: 'GET',  path: ['sources', NAME, 'rows'], query: ['columns', 'filter', 'order_by', 'limit', 'offset'] },
+  { operationId: 'webReadSourceRows', method: 'GET',  path: ['sources', NAME, 'rows'], query: ['columns', 'filter', 'order_by', 'limit', 'offset', 'with_version'] },
+  { operationId: 'webSaveSourceRows',     method: 'POST', path: ['sources', NAME, 'rows'], body: true },
+  { operationId: 'webReadSourceSchema',   method: 'GET',  path: ['sources', NAME, 'schema'] },
+  { operationId: 'webGetDomain',          method: 'GET',  path: ['domains', NAME] },
+  { operationId: 'webCreateSourceRecord', method: 'POST', path: ['sources', NAME, 'records'], body: true },
+  { operationId: 'webReadSourceRecord',   method: 'GET',  path: ['sources', NAME, 'records', RECORD_ID] },
+  { operationId: 'webSaveSourceRecord',   method: 'POST', path: ['sources', NAME, 'records', RECORD_ID], body: true },
   { operationId: 'webGetOutput',      method: 'GET',  path: ['outputs', NAME] },
   { operationId: 'webListRuns',       method: 'GET',  path: ['runs'], query: ['workflow', 'domain', 'status', 'limit', 'before'] },
   { operationId: 'webStartRun',       method: 'POST', path: ['runs'], body: true },

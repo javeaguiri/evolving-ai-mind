@@ -58,6 +58,20 @@ function servHeaders() {
  * @returns {Promise<object>}
  */
 export async function servPost(path, body) {
+  const parsed = await servPostResult(path, body);
+  if (parsed.statusCode < 200 || parsed.statusCode > 299) throw new Error(parsed.error ?? `SERV HTTP ${parsed.statusCode}`);
+  return parsed;
+}
+
+/**
+ * POST to a SERV endpoint and return the parsed JSON body with its statusCode, whatever the
+ * status — for a caller that answers a refusal itself (a save's 409 names the rows that moved).
+ *
+ * @param {string} path   SERV endpoint path
+ * @param {object} body   Request body
+ * @returns {Promise<object>}
+ */
+export async function servPostResult(path, body) {
   const url  = `${process.env.SERV_API_URL}${path}`;
   const resp = await fetch(url, {
     method:  'POST',
@@ -66,7 +80,6 @@ export async function servPost(path, body) {
   });
   const parsed      = await resp.json();
   parsed.statusCode = resp.status;
-  if (!resp.ok) throw new Error(parsed.error ?? `SERV HTTP ${resp.status}`);
   return parsed;
 }
 
@@ -119,8 +132,9 @@ export async function bestEffort(label, ctx, fn) {
  * @param {string|object|Array} [orderBy]  One sort term or several — "priority DESC",
  *   { column, direction }, or an array of either for a composite sort
  * @param {number} [offset]  Rows skipped — a later page of the same read
+ * @param {boolean} [withVersion]  Each row also carries `_version`, what a save sends back
  */
-export async function getRows(tableName, filters = [], orderBy, limit, vectorSearch, columns, offset) {
+export async function getRows(tableName, filters = [], orderBy, limit, vectorSearch, columns, offset, withVersion) {
   return servPost('/api/v1/serv/table/getRows', {
     tableName,
     ...(filters.length  && { filters }),
@@ -129,7 +143,36 @@ export async function getRows(tableName, filters = [], orderBy, limit, vectorSea
     ...(offset          && { offset }),
     ...(vectorSearch    && { vectorSearch }),
     ...(columns?.length && { columns }),
+    ...(withVersion     && { withVersion }),
   });
+}
+
+/**
+ * A grid's save — SERV-Table saveRows. Returns SERV's body with its statusCode whatever the
+ * status: a 409 carries the conflicts, a 400 the refusal.
+ *
+ * @param {object} body  { tableName, update?, insert?, delete?, changeLog? }
+ */
+export async function saveRows(body) {
+  return servPostResult('/api/v1/serv/table/saveRows', body);
+}
+
+/**
+ * A document's save — SERV-Entity saveEntity. Returns SERV's body with its statusCode whatever
+ * the status, as saveRows does.
+ *
+ * @param {object} body  { entityName, id?, version?, root?, children?, changeLog? }
+ */
+export async function saveEntity(body) {
+  return servPostResult('/api/v1/serv/entity/saveEntity', body);
+}
+
+/**
+ * A document read — SERV-Entity getEntity withVersion: the root with `_version` and its
+ * `children`. Returns SERV's body with its statusCode whatever the status (404 when absent).
+ */
+export async function getEntityVersioned(entityName, id) {
+  return servPostResult('/api/v1/serv/entity/getEntity', { entityName, id, withVersion: true });
 }
 
 /**

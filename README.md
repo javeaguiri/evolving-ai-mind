@@ -529,7 +529,7 @@ node dev_scripts/deploy-web.mjs           # audit, build, upload what changed, r
 node dev_scripts/deploy-web.mjs --check   # the same, uploading nothing
 ```
 
-The site's address is the stack output `WebSiteUrl`. The pool admits only people an administrator creates (`aws cognito-idp admin-create-user --user-pool-id <WebUserPoolId> …`), and each sets up a TOTP authenticator at first sign-in. Then add each person's Cognito `sub` to `household-principals` and redeploy, so the web shows them the household's runs and pages. The pages themselves are data: `node dev_scripts/upsert-page.mjs household/pages.json` and `node dev_scripts/upsert-domain-display.mjs household/domains.json`.
+The site's address is the stack output `WebSiteUrl`. The pool admits only people an administrator creates (`aws cognito-idp admin-create-user --user-pool-id <WebUserPoolId> …`), and each sets up a TOTP authenticator at first sign-in. Then add each person's Cognito `sub` to `household-principals` and redeploy, so the web shows them the household's runs and pages. The pages themselves are data: `node dev_scripts/upsert-page.mjs household/pages.json` and `node dev_scripts/upsert-domain-display.mjs household/domains.json`. What the web may edit directly is data too, and nothing is editable until it is declared: `node dev_scripts/upsert-edit-policy.mjs household/edit-policy.json` (`--check` first).
 
 ---
 

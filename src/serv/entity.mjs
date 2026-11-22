@@ -15,6 +15,8 @@
 //   POST /serv/entity/updateEntity  — PATCH or REPLACE root row
 //   POST /serv/entity/upsertEntity  — INSERT ... ON CONFLICT DO UPDATE
 //   POST /serv/entity/deleteEntity  — DELETE root row (CASCADE handles children)
+//   POST /serv/entity/saveEntity    — a document's save: the root and its child tables' rows in one
+//                                     transaction, checked against versions (row-writes.mjs)
 //
 // Security gates:
 //   - entityName must be registered in PGC_EntitySchema
@@ -26,6 +28,11 @@
 import { ok, err }   from '../shared/lambda-utils.mjs';
 import { getClient } from './init-brain.mjs';
 import { normalizeOrderBy, buildOrderClause } from './query-utils.mjs';
+import { childTablesOf } from '../shared/schema-utils.mjs';
+import {
+  isRecord, isVersion, checkRowWriteLists, checkChangeLog, writeCount, writtenRows, checkWriteColumns,
+  refusedKind, findVersionConflicts, lockRows, writeRows, writeChangeLog, versionConflict,
+} from './row-writes.mjs';
 
 // System columns never written by callers
 const SYSTEM_COLS = new Set(['id', 'created_at', 'updated_at']);
@@ -67,6 +74,7 @@ export async function handle(req) {
     case 'updateEntity': return updateEntity(req);
     case 'upsertEntity': return upsertEntity(req);
     case 'deleteEntity': return deleteEntity(req);
+    case 'saveEntity':   return saveEntity(req);
     default:
       return err(404, `SERV-Entity route "${req.subRoute}" not found`, req.correlationId);
   }
@@ -102,7 +110,7 @@ async function loadEntity(pgcClient, entityName, correlationId) {
  * Build a SELECT with LEFT JOINs and jsonb_agg aggregations from entity definition.
  * Returns { sql, baseAlias: 'r' }.
  */
-function buildSelectSQL(tableName, joins = [], aggregations = []) {
+function buildSelectSQL(tableName, joins = [], aggregations = [], extraCols = []) {
   const joinClauses = (joins || []).map(j =>
     `${j.type || 'LEFT'} JOIN "${j.table}" ${j.alias || j.table} ON ${j.on}`
   );
@@ -117,7 +125,7 @@ function buildSelectSQL(tableName, joins = [], aggregations = []) {
               FILTER (WHERE ${a.alias}.id IS NOT NULL) AS "${a.outputKey}"`;
   });
 
-  const selectCols = ['r.*', ...aggCols].join(',\n       ');
+  const selectCols = ['r.*', ...extraCols, ...aggCols].join(',\n       ');
   const groupBy    = aggCols.length ? 'GROUP BY r.id' : '';
 
   return {
@@ -127,6 +135,50 @@ function buildSelectSQL(tableName, joins = [], aggregations = []) {
       ${groupBy}`,
     baseAlias: 'r',
   };
+}
+
+async function loadChildTables(pgcClient, entity) {
+  const joined = [...new Set((entity.joins ?? []).map(j => j.table))];
+  if (joined.length === 0) return [];
+  const result = await pgcClient.query(
+    `SELECT s.table_name, s.columns, s.foreign_keys, tm.allow_insert, tm.allow_update, tm.allow_delete
+       FROM "PGC_Schema"   s
+       JOIN "PGC_TableMap" tm ON tm.table_name = s.table_name
+      WHERE s.table_name = ANY($1)`,
+    [joined]
+  );
+  return childTablesOf(entity, result.rows);
+}
+
+/** The first of an entity's root and child tables without updated_at — it has no versions. */
+function unversionedTable(entity, children) {
+  const has = cols => cols.some(c => c.name === 'updated_at');
+  if (!has(entity.schema_columns)) return entity.root_table;
+  return children.find(c => !has(c.columns))?.tableName ?? null;
+}
+
+/** The root row, with its aggregations and — withVersion — its `_version`; undefined when absent. */
+async function readEntity(pgdClient, entity, id, withVersion) {
+  const { sql } = buildSelectSQL(entity.root_table, entity.joins, entity.aggregations,
+    withVersion ? ['r."updated_at"::text AS "_version"'] : []);
+  const result = await pgdClient.query(
+    `${sql} ${sql.includes('GROUP BY') ? 'HAVING r.id = $1' : 'WHERE r.id = $1'}`,
+    [id]
+  );
+  return result.rows[0];
+}
+
+/** Each child table's rows of one entity, whole, with `_version`, by table name, ordered by id. */
+async function readChildren(pgdClient, children, id) {
+  const out = {};
+  for (const c of children) {
+    const result = await pgdClient.query(
+      `SELECT *, "updated_at"::text AS "_version" FROM "${c.tableName}" WHERE "${c.parentKey}" = $1 ORDER BY "id"`,
+      [id]
+    );
+    out[c.tableName] = stripVectors(result.rows);
+  }
+  return out;
 }
 
 /**
@@ -166,7 +218,7 @@ function serializeValues(values) {
 // ---------------------------------------------------------------------------
 
 async function getEntity(req) {
-  const { entityName, id } = req.body;
+  const { entityName, id, withVersion = false } = req.body;
 
   if (!entityName) return err(400, 'entityName is required', req.correlationId);
   if (id === undefined || id === null) return err(400, 'id is required', req.correlationId);
@@ -178,24 +230,27 @@ async function getEntity(req) {
     const { entity, error } = await loadEntity(pgcClient, entityName, req.correlationId);
     if (error) return error;
 
+    // With versions, the document: the root's version and each child table's rows.
+    const children = withVersion ? await loadChildTables(pgcClient, entity) : [];
+    if (withVersion) {
+      const unversioned = unversionedTable(entity, children);
+      if (unversioned) return err(400, `withVersion needs an updated_at column — "${unversioned}" has none`, req.correlationId);
+    }
+
     const pgdClient = getClient(process.env.PGD_DATABASE_URL);
     await pgdClient.connect();
 
     try {
-      const { sql } = buildSelectSQL(entity.root_table, entity.joins, entity.aggregations);
-      const result  = await pgdClient.query(
-        `${sql} ${sql.includes('GROUP BY') ? 'HAVING r.id = $1' : 'WHERE r.id = $1'}`,
-        [id]
-      );
-
-      if (result.rows.length === 0) {
+      const row = await readEntity(pgdClient, entity, id, withVersion);
+      if (!row) {
         return err(404, `Entity "${entityName}" with id ${id} not found`, req.correlationId);
       }
 
       return ok({
         success:       true,
         entityName,
-        entity:        stripVectors(result.rows[0]),
+        entity:        stripVectors(row),
+        ...(withVersion ? { children: await readChildren(pgdClient, children, id) } : {}),
         correlationId: req.correlationId,
       }, req.correlationId);
 
@@ -596,6 +651,180 @@ async function deleteEntity(req) {
     console.error('entity deleteEntity error:', error.message);
     return err(500, `deleteEntity failed: ${error.message}`, req.correlationId);
   } finally {
+    await pgcClient.end();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /serv/entity/saveEntity
+//
+// A document's save: the root's row and each child table's changed, new and removed rows in one
+// transaction. Every row changed or removed — the root included — is locked and its version
+// compared first. Any save touches the root's updated_at, so the root's version is the
+// document's. SERV sets each new child row's parent key.
+// ---------------------------------------------------------------------------
+
+/**
+ * The request's shape, before anything is read: an error string, or null. Without id and
+ * version the entity is new: its root inserted whole, its children inserted only.
+ * Pure — exported for test.
+ */
+export function checkEntityWrites(body) {
+  const { entityName, id, version, root, children, changeLog } = body ?? {};
+  if (typeof entityName !== 'string' || !entityName) return 'entityName is required';
+  const isNew = id === undefined && version === undefined;
+  if (!isNew) {
+    if (!Number.isInteger(id)) return 'id must be an integer, sent with version — or both absent for a new entity';
+    if (!isVersion(version)) return 'version must be the version the entity was read at (updated_at as text), sent with id — or both absent for a new entity';
+  }
+  if (root !== undefined && (!isRecord(root) || !isRecord(root.changes))) return 'root.changes must be an object';
+  if (children !== undefined && !isRecord(children)) return 'children must be an object keyed by table name';
+  for (const [table, writes] of Object.entries(children ?? {})) {
+    if (!isRecord(writes)) return `children.${table} must be an object`;
+    const listError = checkRowWriteLists(writes, `children.${table}.`);
+    if (listError) return listError;
+    if (isNew && (writes.update?.length || writes.delete?.length)) {
+      return `children.${table}: a new entity's children can only be inserted`;
+    }
+  }
+  const rootColumns = Object.keys(root?.changes ?? {}).length;
+  if (isNew && rootColumns === 0) return 'root.changes is required for a new entity — its whole row';
+  const childRows = Object.values(children ?? {}).reduce((n, w) => n + writeCount(w), 0);
+  if (rootColumns + childRows === 0) return 'nothing to write — root.changes and children are empty';
+  return checkChangeLog(changeLog);
+}
+
+async function saveEntity(req) {
+  const shapeError = checkEntityWrites(req.body);
+  if (shapeError) return err(400, shapeError, req.correlationId);
+
+  const { entityName, id, version, root = {}, children: childWrites = {}, changeLog } = req.body;
+  const isNew       = id === undefined;
+  const rootChanges = root.changes ?? {};
+
+  const pgcClient = getClient(process.env.PGC_DATABASE_URL);
+  let   pgdClient = null;
+
+  try {
+    await pgcClient.connect();
+    const { entity, error } = await loadEntity(pgcClient, entityName, req.correlationId);
+    if (error) return error;
+    const rootTable = entity.root_table;
+
+    const children = await loadChildTables(pgcClient, entity);
+    const byTable  = new Map(children.map(c => [c.tableName, c]));
+    const unknown  = Object.keys(childWrites).find(t => !byTable.has(t));
+    if (unknown) return err(400, `"${unknown}" is not a child table of entity "${entityName}"`, req.correlationId);
+    const unversioned = unversionedTable(entity, children);
+    if (unversioned) return err(400, `"${unversioned}" has no updated_at column — it accepts no versioned writes`, req.correlationId);
+
+    // --- Gates: the root is inserted, or updated (a save of children only touches it) ---
+    if (isNew ? !entity.allow_insert : !entity.allow_update) {
+      return err(403, `${isNew ? 'INSERT' : 'UPDATE'} not permitted on "${rootTable}"`, req.correlationId);
+    }
+    for (const [table, writes] of Object.entries(childWrites)) {
+      const refused = refusedKind(writes, byTable.get(table).gate);
+      if (refused) return err(403, `${refused} not permitted on "${table}"`, req.correlationId);
+    }
+
+    // --- Columns: the root's, and each child's, which never names its parent ---
+    const rootError = checkWriteColumns(rootTable, [['root.changes', rootChanges]], entity.schema_columns);
+    if (rootError) return err(400, rootError, req.correlationId);
+    for (const [table, writes] of Object.entries(childWrites)) {
+      const { parentKey, columns } = byTable.get(table);
+      const rows       = writtenRows(writes, `children.${table}.`);
+      const childError = checkWriteColumns(table, rows, columns);
+      if (childError) return err(400, childError, req.correlationId);
+      const naming = rows.find(([, row]) => parentKey in row);
+      if (naming) return err(400, `${naming[0]}: "${parentKey}" is set by SERV — a child row never names its parent`, req.correlationId);
+    }
+
+    pgdClient = getClient(process.env.PGD_DATABASE_URL);
+    await pgdClient.connect();
+
+    try {
+      await pgdClient.query('BEGIN');
+
+      // --- Lock the root and every child row to change or remove; compare versions ---
+      let   rootId      = id;
+      const rootCurrent = isNew ? new Map() : await lockRows(pgdClient, rootTable, [id]);
+      if (!isNew && !rootCurrent.has(id)) {
+        await pgdClient.query('ROLLBACK');
+        return err(404, `Entity "${entityName}" with id ${id} not found`, req.correlationId);
+      }
+      const conflicts    = isNew ? [] : findVersionConflicts(rootTable, [{ id, version }], rootCurrent);
+      const childCurrent = new Map();
+      const foreign      = [];
+      for (const [table, writes] of Object.entries(childWrites)) {
+        const { parentKey } = byTable.get(table);
+        const claimed = [...(writes.update ?? []), ...(writes.delete ?? [])];
+        const current = await lockRows(pgdClient, table, claimed.map(r => r.id));
+        childCurrent.set(table, current);
+        const theirs  = claimed.filter(r => current.has(r.id) && current.get(r.id).row[parentKey] !== rootId);
+        foreign.push(...theirs.map(r => `${table} ${r.id}`));
+        conflicts.push(...findVersionConflicts(table, claimed.filter(r => !theirs.includes(r)), current));
+      }
+      if (foreign.length > 0) {
+        await pgdClient.query('ROLLBACK');
+        return err(404, `Not rows of ${entityName} ${id}: ${foreign.join(', ')}`, req.correlationId);
+      }
+      if (conflicts.length > 0) {
+        await pgdClient.query('ROLLBACK');
+        console.info(`entity saveEntity: version conflict on ${entityName} ${id}`, { conflicts });
+        return versionConflict(conflicts, req.correlationId);
+      }
+
+      // --- The root: inserted, changed, or touched so its version moves with the document ---
+      const log  = [];
+      const base = { tableName: rootTable, schemaColumns: entity.schema_columns, correlationId: req.correlationId };
+      if (isNew) {
+        const written = await writeRows(pgdClient, { ...base, writes: { insert: [rootChanges] }, current: rootCurrent });
+        rootId = written.inserted[0].id;
+        log.push(...written.log);
+      } else if (Object.keys(rootChanges).length > 0) {
+        const written = await writeRows(pgdClient, { ...base, writes: { update: [{ id, version, changes: rootChanges }] }, current: rootCurrent });
+        log.push(...written.log);
+      } else {
+        await pgdClient.query(`UPDATE "${rootTable}" SET "updated_at" = now() WHERE "id" = $1`, [id]);
+      }
+
+      // --- The children, each new row given its parent ---
+      for (const [table, writes] of Object.entries(childWrites)) {
+        const { parentKey, columns } = byTable.get(table);
+        const written = await writeRows(pgdClient, {
+          tableName: table, schemaColumns: columns, writes, current: childCurrent.get(table),
+          setOnInsert: { [parentKey]: rootId }, correlationId: req.correlationId,
+        });
+        log.push(...written.log);
+      }
+
+      const batchId = await writeChangeLog(pgdClient, changeLog, log);
+
+      // Read back inside the transaction: a failed read leaves nothing half-reported as saved.
+      const saved    = await readEntity(pgdClient, entity, rootId, true);
+      const document = await readChildren(pgdClient, children, rootId);
+
+      await pgdClient.query('COMMIT');
+
+      console.info(`entity: saved ${entityName} id=${rootId}${isNew ? ' (new)' : ''}`);
+      return ok({
+        success:       true,
+        entityName,
+        ...(batchId ? { batchId } : {}),
+        entity:        stripVectors(saved),
+        children:      document,
+        correlationId: req.correlationId,
+      }, req.correlationId);
+    } catch (innerError) {
+      await pgdClient.query('ROLLBACK');
+      throw innerError;
+    }
+
+  } catch (error) {
+    console.error('entity saveEntity error:', error.message);
+    return err(500, `saveEntity failed: ${error.message}`, req.correlationId);
+  } finally {
+    await pgdClient?.end();
     await pgcClient.end();
   }
 }

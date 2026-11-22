@@ -1737,5 +1737,148 @@
       }
     ],
     "triggers": []
+  },
+  {
+    "table_name": "PGC_ChangeLog",
+    "target": "pgc",
+    "domain": null,
+    "description": "One row per change to a record: who (actor), how it came in (via), the run that made it (run_id), the record, the operation, and each field's old and new value. Written by SERV in the same transaction as the change, from a write's changeLog, through the connection that makes it \u2014 PGC and PGD share one database. batch_id groups one save. run_id has no FK \u2014 runs are purged independently.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "bigserial",
+        "primaryKey": true
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "batch_id",
+        "type": "uuid",
+        "nullable": false
+      },
+      {
+        "name": "actor",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "via",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "run_id",
+        "type": "integer",
+        "nullable": true
+      },
+      {
+        "name": "domain",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "table_name",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "record_id",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "operation",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "changes",
+        "type": "jsonb",
+        "nullable": false
+      }
+    ],
+    "foreign_keys": [],
+    "constraints": [
+      {
+        "type": "check",
+        "name": "chk_changelog_via",
+        "expression": "via IN ('web')"
+      },
+      {
+        "type": "check",
+        "name": "chk_changelog_operation",
+        "expression": "operation IN ('insert', 'update', 'delete')"
+      }
+    ],
+    "triggers": []
+  },
+  {
+    "table_name": "PGC_EditPolicy",
+    "target": "pgc",
+    "domain": null,
+    "description": "What the web may change directly, one row per PGD_ table: columns ({ \"<col>\": true }) open to direct edits, add_rows and delete_rows. A table without a row, or a column not named, is read-only to direct edits. Checked by PROC on the direct path only; workflows never meet it. Columns the system maintains are never opened by any row.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "serial",
+        "primaryKey": true
+      },
+      {
+        "name": "table_name",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "columns",
+        "type": "jsonb",
+        "nullable": false,
+        "default": "'{}'::jsonb"
+      },
+      {
+        "name": "add_rows",
+        "type": "boolean",
+        "nullable": false,
+        "default": "false"
+      },
+      {
+        "name": "delete_rows",
+        "type": "boolean",
+        "nullable": false,
+        "default": "false"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      }
+    ],
+    "foreign_keys": [],
+    "constraints": [
+      {
+        "type": "unique",
+        "name": "uq_editpolicy_table_name",
+        "columns": [
+          "table_name"
+        ]
+      }
+    ],
+    "triggers": [
+      {
+        "name": "trg_pgc_editpolicy_updated_at",
+        "timing": "BEFORE UPDATE",
+        "function": "set_updated_at()"
+      }
+    ]
   }
 ]

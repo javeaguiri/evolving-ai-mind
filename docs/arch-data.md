@@ -745,25 +745,51 @@ seeds; seeded with a generic, empty Home only, never a domain-specific page.
 
 **Read by** `GET /proc/pages`; Phase 0 builds the table, the seed and the read, Phase 1 the writes.
 
-##### PGC_RecordEdit — Phase 1
+##### PGC_ChangeLog — Phase 1 (Sprint 19)
 
-The audit row for a **direct** edit — a change made from a domain page under the edit policy
-(`arch-home-brain.md` §4.8), not by a workflow. A workflow's writes are already traceable through
-`PGC_WorkflowRun` / `PGC_WorkflowRunStep`; this gives the direct path the same. One row per edit.
+One row per change to a record, whatever made it: who, how it came in, when, the record, and each
+field's old and new value. Written by SERV in the same transaction as the change, from a write's
+`changeLog` (`openapi.yaml` `ChangeLogContext`) — a change is never logged without being made, or
+made without being logged. The row is written through the connection that makes the change: PGC
+and PGD are addressed separately but are one database, and the log depends on it — separating them
+moves the log beside the records. The web's direct edits are logged; a workflow's writes are traced
+by `PGC_WorkflowRunStep` and carry no `changeLog`.
 
 | Column | Type | Notes |
 |---|---|---|
 | id | bigserial PK | |
-| user_sub | text | Who — the Cognito `sub` from the token, never a request field |
-| domain | text | |
-| table_name | text | The `PGD_` table edited |
-| record_id | text | The record's primary key, as text |
-| operation | text | `update`, `insert`, `delete` |
-| changes | jsonb | Each field's old and new value — `{ "<column>": { "old": …, "new": … } }` |
 | created_at | timestamptz | When |
+| batch_id | uuid | One save — a grid's rows, or a document's root and children, share it |
+| actor | text nullable | Who — the principal's `sub`, never a request field; null when no person made the change |
+| via | text | How it came in — check `('web')`, widened when another writer is added |
+| run_id | integer nullable | The run whose step made the change, for workflow writes. No FK |
+| domain | text | |
+| table_name | text | The `PGD_` table changed |
+| record_id | text | The record's primary key, as text |
+| operation | text | Check `('insert', 'update', 'delete')` |
+| changes | jsonb | `{ "<column>": { "old": …, "new": … } }` — an insert has `new` only, a delete `old` only; `updated_at` and vector columns left out |
 
-The content (who, when, domain, record, each field's old and new value) is decided; the column names
-are proposed and settled at the Phase 1 build.
+##### PGC_EditPolicy — Phase 1 (Sprint 19)
+
+What the web may change directly (`arch-home-brain.md` §4.8) — one row per `PGD_` table. A table
+without a row is read-only; a column not named is read-only. Workflows never meet it: it is checked
+by PROC on the direct path only, and `PGC_TableMap`'s `allow_*` gates still apply to every caller.
+The household's rows are written from `household/edit-policy.json`.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| table_name | text UNIQUE | The `PGD_` table |
+| columns | jsonb | `{ "<column>": true }` — the columns open to direct edits |
+| add_rows | boolean | Rows may be added directly. Default false |
+| delete_rows | boolean | Rows may be removed directly. Default false |
+| created_at, updated_at | timestamptz | `updated_at` kept by `set_updated_at` |
+
+Columns the system maintains — `id`, `created_at`, `updated_at`, vector columns — are never
+editable directly, whatever a row says (`src/proc/edit-policy.mjs` `systemMaintained`). A table
+without `updated_at` has no versions and no row may open it. Written by
+`dev_scripts/upsert-edit-policy.mjs` from `household/edit-policy.json` — there is no system seed,
+a policy naming a household's tables.
 
 ##### Changes to existing tables
 
@@ -802,12 +828,13 @@ edits (`arch-home-brain.md` §4.8).
 | 15 | PGC_Session | v3.2 — `general_chat` and `llm_call_diagnostic` sessions; see `docs/arch-session.md`. Sprint 8 — `request_fingerprint`, `fingerprint_hash` (indexed), `response_source`, `replayed_from_session_id` added (replay corpus, `docs/arch-replay.md`) |
 | 16 | PGC_SessionEntry | v3.2 — per-turn messages array rows; `reasoning` column for diagnostic metadata |
 | 17 | PGC_UiMessage | Web app inbox — every message to a person, all providers; see §4.3.7. Built Sprint 16 |
-| 18 | PGC_RecordEdit | Audit of direct edits from the web app; see §4.3.7. **Designed (Phase 1), not yet built** |
+| 18 | PGC_ChangeLog | One row per change to a record — the web's direct edits; see §4.3.7. Template and registry Sprint 19 |
 | 19 | PGC_Page | The household's pages of panels — the web app's navigation; see §4.3.7. Built Sprint 16 |
+| 20 | PGC_EditPolicy | What the web may change directly, per table; see §4.3.7. Built Sprint 19 |
 | — | PGC_WorkflowStats | SQL view — not a physical table |
 
 **Total: 18 physical PGC tables (14 bootstrapped + 2 session added in v3.2 + 2 web app added in
-Sprint 16) + 1 view.** One more is designed for the web app and not yet built (18, Phase 1).
+Sprint 16) + 1 view.** Two more are designed for the web app and not yet built (18 and 20, Sprint 19).
 
 
 ---
@@ -1044,6 +1071,7 @@ DML executor gated by `PGC_TableMap`. All four operations live.
 | `/api/v1/serv/table/insertRow` | POST | Single INSERT RETURNING * — gated by `allow_insert` |
 | `/api/v1/serv/table/updateRows` | POST | Parameterised UPDATE RETURNING * — gated by `allow_update` |
 | `/api/v1/serv/table/deleteRows` | POST | Parameterised DELETE — gated by `allow_delete` |
+| `/api/v1/serv/table/saveRows` | POST | A grid's save (Sprint 19): `update`, `insert`, `delete` in one transaction. Rows to change or remove are read `FOR UPDATE` and their versions (`updated_at::text`, from `getRows` `withVersion`) compared first; any that moved fail the whole save with `409 version_conflict` naming them. Gated by `allow_*` per kind present; system and vector columns refused; a table without `updated_at` refused. With `changeLog`, each written row is logged to `PGC_ChangeLog` in the same transaction, one `batch_id` per save; an update that changed no value is not logged |
 
 Security gate on all operations:
 - Table must be registered in `PGC_TableMap`
@@ -1066,12 +1094,13 @@ Used by PROC when executing workflow steps that read or write user domain data.
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/v1/serv/entity/getEntity` | POST | Fetch one entity by id — with configured joins and jsonb_agg aggregations |
+| `/api/v1/serv/entity/getEntity` | POST | Fetch one entity by id — with configured joins and jsonb_agg aggregations. With `withVersion` (Sprint 19) the root carries `_version` and the response gains `children`: each child table's rows whole, with `_version`, by table name, ordered by `id`. A child table is a join whose registered foreign key references the root |
 | `/api/v1/serv/entity/listEntities` | POST | List entities — filters, orderBy, limit — entity default filters always applied |
 | `/api/v1/serv/entity/createEntity` | POST | INSERT root row — system cols (id, created_at, updated_at) stripped automatically |
 | `/api/v1/serv/entity/updateEntity` | POST | UPDATE root row — `patch` (default) or `replace` mode — children unaffected |
 | `/api/v1/serv/entity/upsertEntity` | POST | INSERT ... ON CONFLICT DO UPDATE — requires `upsert_key` defined in PGC_EntitySchema |
 | `/api/v1/serv/entity/deleteEntity` | POST | DELETE root row — CASCADE handles children via FK — gated by `allow_delete` |
+| `/api/v1/serv/entity/saveEntity` | POST | A document's save (Sprint 19): the root's changes and each child table's `update`, `insert`, `delete` in one transaction. The root and every child row changed or removed are locked and their versions compared first — `409 version_conflict` names any that moved; a child row of another entity is `404`. A save of children only touches the root's `updated_at`, so the root's version is the document's (the touch is not logged). Without `id` and `version` a new entity: root inserted, then children inserted only. SERV sets each new child's parent key and refuses a row naming it. Gated per table and kind; the root needs `allow_update` for any save of an existing entity. With `changeLog`, logged as `saveRows` is. Returns the document read back inside the transaction |
 
 **Design decisions:**
 - Entity operations only touch the root table. Child rows (e.g. `RecipeIngredient`) are managed

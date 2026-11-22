@@ -217,25 +217,8 @@ table.grid tbody tr:hover { background: var(--ground); }
 table.grid tbody tr[aria-selected="true"] { background: var(--accent-soft); }
 table.grid .num { text-align: end; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-.rlist { list-style: none; margin: 0; padding: 0; max-inline-size: 36rem; }   /* a wide panel keeps each detail near its title */
-.rlist button {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  inline-size: 100%;
-  border: 0;
-  border-block-end: 1px solid var(--soft);
-  background: transparent;
-  padding-block: 7px;
-  padding-inline: 2px;
-  text-align: start;
-}
-.rlist button:hover { background: var(--ground); }
-.rlist button[aria-current="true"] { background: var(--accent-soft); }
-.rlist .rd { color: var(--muted); text-align: end; }
 /* a read that has more ends on this: it reads on as it scrolls into view */
 .more { display: flex; justify-content: center; padding-block: 10px; }
-.rlist .more .btn { inline-size: auto; border: 1px solid var(--control); background: var(--paper); padding-inline: 14px; }
 
 .skeleton { display: flex; flex-direction: column; gap: 8px; }
 .skeleton i { display: block; block-size: 14px; border-radius: 4px; background: var(--soft); }
@@ -445,6 +428,19 @@ table.grid.edit td { padding-block: 2px; padding-inline: 4px; }
 .cell:focus { outline: 2px solid var(--accent); outline-offset: -1px; background: var(--paper); }
 td.changed .cell { background: var(--warn-soft); }
 td.bad .cell { border-color: var(--bad); }
+select.cell { min-inline-size: 9rem; }
+table.grid.records tr.new td { background: var(--accent-soft); }
+table.grid.records tr.removed td { text-decoration: line-through; opacity: .55; }
+.etools { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.document { display: flex; flex-direction: column; gap: 16px; }
+.docnav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding-block-end: 12px; border-block-end: 1px solid var(--line); }
+.docpick { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.docpick select { max-inline-size: min(22rem, 70vw); }
+.docform { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(16rem, 100%), 1fr)); gap: 10px 16px; }
+.docform .field { display: flex; flex-direction: column; gap: 4px; }
+.docform .changed :is(input, textarea, select) { background: var(--warn-soft); }
+.docchild .phead h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.docsave { display: flex; justify-content: flex-end; gap: 6px; }
 
 /* ---------- markdown from /proc ---------- */
 .md { overflow-wrap: anywhere; }

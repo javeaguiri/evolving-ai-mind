@@ -1,0 +1,56 @@
+[
+  {
+    "table_name": "PGD_Expenses",
+    "columns": {
+      "date": true,
+      "title": true,
+      "amount": true,
+      "currency": true,
+      "category_id": true,
+      "payment_method": true,
+      "description": true
+    },
+    "add_rows": true,
+    "delete_rows": true
+  },
+  {
+    "table_name": "PGD_Recipes",
+    "columns": {
+      "title": true,
+      "description": true,
+      "servings": true,
+      "prep_time_minutes": true,
+      "cook_time_minutes": true,
+      "category": true,
+      "difficulty_level": true,
+      "source_url": true,
+      "personal_notes": true,
+      "protein_g_per_serving": true,
+      "carbs_g_per_serving": true,
+      "macro_source": true
+    },
+    "add_rows": false,
+    "delete_rows": false
+  },
+  {
+    "table_name": "PGD_RecipeIngredients",
+    "columns": {
+      "ingredient_id": true,
+      "quantity": true,
+      "unit": true,
+      "preparation_note": true
+    },
+    "add_rows": true,
+    "delete_rows": true
+  },
+  {
+    "table_name": "PGD_RecipeSteps",
+    "columns": {
+      "step_number": true,
+      "instruction_text": true,
+      "duration_minutes": true
+    },
+    "add_rows": true,
+    "delete_rows": true
+  }
+]

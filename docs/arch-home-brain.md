@@ -277,9 +277,9 @@ REST resources, JSON in and out, spec-first in `openapi.yaml` before implementat
 | Method and resource | Purpose | Behind it |
 |---|---|---|
 | `GET /domains` | Domains and their workflows | Domain registry, `PGC_Workflow` |
-| `GET /domains/{domain}/schema` | Columns, types, labels, enums — what the app needs to lay out records | `PGC_Schema` |
-| `GET /domains/{domain}/records` | Records with filter, sort and page parameters in the SERV filter vocabulary | SERV `getRows` |
-| `GET /domains/{domain}/records/{id}` | One record with its child records | SERV entity reads via `PGC_EntitySchema` |
+| `GET /sources/{source}/schema` | A table's or entity's columns, types, labels, foreign key targets, and what the edit policy opens — what the app needs to lay out and edit records. A source is a table, view or entity name | `PGC_Schema`, `PGC_EntitySchema`, `PGC_EditPolicy` |
+| `GET /sources/{source}/rows` | Records with filter, sort and page parameters in the SERV filter vocabulary; `with_version` for a grid that saves | SERV `getRows` |
+| `GET /sources/{entity}/records/{id}` | One document — the root and its child rows, each with its version | SERV `getEntity` `withVersion` |
 | `GET /gates` | Gates waiting on a person | Runs at `awaiting_human_gate` |
 | `GET /runs`, `GET /runs/{runId}` | Activity and a run's steps | `PGC_WorkflowRun`, `PGC_WorkflowRunStep` |
 | `GET /minds-eye/sessions`, `GET /minds-eye/sessions/{id}/messages` | Sessions, and a conversation's history | `PGC_Session`, `PGC_SessionEntry` |
@@ -295,14 +295,15 @@ pushed:
 | `POST /gates/{runId}/responses` | Answer a gate | `resume_gate` |
 | `POST /minds-eye/sessions`, `POST /minds-eye/sessions/{id}/messages` | Open a session; send a message | `MINDS_EYE` / `MINDS_EYE_RESUME` |
 
-**Edit** — direct record edits under the edit policy (§4.8); synchronous, returning the record as
-written:
+**Edit** — direct record edits under the edit policy (§4.8); synchronous, each save one transaction
+checked against the versions read, returning what was written. A source's domain comes from the
+registry, never the request:
 
 | Method and resource | Purpose | Behind it |
 |---|---|---|
-| `PATCH /domains/{domain}/records/{id}` | Change editable fields; `If-Match` carries the version read | Policy check, then SERV `updateRows` |
-| `POST /domains/{domain}/records` | Add a record, where the table allows it | Policy check, then SERV `insertRow` |
-| `DELETE /domains/{domain}/records/{id}` | Delete a record, where the table allows it; `If-Match` as for `PATCH` | Policy check, then SERV `deleteRows` |
+| `POST /sources/{table}/rows` | A grid's save — changed, new and removed rows, each changed or removed row with its version | Policy check, then SERV `saveRows` |
+| `POST /sources/{entity}/records/{id}` | A document's save — the root's fields and each child table's rows, with the root's version | Policy check, then SERV `saveEntity` |
+| `POST /sources/{entity}/records` | A new document, where the root table allows adding | Policy check, then SERV `saveEntity` |
 
 ### 4.8 Direct edits and the edit policy
 
@@ -319,12 +320,13 @@ schedule, written by the quiz — not one that nothing changes. A field can be o
 inventory quantity is edited directly from the app and also decremented by a meal-planning
 workflow.
 
-**Shape.** The policy is declared in `PGC_Schema`, which makes it an evolving artifact:
+**Shape.** The policy is a row per table in `PGC_EditPolicy` (`arch-data.md` §4.3.7), an evolving
+artifact beside the table's `PGC_Schema` row:
 
 | Level | Declares | Where |
 |---|---|---|
-| **Field** | `editable` or `read_only` for direct edits | Each column definition in `PGC_Schema.columns` |
-| **Table** | Whether direct add and direct delete are allowed | The table's `PGC_Schema` row |
+| **Field** | Open to direct edits, or not | `PGC_EditPolicy.columns` — a column named `true` is open |
+| **Table** | Whether direct add and direct delete are allowed | `PGC_EditPolicy.add_rows`, `.delete_rows` |
 
 Illustrations: flashcard front and back are editable while session results are read-only; a
 portfolio's holdings are editable, with add and delete allowed; a session table allows neither.
@@ -333,8 +335,10 @@ portfolio's holdings are editable, with add and delete allowed; a session table 
 the primary key, timestamps, embedding columns, foreign keys a workflow resolves — are never
 editable directly. Novia creates domains, and the policy is part of the domain she designs: she
 proposes it with the tables, the gate confirming the domain shows it, and the user or Novia changes
-it afterwards like any other registry fact. Application-wide domains carry the policy in
-their seeded definition; tenant-specific domains carry their own.
+it afterwards like any other registry fact. With tenancy (§5), a row without a tenant is a
+domain's default and a home's row overrides it: an application-wide domain ships its default, a
+tenant-specific domain has its home's row only. A column the system maintains is never opened by
+any row.
 
 **Enforcement is server-side.** `GET /domains/{domain}/schema` returns the policy so the app offers
 edit controls only where it allows them, but the app is never the guard. The PROC endpoint behind
@@ -354,15 +358,18 @@ since, the edit is refused with `409 Conflict` and the app re-reads. A direct ed
 silently overwrites a workflow's write, or the reverse.
 
 **Audit.** Each direct edit writes one row — who, when, domain, record, and each field's old and new
-value — to `PGC_RecordEdit`. A workflow's changes are already traceable through its run record;
+value — to `PGC_ChangeLog`, in the same transaction as the edit. A workflow's changes are already traceable through its run record;
 this gives the direct path the same, so "why does this record read 4?" is answerable by the user or
 by Novia.
 
 **Changing a read-only field.** A domain page lists the domain's workflows as actions; that list is
 how a user reaches the workflow that changes a field they cannot edit directly.
 
-**Who may edit.** The policy applies to every household member alike until Phase 3, where the field
-and table declarations gain an optional list of roles.
+**Who may edit.** The policy applies to every household member alike until Phase 3, where a
+column's `true`, and a table's `add` and `delete`, may instead be a list of roles. The check is one
+pure function given the whole principal — `{ user, roles }` now, `{ tenant, user, roles }` with
+tenancy — so neither change alters its callers. The policy says which fields; which rows a person
+may touch is tenant isolation, a different mechanism.
 
 ### 4.9 Home status and the device bridge
 
@@ -382,7 +389,7 @@ devices; the step type stays generic so any API qualifies.
 | Phase | Delivers | Proves |
 |---|---|---|
 | **0 — Spike** | The framework app shell; `GET /gates`, `POST /gates/{runId}/responses` and `GET /inbox`; `provider: 'web'` end to end for one workflow; a `form` gate shown as an editable grid | The seam in §3.1 holds for a second provider; the grid answers the bulk-edit ceiling |
-| **1 — Console** | Identity, the §4.7 resources, the edit policy and `PGC_RecordEdit` (§4.8), the WebSocket push, command bar, Needs you, navigator, domain drill-down, Novia panel; the Slack leaks in §3.2 removed | Daily use without Slack |
+| **1 — Console** | Identity, the §4.7 resources, the edit policy and `PGC_ChangeLog` (§4.8), the WebSocket push, command bar, Needs you, navigator, domain drill-down, Novia panel; the Slack leaks in §3.2 removed | Daily use without Slack |
 | **2 — Home status** | The external-API step type, a status workflow, tiles with actions | Device control from the brain |
 | **3 — Household** | Several household members; per-member Novia threads; per-role edit policy (§4.8) | A family uses one brain |
 | **Later** | Document, image and voice input; spoken output; always-on voice through an assistant device | The deck's "future work: the product experience" |

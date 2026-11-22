@@ -152,7 +152,7 @@ describe('GET /proc/sources/{source}/rows — read-only, registered columns only
 
   it('parses the query, and refuses a malformed one', () => {
     assert.deepEqual(parseSourceQuery({ columns: 'id, name', filter: '[{"column":"id","op":"gt","value":3}]', order_by: 'name ASC', limit: '20' }),
-      { columns: ['id', 'name'], filter: [{ column: 'id', op: 'gt', value: 3 }], orderBy: 'name ASC', limit: 20, offset: 0 });
+      { columns: ['id', 'name'], filter: [{ column: 'id', op: 'gt', value: 3 }], orderBy: 'name ASC', limit: 20, offset: 0, withVersion: false });
     assert.equal(parseSourceQuery({ offset: '100' }).offset, 100);
     for (const q of [{ limit: '501' }, { filter: 'nope' }, { filter: '[{"op":"eq"}]' }, { offset: '-1' }, { offset: 'x' }]) assert.ok(parseSourceQuery(q).error, JSON.stringify(q));
   });

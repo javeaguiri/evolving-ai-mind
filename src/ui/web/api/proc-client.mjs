@@ -34,6 +34,12 @@ const MESSAGES = {
   workflow_not_found:   'That workflow does not exist.',
   no_output:            'That workflow has not produced anything yet.',
   source_not_found:     'Those records do not exist.',
+  record_not_found:     'That record does not exist, or is no longer there.',
+  not_a_table:          'That is not a table — it is edited another way.',
+  not_an_entity:        'That is not something opened as a document.',
+  not_editable:         'Some of these changes are not allowed here.',
+  invalid_writes:       'The changes could not be read.',
+  version_conflict:     'Someone changed this since you opened it — read it again.',
   pages_truncated:      'The pages could not all be read.',
   workflows_truncated:  'The workflows could not all be read.',
 };
@@ -44,17 +50,20 @@ export class WebError extends Error {
    * @param {string} code
    * @param {string} [message]
    * @param {object[]} [fields]
+   * @param {object[]} [conflicts]  version_conflict's rows that moved
    */
-  constructor(status, code, message, fields) {
+  constructor(status, code, message, fields, conflicts) {
     super(message ?? MESSAGES[code] ?? code);
-    this.status = status;
-    this.code   = code;
-    this.fields = fields;
+    this.status    = status;
+    this.code      = code;
+    this.fields    = fields;
+    this.conflicts = conflicts;
   }
 
   /** The WebError body. */
   toBody() {
-    return { error: { code: this.code, message: this.message, ...(this.fields ? { fields: this.fields } : {}) } };
+    return { error: { code: this.code, message: this.message,
+      ...(this.fields ? { fields: this.fields } : {}), ...(this.conflicts ? { conflicts: this.conflicts } : {}) } };
   }
 }
 
@@ -105,7 +114,7 @@ export async function callProc({ method, procPath, query = {}, body, sub, correl
 
   if (res.ok && res.body && typeof res.body === 'object') return { status: res.status, body: res.body };
   if (!res.ok && typeof res.body?.error === 'string') {
-    throw new WebError(res.status, res.body.error, res.body.message, res.body.fields);
+    throw new WebError(res.status, res.body.error, res.body.message, res.body.fields, res.body.conflicts);
   }
   console.error('web-api: PROC answered without a code', { procPath, status: res.status });
   throw upstreamUnavailable();

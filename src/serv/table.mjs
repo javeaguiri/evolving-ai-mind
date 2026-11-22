@@ -14,6 +14,8 @@
 //   POST /serv/table/updateRows — parameterised UPDATE, gated by allow_update
 //   POST /serv/table/deleteRows — parameterised DELETE, gated by allow_delete
 //   POST /serv/table/upsertRows — per-row INSERT or UPDATE by matchColumns, gated by allow_insert + allow_update
+//   POST /serv/table/saveRows   — a table's changed, new and removed rows in one transaction, each
+//                                 checked against the version it was read at; optionally logged
 //   POST /serv/table/runSql     — read-only SELECT/WITH statement, not PGC_TableMap-gated
 //
 // Security gates:
@@ -30,6 +32,10 @@ import { getClient }  from './init-brain.mjs';
 import { embedText }  from '../shared/embed-client.mjs';
 import { validateReadOnlySql } from './schema.mjs';
 import { normalizeOrderBy, buildOrderClause, resolveReadLimit, resolveReadOffset } from './query-utils.mjs';
+import {
+  resolveEmbedding, getEmbedColumns, checkRowWriteLists, checkChangeLog, writeCount, writtenRows,
+  checkWriteColumns, refusedKind, findVersionConflicts, lockRows, writeRows, writeChangeLog, versionConflict,
+} from './row-writes.mjs';
 
 // ---------------------------------------------------------------------------
 // Allowed filter operators — security gate.
@@ -52,6 +58,7 @@ export async function handle(req) {
     case 'updateRows': return updateRows(req);
     case 'deleteRows': return deleteRows(req);
     case 'upsertRows': return upsertRows(req);
+    case 'saveRows':   return saveRows(req);
     case 'runSql':     return runSql(req);
     default:
       return err(404, `SERV-Table route "${req.subRoute}" not found`, req.correlationId);
@@ -102,6 +109,7 @@ async function getRows(req) {
     orderBy,
     vectorSearch = null,
     columns      = null,
+    withVersion  = false,
   } = req.body;
 
   // The bound this read applies, and whether the caller chose it or inherited it. A
@@ -183,6 +191,15 @@ async function getRows(req) {
       const invalid = columns.find(c => !validColumns.has(c));
       if (invalid) return err(400, `Column "${invalid}" not found in schema for "${tableName}"`, req.correlationId);
       selectList = columns.map(c => `"${c}"`).join(', ');
+    }
+
+    // --- Each row's version, for a later saveRows or saveEntity ---
+    // As text, to the microsecond: a version passed through a JS Date keeps milliseconds only.
+    if (withVersion) {
+      if (!validColumns.has('updated_at')) {
+        return err(400, `withVersion needs an updated_at column — "${tableName}" has none`, req.correlationId);
+      }
+      selectList += `, "updated_at"::text AS "_version"`;
     }
 
     if (target === 'pgd') pgdClient = getClient(process.env.PGD_DATABASE_URL);
@@ -284,90 +301,6 @@ async function getRows(req) {
     await pgdClient?.end();
     await pgcClient.end();
   }
-}
-
-// ---------------------------------------------------------------------------
-// normalizeEmbedText — clean a single field value for embedding
-// ---------------------------------------------------------------------------
-
-/**
- * Convert a row field value to a normalised text fragment for embedding.
- * Underscores are replaced with spaces so snake_case identifiers (domain names,
- * alias keys) are tokenised correctly by the embedding model.
- *
- * @param {*} v  Raw field value from row
- * @returns {string}
- */
-function normalizeEmbedText(v) {
-  if (v === null || v === undefined) return '';
-  let text;
-  if (Array.isArray(v)) {
-    text = v.map(item => String(item ?? '')).join(' ');
-  } else if (typeof v === 'object') {
-    // jsonb objects not caught by Array.isArray — unlikely in embed_source
-    // but handled defensively by extracting string values only.
-    text = Object.values(v).filter(x => typeof x === 'string').join(' ');
-  } else {
-    text = String(v);
-  }
-  return text.replace(/_/g, ' ');
-}
-
-// ---------------------------------------------------------------------------
-// resolveEmbedding — build focused embed text from array source fields only
-// ---------------------------------------------------------------------------
-
-/**
- * Build a single normalised text string from array-type embed_source fields
- * (e.g. aliases) and embed it as one unit via embedText().
- *
- * Only array fields are used. Scalar fields (domain name, description) are
- * excluded because:
- *   - domain is already represented in the aliases
- *   - description is generic system text ("Manage your data") that pulls the
- *     centroid away from the user-vocabulary terms in the aliases
- *
- * If no array fields are found, falls back to all fields concatenated.
- * This keeps the document tightly focused on what users would type.
- *
- * @param {{ name: string, embed_source: string[] }} vectorCol
- * @param {object} row  Complete row data (merged current + updates for updateRows)
- * @param {string} traceId
- * @returns {Promise<number[]>}
- */
-async function resolveEmbedding(vectorCol, row, traceId) {
-  // Prefer array fields (aliases) — they are the user-vocabulary source of truth.
-  const arrayTexts = [];
-  const scalarTexts = [];
-
-  for (const key of vectorCol.embed_source) {
-    const v = row[key];
-    if (v === null || v === undefined) continue;
-    if (Array.isArray(v)) {
-      arrayTexts.push(normalizeEmbedText(v));
-    } else {
-      scalarTexts.push(normalizeEmbedText(v));
-    }
-  }
-
-  const parts = arrayTexts.length > 0 ? arrayTexts : scalarTexts;
-  const text  = parts.join(' ').replace(/\s+/g, ' ').trim();
-
-  if (!text) return null;
-  return embedText(text, traceId);
-}
-
-/**
- * Return vector columns that have embed_source defined in their schema definition.
- * These are automatically populated by SERV on insert/update.
- *
- * @param {object[]} schemaColumns  Columns array from PGC_Schema
- * @returns {object[]}
- */
-function getEmbedColumns(schemaColumns) {
-  return schemaColumns.filter(
-    c => c.type?.startsWith('vector') && Array.isArray(c.embed_source) && c.embed_source.length > 0
-  );
 }
 
 /**
@@ -948,6 +881,106 @@ async function upsertRows(req) {
   } catch (error) {
     console.error('table upsertRows error:', error.message);
     return err(500, `upsertRows failed: ${error.message}`, req.correlationId);
+  } finally {
+    await pgdClient?.end();
+    await pgcClient.end();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /serv/table/saveRows
+//
+// A grid's save: one table's changed, new and removed rows in one transaction, each checked
+// against the version it was read at, optionally logged (row-writes.mjs).
+// ---------------------------------------------------------------------------
+
+/**
+ * The request's shape, before anything is read: an error string, or null.
+ * Pure — exported for test.
+ */
+export function checkRowWrites(body) {
+  const { tableName, changeLog } = body ?? {};
+  if (typeof tableName !== 'string' || !/^PGD_[A-Za-z][A-Za-z0-9_]*$/.test(tableName)) {
+    return 'tableName must name a PGD_ table';
+  }
+  const listError = checkRowWriteLists(body);
+  if (listError) return listError;
+  if (writeCount(body) === 0) return 'nothing to write — update, insert and delete are all empty';
+  return checkChangeLog(changeLog);
+}
+
+async function saveRows(req) {
+  const shapeError = checkRowWrites(req.body);
+  if (shapeError) return err(400, shapeError, req.correlationId);
+
+  const { tableName, update = [], delete: remove = [], changeLog } = req.body;
+
+  const pgcClient = getClient(process.env.PGC_DATABASE_URL);
+  let   pgdClient = null;
+
+  try {
+    await pgcClient.connect();
+
+    // --- Gate: registered, and each kind of write the request carries allowed ---
+    const gate = await pgcClient.query(
+      `SELECT tm.allow_insert, tm.allow_update, tm.allow_delete, s.target, s.columns
+         FROM "PGC_TableMap" tm
+         JOIN "PGC_Schema"   s  ON s.id = tm.schema_id
+        WHERE tm.table_name = $1`,
+      [tableName]
+    );
+    if (gate.rows.length === 0) {
+      return err(404, `Table "${tableName}" not registered in PGC_TableMap`, req.correlationId);
+    }
+    const { target, columns: schemaColumns } = gate.rows[0];
+    const refused = refusedKind(req.body, gate.rows[0]);
+    if (refused) return err(403, `${refused} not permitted on "${tableName}"`, req.correlationId);
+
+    const columnError = checkWriteColumns(tableName, writtenRows(req.body), schemaColumns);
+    if (columnError) return err(400, columnError, req.correlationId);
+
+    if (target === 'pgd') pgdClient = getClient(process.env.PGD_DATABASE_URL);
+    const dbClient = pgdClient ?? pgcClient;
+    if (target === 'pgd') await dbClient.connect();
+
+    try {
+      await dbClient.query('BEGIN');
+
+      // --- Lock the rows to change or remove, and compare their versions ---
+      const claimed   = [...update, ...remove];
+      const current   = await lockRows(dbClient, tableName, claimed.map(r => r.id));
+      const conflicts = findVersionConflicts(tableName, claimed, current);
+      if (conflicts.length > 0) {
+        await dbClient.query('ROLLBACK');
+        console.info(`table saveRows: version conflict on ${tableName}`, { conflicts });
+        return versionConflict(conflicts, req.correlationId);
+      }
+
+      const written = await writeRows(dbClient, {
+        tableName, schemaColumns, writes: req.body, current, correlationId: req.correlationId,
+      });
+      const batchId = await writeChangeLog(dbClient, changeLog, written.log);
+
+      await dbClient.query('COMMIT');
+
+      console.info(`table: saved ${tableName} — updated ${written.updated.length}, inserted ${written.inserted.length}, deleted ${written.deleted.length}`);
+      return ok({
+        success:       true,
+        tableName,
+        ...(batchId ? { batchId } : {}),
+        updated:       truncateVectorColumns(written.updated, schemaColumns),
+        inserted:      truncateVectorColumns(written.inserted, schemaColumns),
+        deleted:       written.deleted,
+        correlationId: req.correlationId,
+      }, req.correlationId);
+    } catch (innerError) {
+      await dbClient.query('ROLLBACK');
+      throw innerError;
+    }
+
+  } catch (error) {
+    console.error('table saveRows error:', error.message);
+    return err(500, `saveRows failed: ${error.message}`, req.correlationId);
   } finally {
     await pgdClient?.end();
     await pgcClient.end();

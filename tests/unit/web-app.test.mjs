@@ -20,7 +20,7 @@ import { createSession, safeReturnPath, SignInRequired, AuthUnavailable, REFRESH
 import { createApiClient, ApiError } from '../../src/ui/web/app/api/client.mjs';
 import { matchPath, matchLocation }  from '../../src/ui/web/app/router.mjs';
 import { formatValue, isNumericColumn }   from '../../src/ui/web/app/records/format.mjs';
-import { rowsRequest, appendPage, mergeColumns, listFields, initialView, viewKey } from '../../src/ui/web/app/records/query.mjs';
+import { rowsRequest, appendPage, mergeColumns, titleColumn, initialView, viewKey } from '../../src/ui/web/app/records/query.mjs';
 import { inputsOf, initialValues, isChanged, fieldProblems, formValues, answerFor, gridOf, gridSections, moveCell, listColumns, revealContent } from '../../src/ui/web/app/gates/gate.mjs';
 import { liveScript, isNewBuild } from '../../src/ui/web/app/shell/version.mjs';
 import { runName, panelWorkflows, foldPoint, addMessages, threadDelay, isActive, isWorking, THREAD_POLL_MS, THREAD_POLL_MAX_MS } from '../../src/ui/web/app/runs/runs.mjs';
@@ -366,7 +366,7 @@ describe('records — the read, the columns, the views (§4.2)', () => {
     { name: 'date', type: 'date', label: 'Date' },
   ];
 
-  it('rowsRequest: the panel\'s columns, plus any a currency or the list needs; its filter, order and limit', () => {
+  it('rowsRequest: the panel\'s columns, plus any a currency or a record\'s title needs; its filter, order and limit', () => {
     assert.deepEqual(rowsRequest({ source: 'PGD_Things', columns: ['date', { name: 'amount', format: 'currency', currency_column: 'currency' }],
       title_column: 'title', filter: [{ column: 'deleted_at', op: 'is_null' }], order_by: 'date DESC', limit: 50 }), {
       source: 'PGD_Things',
@@ -388,22 +388,23 @@ describe('records — the read, the columns, the views (§4.2)', () => {
     assert.deepEqual(merged.filter(c => c.shown).map(c => [c.name, c.label]), [['date', 'Date'], ['amount', 'Gastado']]);
     assert.equal(merged.find(c => c.name === 'amount').format, 'currency');
     assert.deepEqual(merged.filter(c => !c.shown).map(c => c.name), ['id', 'created_at', 'title', 'currency']);
-    assert.ok(mergeColumns({}, READ, 'en').every(c => c.shown), 'no columns named — the grid shows every column read');
+    assert.deepEqual(mergeColumns({}, READ, 'en').filter(c => c.shown).map(c => c.name), ['title', 'amount', 'currency', 'date'],
+      'no columns named — the grid shows every column read but the system\'s (§6.1)');
+    assert.ok(mergeColumns({ columns: ['id', 'title'] }, READ, 'en').find(c => c.name === 'id').shown, 'a panel may name a system column');
   });
 
-  it('listFields: the panel\'s choice, else the label column and the next two readable columns', () => {
+  it('titleColumn: the panel\'s title_column, else the table\'s label column', () => {
     const all = mergeColumns({}, READ, 'en');
-    assert.deepEqual(listFields({}, all), { title: 'title', details: ['amount', 'currency'] });
-    assert.deepEqual(listFields({ title_column: 'date', detail_columns: ['title'] }, all), { title: 'date', details: ['title'] });
-    const named = mergeColumns({ columns: ['date', 'amount'] }, READ, 'en');
-    assert.deepEqual(listFields({ columns: ['date', 'amount'] }, named), { title: 'title', details: ['date', 'amount'] });
+    assert.equal(titleColumn({}, all), 'title');
+    assert.equal(titleColumn({ title_column: 'date' }, all), 'date');
   });
 
-  it('initialView: the viewer\'s last choice, else the panel\'s view, else grid — of the views Phase 0 draws', () => {
+  it('initialView: the viewer\'s last choice, else the panel\'s view, else grid — of the views there are', () => {
     assert.equal(initialView({}, null), 'grid');
-    assert.equal(initialView({ view: 'list' }, null), 'list');
-    assert.equal(initialView({ view: 'list' }, 'grid'), 'grid');
-    assert.equal(initialView({ view: 'document' }, 'gallery'), 'grid');
+    assert.equal(initialView({ view: 'list' }, null), 'grid', 'the list view is retired: a page or a viewer naming it opens on the grid');
+    assert.equal(initialView({}, 'list'), 'grid');
+    assert.equal(initialView({ view: 'document' }, 'gallery'), 'document');
+    assert.equal(initialView({ view: 'gallery' }, 'calendar'), 'grid');
     assert.equal(viewKey('money', 'expenses'), 'evomind.view.money.expenses');
   });
 });
@@ -808,7 +809,7 @@ describe('components and catalog', () => {
   };
   const CONFIG = { source: 'PGD_Things', columns: ['title', { name: 'amount', format: 'currency', currency_column: 'currency' }] };
   const body   = (view, extra = {}, selected = null) => ui.renderToString(ui.createElement(ui.RecordsBody, {
-    config: CONFIG, body: { ...BODY, ...extra }, view, where: { locale: 'en', timeZone: 'Europe/Madrid' }, onOpen() {}, selected,
+    config: CONFIG, body: { ...BODY, ...extra }, where: { locale: 'en', timeZone: 'Europe/Madrid' }, onOpen() {}, selected,
   }));
 
   it('grid: the panel\'s columns, numbers on the right, a currency from the row; a bounded read says so', () => {
@@ -820,25 +821,17 @@ describe('components and catalog', () => {
     assert.doesNotMatch(body('grid', { more: false }), /Showing/);
   });
 
-  it('list: the label column, then the details, each row a button', () => {
-    const html = body('list');
-    assert.match(html, /<li><button type="button"><span class="rt">Shop A<\/span><span class="rd">€62.40<\/span><\/button><\/li>/);
-  });
-
-  it('a long read scrolls inside the panel; the row the drawer shows is marked in either view', () => {
+  it('a long read scrolls inside the panel; the row the drawer shows is marked', () => {
     assert.match(body('grid'), /<div class="tablewrap pbody"><table class="grid">/);
-    assert.match(body('list'), /<ul class="rlist pbody">/);
     assert.match(body('grid', {}, BODY.rows[1]), /<tr tabindex="0" aria-selected="true"><td>Shop B<\/td>/);
     assert.equal((body('grid', {}, BODY.rows[1]).match(/aria-selected/g) ?? []).length, 1);
-    assert.match(body('list', {}, BODY.rows[0]), /<button type="button" aria-current="true"><span class="rt">Shop A/);
   });
 
   it('a read with more ends on Show more inside its scroll, which reads on (item 9); none without onMore or more', () => {
     const paged = (view, extra = {}, paging) => ui.renderToString(ui.createElement(ui.RecordsBody, {
-      config: CONFIG, body: { ...BODY, ...extra }, view, where: { locale: 'en', timeZone: 'Europe/Madrid' }, onOpen() {}, onMore() {}, paging,
+      config: CONFIG, body: { ...BODY, ...extra }, where: { locale: 'en', timeZone: 'Europe/Madrid' }, onOpen() {}, onMore() {}, paging,
     }));
     assert.match(paged('grid'), /<\/table><div class="more"><button type="button" class="btn">Show more<\/button><\/div><\/div><p class="pfoot">/);
-    assert.match(paged('list'), /<li class="more"><button type="button" class="btn">Show more<\/button><\/li><\/ul>/);
     assert.match(paged('grid', {}, { busy: true, failed: false }), /<div class="more"><span class="muted">Loading…<\/span><\/div>/);
     assert.match(paged('grid', {}, { busy: false, failed: true }), /Couldn&#x27;t read more — try again/);
     assert.doesNotMatch(paged('grid', { more: false }), /class="more"/);

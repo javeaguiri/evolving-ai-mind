@@ -28,7 +28,7 @@ beforeEach(() => {
     // The registry gate answers; the data query fails, as a constraint violation does.
     if (/PGC_TableMap/.test(sql)) {
       return { rows: [{ id: 1, target: 'pgd', allow_insert: true, allow_update: true, allow_delete: true,
-        columns: [{ name: 'id', type: 'serial' }, { name: 'name', type: 'text' }] }] };
+        columns: [{ name: 'id', type: 'serial' }, { name: 'name', type: 'text' }, { name: 'updated_at', type: 'timestamptz' }] }] };
     }
     const error = new Error('null value in column "name" violates not-null constraint');
     error.code = '23502';
@@ -46,6 +46,7 @@ describe('SERV table routes close every connection when the query fails', () => 
     ['updateRows', { tableName: 'PGD_X', filters: [{ column: 'id', op: 'eq', value: 1 }], updates: { name: 'b' } }],
     ['deleteRows', { tableName: 'PGD_X', filters: [{ column: 'id', op: 'eq', value: 1 }] }],
     ['upsertRows', { tableName: 'PGD_X', matchColumns: ['id'], rows: [{ id: 1, name: 'c' }] }],
+    ['saveRows',   { tableName: 'PGD_X', insert: [{ name: 'd' }] }],
   ]) {
     it(`${subRoute}: the PGC and the PGD connection both close`, async () => {
       const resp = await call(subRoute, body);
@@ -63,7 +64,7 @@ describe('the PGD connection closes in finally, never after the query', () => {
     assert.ok(!/await dbClient\.end\(\)/.test(src));
   });
 
-  it('all five routes close it in finally, beside the PGC connection', () => {
-    assert.equal((src.match(/\} finally \{\n    await pgdClient\?\.end\(\);\n    await pgcClient\.end\(\);/g) ?? []).length, 5);
+  it('all six routes close it in finally, beside the PGC connection', () => {
+    assert.equal((src.match(/\} finally \{\n    await pgdClient\?\.end\(\);\n    await pgcClient\.end\(\);/g) ?? []).length, 6);
   });
 });

@@ -25,6 +25,7 @@ import { GearIcon }            from './shell/icons.jsx';
 import { Settings, SETTINGS_ENTRIES } from './pages/Settings.jsx';
 import { PageBody }            from './panels/PageBody.jsx';
 import { WorkflowPanel }       from './panels/WorkflowPanel.jsx';
+import { DomainRecords }       from './panels/DomainRecords.jsx';
 import { RunThread }           from './runs/RunThread.jsx';
 import { runName }             from './runs/runs.mjs';
 import { domainItems, pollDelay, HOME_PAGE_KEY } from './shell/nav.mjs';
@@ -205,6 +206,9 @@ export function Shell({ route, me, pages, domains, problem, api, onSignInRequire
             <WorkflowPanel key={page.params.domain} panel={{ id: 'workflows', width: 'full', config: { domain: page.params.domain } }}
               title={t('workflow.domainPanel')} context={context} />
           </div>
+        )}
+        {page.page === 'domain' && domains?.some(d => d.domain === page.params.domain) && (
+          <DomainRecords key={page.params.domain} domain={page.params.domain} context={context} />
         )}
         {shown && shown.panels.length > 0 && <PageBody pageKey={shown.pageKey} panels={shown.panels} context={context} />}
         {shown && shown.panels.length === 0 && page.page === 'home' && <p className="muted">{t('pages.homeEmpty')}</p>}
