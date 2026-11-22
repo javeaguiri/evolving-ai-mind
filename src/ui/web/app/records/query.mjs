@@ -69,6 +69,20 @@ export function appendPage(body, page) {
 const SYSTEM_COLUMNS = new Set(['id', 'created_at', 'updated_at']);
 
 /**
+ * A panel's read with a page added — only to the read the page continues. A page asked for
+ * while the rows were current can arrive after a new read has started (Edit reads the rows
+ * again, with their versions): it belongs to rows that are gone, and is dropped.
+ *
+ * @param {{ status: string, read?: number, body?: object }} state  The panel's read as it stands
+ * @param {object} page   The page that arrived
+ * @param {number} read   The read it continues — the one whose rows asked for it
+ */
+export function addPageTo(state, page, read) {
+  if (state.status !== 'ready' || state.read !== read) return state;
+  return { ...state, body: appendPage(state.body, page) };
+}
+
+/**
  * Every column read, each with the panel's own label and format where it gives them, in the
  * panel's order, then the rest. `shown`: the grid draws it — those the panel names, or, when it
  * names none, every one but the system's (§6.1: a key and timestamps are not shown).

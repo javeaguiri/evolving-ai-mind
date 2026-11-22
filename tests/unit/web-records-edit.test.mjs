@@ -13,7 +13,7 @@ import * as esbuild             from 'esbuild';
 
 import { editorFor, editsInGrid, withSchema, canEdit, cellText, readCell, noEdits, hasEdits, setCell, addRow, setAddedCell,
          dropAdded, toggleRemoved, editProblems, writesOf, applySaved, afterConflict, movedRows, referenceOptions } from '../../src/ui/web/app/records/edits.mjs';
-import { rowsRequest } from '../../src/ui/web/app/records/query.mjs';
+import { rowsRequest, addPageTo } from '../../src/ui/web/app/records/query.mjs';
 import { ApiError }    from '../../src/ui/web/app/api/client.mjs';
 
 const APP_DIR = new URL('../../src/ui/web/app/', import.meta.url).pathname;
@@ -168,6 +168,16 @@ describe('what a save asks, and what it leaves', () => {
   it('rowsRequest asks for versions only while editing', () => {
     assert.equal(rowsRequest({ source: 'PGD_X' }, 0, true).query.with_version, 'true');
     assert.ok(!('with_version' in rowsRequest({ source: 'PGD_X' }).query));
+  });
+  it('addPageTo: a page joins the read it continues', () => {
+    const state = { status: 'ready', read: 3, body: { rows: [{ id: 1 }], more: true, totalMatching: 2 } };
+    assert.deepEqual(addPageTo(state, { rows: [{ id: 2 }], more: false }, 3).body.rows, [{ id: 1 }, { id: 2 }]);
+  });
+  it('addPageTo: Edit read the rows again while the next page was on its way — the page is dropped, not added to nothing', () => {
+    const page = { rows: [{ id: 2 }], more: false };
+    assert.deepEqual(addPageTo({ status: 'loading' }, page, 3), { status: 'loading' }, 'the new read has not arrived');
+    const fresh = { status: 'ready', read: 4, body: { rows: [{ id: 1, _version: 'v' }], more: true } };
+    assert.equal(addPageTo(fresh, page, 3), fresh, 'the new read arrived first: the old page is not its');
   });
   it('ApiError keeps a conflict\'s rows', () => {
     assert.deepEqual(new ApiError(409, 'version_conflict', 'm', undefined, [{ id: 1 }]).conflicts, [{ id: 1 }]);

@@ -107,6 +107,12 @@ soft delete is not this sprint (Javear).
 Item 5 built and deployed on `/sources`, not `/domains` (Javear): spec 3.13.0, the policy checked in
 PROC and a request refused whole, `409` carried to the browser with its `conflicts`.
 
+**Retro note:** Edit crashed a panel (Javear, during the AC3 run; very likely Safari's earlier
+blank screen): the next page of the old read, asked for as Edit began, arrived before the new read
+and was added to rows not yet there — the page was tied to the newest read's number, not its own.
+Fixed: a page joins only the read it continues (`addPageTo`). A read that can be superseded
+carries its own identity in what it hands on.
+
 **Retro note:** the grid's first live edit marked every row — the panel read named columns
 without `id`, and the tests' rows always had one. A view test is fed a read shaped by a real panel
 config, not a hand-made row.

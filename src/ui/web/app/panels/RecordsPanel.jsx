@@ -25,7 +25,7 @@ import { useTranslation }      from 'react-i18next';
 import { SignInRequired }      from '../auth/session.mjs';
 import { Drawer }              from '../shell/Drawer.jsx';
 import { formatValue, isNumericColumn } from '../records/format.mjs';
-import { rowsRequest, appendPage, mergeColumns, listFields, initialView, viewKey, RECORD_VIEWS, DOCUMENT_VIEW } from '../records/query.mjs';
+import { rowsRequest, addPageTo, mergeColumns, listFields, initialView, viewKey, RECORD_VIEWS, DOCUMENT_VIEW } from '../records/query.mjs';
 import { withSchema, canEdit, noEdits, hasEdits, setCell, addRow, setAddedCell, dropAdded, toggleRemoved, editProblems,
          writesOf, applySaved, afterConflict, movedRows, referenceOptions } from '../records/edits.mjs';
 import { EditGrid }            from '../records/EditGrid.jsx';
@@ -54,7 +54,7 @@ function useRows(api, config, onSignInRequired, withVersion = false) {
     setState({ status: 'loading' });
     setPaging({ busy: false, failed: false });
     api.get(`sources/${encodeURIComponent(source)}/rows`, query).then(
-      body => { if (read.current === id) setState({ status: 'ready', body }); },
+      body => { if (read.current === id) setState({ status: 'ready', body, read: id }); },
       e => {
         if (read.current !== id) return;
         if (e instanceof SignInRequired) onSignInRequired();
@@ -68,14 +68,14 @@ function useRows(api, config, onSignInRequired, withVersion = false) {
   const more = useCallback(() => {
     if (busy.current || state.status !== 'ready' || !state.body.more) return;
     busy.current = true;
-    const id = read.current;
+    const id = state.read;   // the read whose rows the page continues — never a newer one
     const { source, query } = rowsRequest(config, state.body.rows.length, withVersion);
     setPaging({ busy: true, failed: false });
     api.get(`sources/${encodeURIComponent(source)}/rows`, query).then(
       page => {
         busy.current = false;
         if (read.current !== id) return;
-        setState(s => ({ ...s, body: appendPage(s.body, page) }));
+        setState(s => addPageTo(s, page, id));
         setPaging({ busy: false, failed: false });
       },
       e => {
