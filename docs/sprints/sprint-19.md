@@ -1,10 +1,10 @@
 # Sprint 19 — Records on the web
 
-**Status: ACTIVE — started 2026-11-22.** Scope and ACs agreed with Javear at "start sprint". The
+**Status: CLOSED 2026-11-22 — started 2026-11-22. All eight ACs met: seven live, AC7 by review and tests.** Scope and ACs agreed with Javear at "start sprint". The
 next slice of `docs/arch-web-app.md` (v0.10) §10 Phase 1 — §6, domain views — with the edit policy
 of `docs/arch-home-brain.md` §4.8. The prior sprint's retro is `docs/sprints/sprint-18.md`.
 
-**Branch:** `sprint/19-web-records`
+**Branch:** `sprint/19-web-records` — merged to main at close, as every sprint is.
 
 ---
 
@@ -42,7 +42,7 @@ needs to see and correct them on the web.
 | **6** | ✅ **Web — the editable grid** (§6.1, §6.2): cell editors from column type, changed cells marked, rows added and deleted where the table allows, one Save; a `409` re-reads and names the rows that moved **Built and deployed 2026-11-22** (`deploy-web.mjs`; Money page v5) — edit mode in the records panel's grid: Edit where the schema opens something, editors by column type, a foreign key a drop-down of existing rows by label (Javear: never a typed id) and shown by label in view mode too, changed cells marked, + Add row / × remove where allowed, one Save; a refusal named, a `409` naming the rows that moved, their edits dropped, the rows read again. The Money page's expenses panel gains Currency and Category (`household/pages.json`, Money v5). Fixed live 2026-11-22 (`f635d28`): edit mode read a panel's named columns without `id`, so one row's edit showed on every row (Javear, nothing saved) — edits now read `id` with the versions. AC1 met live; a text cell saved with its trailing space (`EUR `) fixed by trimming (`20abaa7`) |
 | **7** | ✅ **Web — the document view** (§6.2): a record picker; the root as a form; child collections as sub-grids, ordered ones (steps) as an ordered list; foreign keys as pickers of existing rows (Y); one Save **Built 2026-11-22** — the records panel's Document view for an entity: a record picked by label, its root a form (text a text area, keys drop-downs by label), each child table a grid with + Add row and × where allowed (Javear: steps a grid with `step_number` until `display.order_by`), one Save; a conflict drops only edits to what moved — root fields compared — and names it, an ingredient line by its ingredient. Each panel now inside an error boundary (Javear) — Safari's blank screen on Edit will show its error. AC2 on item 8's `/d/recipes` (Javear) |
 | **8** | ✅ **Domain pages' records panels** (§4.4): `/d/{domain}` lists its tables and entities, an entity opening as a document **Built and deployed 2026-11-22** (smoke: `/domains/recipes` — Recipes as an entity, Ingredients, Recipe ingredients, Recipe steps) — spec 3.14.0 `GET /domains/{domain}` (`proc/domains.mjs`): an entity with child tables replaces its root, every other table and view its own panel, child tables included (Javear); `/d/{domain}` draws them after its workflows (`DomainRecords.jsx`); an entity's row opens as a document Corrected on Javear's first look (spec 3.14.1): a recipe's lines and steps showed both in its document and as flat panels — a child table is now its own panel only if itself an entity's root (expenses stay); the record picker read as an editable field — now a navigator (*← All recipes*, *Open ▾*); unconfigured panels showed `id` and timestamps — hidden (§6.1). Deployed 2026-11-22 (smoke: `/domains/recipes` — Recipes, Ingredients) |
-| **9** | 🟡 **Retire `list`** (X): off the view switch and the page contract; Inventory's panel to `grid` (`household/pages.json`, a new version); `arch-web-app.md` corrected **Built and deployed 2026-11-22** — spec 3.14.2: a records panel's view is grid or document, `detail_columns` gone, `title_column` kept (it titles a record); PROC's page contract refuses `list`; the web app draws no list and shows the view switch only for an entity (Grid, Document); Home's stock panel to the grid (`household/pages.json`, Home v5); `arch-web-app.md` corrected. Deployed 2026-11-22 (web; no Lambda code changed — the page contract runs at write, in `upsert-page.mjs`); every live records panel opens on the grid |
+| **9** | ✅ **Retire `list`** (X): off the view switch and the page contract; Inventory's panel to `grid` (`household/pages.json`, a new version); `arch-web-app.md` corrected **Built and deployed 2026-11-22** — spec 3.14.2: a records panel's view is grid or document, `detail_columns` gone, `title_column` kept (it titles a record); PROC's page contract refuses `list`; the web app draws no list and shows the view switch only for an entity (Grid, Document); Home's stock panel to the grid (`household/pages.json`, Home v5); `arch-web-app.md` corrected. Deployed 2026-11-22 (web; no Lambda code changed — the page contract runs at write, in `upsert-page.mjs`); every live records panel opens on the grid |
 
 ## Acceptance Criteria
 
@@ -54,8 +54,8 @@ needs to see and correct them on the web.
 | **AC4** | ✅ | A field or table the policy does not open is refused whole on the server, and the web offers no edit control for it | 3, 5, 6, 7 | Tests through the route — met 2026-11-22: refused whole on the server, tested through the route (`source-records.test.mjs`; live, a save refused `add_rows` and `created_at`); the grid and the document draw a closed field as read, never a control (`web-records-edit`, `web-document` tests) |
 | **AC5** | ✅ | Every direct edit leaves a `PGC_ChangeLog` row with each field's old and new value | 4, 5 | Read back after AC1 and AC2 — met 2026-11-22: the grid's save (batch `ec0c4265`) and the document's (`f53a9cb7`) each logged every row, old and new values, actor, `via: web`, domain |
 | **AC6** | ✅ | `/d/recipes` lists the recipes and opens one as a document | 7, 8 | Shown live — met 2026-11-22: `/d/recipes` lists Recipes and Ingredients; a recipe's row opens it as a document |
-| **AC7** | 🟡 | Each new endpoint is in `openapi.yaml` before it is built, its own commit, bumping the spec's version; every refusal is tested through its route | all | Review as each lands, and tests |
-| **AC8** | ⬜ | No view switch offers `list`; Inventory's panel opens as a grid | 9 | Shown live |
+| **AC7** | ✅ | Each new endpoint is in `openapi.yaml` before it is built, its own commit, bumping the spec's version; every refusal is tested through its route | all | Review as each lands, and tests — met 2026-11-22: reviewed — five spec commits, each docs only and each before its code, each bumping the version (3.12.0 `29f5270`→`0307c24`/`7ee984f`, 3.13.0 `4d86535`→`3043890`, 3.14.0 `7a52612`→`34d0758`, 3.14.1 `536db11`→`dce9ac2`, 3.14.2 `a68cf1c`→`fe886a5`); every refusal tested through its route (`serv-save-rows`, `serv-save-entity`, `source-records`, `domains`, `pages`) |
+| **AC8** | ✅ | No view switch offers `list`; Inventory's panel opens as a grid | 9 | Shown live — met 2026-11-22 (Javear): no view switch offers List; Home's Stock (Home v5) and Inventory's Items open as grids |
 
 ## Retro lessons to apply (sprint-18)
 
@@ -107,23 +107,83 @@ soft delete is not this sprint (Javear).
 Item 5 built and deployed on `/sources`, not `/domains` (Javear): spec 3.13.0, the policy checked in
 PROC and a request refused whole, `409` carried to the browser with its `conflicts`.
 
-**Retro note:** Edit crashed a panel (Javear, during the AC3 run; very likely Safari's earlier
-blank screen): the next page of the old read, asked for as Edit began, arrived before the new read
-and was added to rows not yet there — the page was tied to the newest read's number, not its own.
-Fixed: a page joins only the read it continues (`addPageTo`). A read that can be superseded
-carries its own identity in what it hands on.
+Items 6–9 built and deployed through the day, each checked live by Javear: AC1 on Money's Expenses,
+AC2 and AC6 on `/d/recipes`, AC3 against a change made in Slack (run 1077), AC8 on every page.
+Four web defects found in that use, each fixed the same hour (the Retro below). Safari's blank
+screen on Edit was, very likely, the paging race fixed in `7f2bd08`; not yet confirmed in Safari.
 
-**Retro note:** the grid's first live edit marked every row — the panel read named columns
-without `id`, and the tests' rows always had one. A view test is fed a read shaped by a real panel
-config, not a hand-made row.
+## Outcome — closed 2026-11-22
 
-**Next:** Javear's AC1 run on the editable grid, then item 7.
+**The household views and edits records on the web.** Money's Expenses is edited in its grid —
+cells by column type, a category from a drop-down by name, rows added and removed, one Save. A
+recipe opens from `/d/recipes` as one document — its own fields a form, its ingredient lines and
+steps as grids — saved at once. Either save is checked against the version every row was read at:
+a change made meanwhile, in Slack or by Novia, is refused, named, and the rows read again. Every
+direct edit is logged with each field's old and new value, and nothing is editable that the
+household's edit policy does not open.
 
-**Earlier plan:** item 2 (`saveEntity`, `getEntity`
-`withVersion` and `children`).
+**Built:** SERV `saveRows` and `saveEntity` on the shared `row-writes.mjs` — rows locked
+`FOR UPDATE`, versions compared (`updated_at::text`), written, and logged to `PGC_ChangeLog` in the
+same transaction through the same connection (PGC and PGD are one database); `withVersion` on
+`getRows` and `getEntity`, which also returns `children`. `PGC_EditPolicy` (`add_rows`,
+`delete_rows`) from `household/edit-policy.json` by `upsert-edit-policy.mjs`; `edit-policy.mjs`
+plans it and refuses a request whole (`policyRefusals`). PROC's record routes on `/sources/{source}/…`
+— schema with `editable` and `references`, `with_version`, the grid's save, the document's read,
+save and create — and `GET /domains/{domain}`, an entity with child tables one panel and its
+children inside its documents unless themselves an entity's root. The web app's edit mode
+(`EditGrid.jsx`, `edits.mjs`), document view (`DocumentView.jsx`, `document.mjs`), domain page
+records (`DomainRecords.jsx`), and a per-panel error boundary (`PanelBoundary.jsx`); the `list`
+view retired. Spec 3.12.0 → 3.14.2. Unit tests 1976 → 2179.
 
-**Previously (session 2's plan):** item 1. First `PGC_ChangeLog` — template, `seed_PGC_Schema.json`, created
-live through SERV `createTable` (never bootstrap). Then `withVersion` on `getRows` and `saveRows`
-in SERV per spec 3.12.0, tests through the real route against a stubbed database client: a clean
-save, a conflict rolling everything back, each refusal, the log rows. Unit tests before push.
+**To the backlog:** a column's format and label belong to the registry's `display`, before the page
+editor (Javear); Novia's domain procedure sets the edit policy (Javear). **Stays out:** logging
+workflow writes to `PGC_ChangeLog` (AA), soft delete from the grid, creating a referenced row from a
+document (Y).
 
+## Retro
+
+**What went right.**
+
+*Every structural question was settled before its code, in one line each.* AB, the save shapes, the
+versions, the log's connection, the flags' names, `/sources` over `/domains`, steps as a grid, the
+child-table rule: each was put as a choice with a recommendation and answered, and none was
+reopened by the code.
+
+*Last sprint's lessons held.* Five spec commits, each docs only, each bumping the version, each
+before its code. Every refusal tested through its route in the commit that added it. Versions copied
+as text everywhere — the change log's values read through `to_jsonb`, so a timestamp keeps its
+microseconds.
+
+*Shared code came first.* `saveRows`' lock, check, writes and log moved to `row-writes.mjs` in a
+behaviour-neutral commit before `saveEntity` was written, so the document's save is the grid's
+applied per table; `childTablesOf` and `tableLabel` moved to `src/shared` so SERV, PROC and the
+browser answer those questions one way.
+
+*An error boundary turned a blank screen into a diagnosis.* Safari's blank screen could not be
+traced from the server; once a failing panel showed its message, the next failure named the line,
+and it was a race on every browser.
+
+**What went wrong, and what it says.**
+
+*Four web defects reached Javear before a test found them.* Edit mode read a panel's named columns
+without `id`, so one row's edit showed on every row; a text cell kept its trailing space (`EUR `);
+the next page of an old read was appended after Edit had started a new one; and the domain page
+showed a recipe's lines twice, its record picker read as a form field, its panels showed `id` and
+timestamps. The tests passed because they were fed hand-made rows and a hand-made order of events.
+**A view's tests are fed a read shaped by a real panel config; a read that can be superseded
+carries its own identity in what it hands on; and a layout rule is judged on the household's main
+domain rendered, before it is recommended.**
+
+*A recommendation was reversed on first sight.* "Every table, child tables included" was my
+recommendation, with its preview; on `/d/recipes` it duplicated the document. The cost to the main
+use case was in the preview but not stated as a cost. **When recommending a rule, state what it
+costs the case the sprint is for.**
+
+*A design's failure behaviour was never built.* §4.2 has said since Phase 0 that a failing panel
+draws its frame and the page draws on; nothing implemented it until a blank screen in Safari made
+it urgent. **A failure behaviour the design states is built with the first component it covers.**
+
+*A design depended on an infrastructure claim no one had checked.* The spec wrote the change log
+"in the same transaction" while `arch-data.md` said PGC and PGD were separate databases; the code
+found them one (`evo_mind`) and the docs now say the log depends on it. **When a design's guarantee
+rests on infrastructure, the spec names the fact and someone checks it before the spec is agreed.**

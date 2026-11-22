@@ -248,17 +248,19 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 
 ## Current State
 
-Sprints 7–18: see `docs/sprints/sprint-07.md` through `docs/sprints/sprint-18.md` (outcome, validation, retro).
+Sprints 7–19: see `docs/sprints/sprint-07.md` through `docs/sprints/sprint-19.md` (outcome, validation, retro).
+
+**Sprint 19 closed 2026-11-22 → 1 day, branch `sprint/19-web-records`. 1976 → 2179 unit tests. All 8 ACs met, seven live, AC7 by review and tests.** **The household views and edits records on the web.** A table is edited in a grid and an entity — a recipe — as one document, each saved at once in one transaction, checked against the version every row was read at (`updated_at::text`; `409 version_conflict` names what moved and nothing is written). SERV `saveRows`/`saveEntity` on the shared `row-writes.mjs`; `PGC_ChangeLog` written in the same transaction through the save's own connection (PGC and PGD are one database). The edit policy, `PGC_EditPolicy` (`add_rows`, `delete_rows`), from `household/edit-policy.json`, checked in PROC on the direct path only, a request refused whole (`403 not_editable`). PROC's record routes on `/sources/{source}/…` (schema with `editable` and `references`, `with_version`, the grid's and the document's saves) and `GET /domains/{domain}` — an entity with child tables is one panel, its children inside its documents unless themselves an entity's root. A foreign key is a drop-down of existing rows by label, never a typed id, and shown by label. Each panel in an error boundary. The `list` view retired.
 
 **Sprint 18 closed 2026-11-22 → 5 days, branch `sprint/18-web-novia`. 1774 → 1976 unit tests. All 7 ACs met, six live, one by review and tests.** **The household talks to Novia on the web page.** Her region sits left of every page (collapsible, resizable, a tab on a phone): sessions by last activity, named by `label` or first message and renamed in place; a conversation reopened with its history; her gates and questions answered there. `minds_eye` panels keep one domain's or topic's sessions (Money's `ask-money`). `/proc/minds-eye/sessions…` read `minds_eye` sessions only, each checked against the principal. `PGC_Session.callback` replaced `slack_thread_ts`; `topic`, `label`, `last_active_at` (a trigger, installed by SERV's new `addTrigger` from `trigger-functions.mjs`); `PGC_UiMessage.session_id`. `GATE_ANSWERED`: a gate answered anywhere is kept in the inbox and drawn under its question; Slack replaces the buttons of a gate answered elsewhere (bot history scopes added). Records panels read on as scrolled (`offset`). Lambda concurrency quota raised from 10 to 1000.
 
 **Sprint 17 closed 2026-11-17 → 3 days, branch `sprint/17-web-front`. 1571 → 1774 unit tests.** The household uses the brain from a web page — Phase 0's front end: the SPA on S3 + CloudFront (`dxghnv4qmxz62.cloudfront.net`), Cognito sign-in with TOTP, `WebApiFunction` an allow-list calling PROC as the token's `sub`; shipped by `dev_scripts/deploy-web.mjs`, not `sam deploy`. Pages of panels from `PGC_Page`; every gate type answered in the browser.
 
-Read `docs/sprints/sprint-18.md` (outcome, retro) before scoping Sprint 19.
+Read `docs/sprints/sprint-19.md` (outcome, retro) before scoping Sprint 20.
 
 ### Open Work
 
-None — Sprint 19 not yet scoped. Candidates: the rest of `arch-web-app.md` §10 Phase 1 (*Ask Novia about this*, the page editor, `chart`/`metric` panels, domain views and editable grids), and the backlog's web items (custom domain, managing a session's topic).
+None — Sprint 20 not yet scoped. Candidates: the registry's `display` metadata (a column's label and format, `order_by` for an ordered child list) — the page editor's prerequisite (backlog); the page editor itself; *Ask Novia about this*; `chart`/`metric` panels; Novia's domain procedure setting the edit policy and display (backlog); the backlog's web items (custom domain, managing a session's topic).
 
 ### Deferred
 
