@@ -36,7 +36,7 @@ needs to see and correct them on the web.
 |---|---|
 | **1** | 🟡 **SERV — a grid save in one transaction** (§6.4): changed, new and deleted rows written together; each changed or deleted row conditioned on the version it was read at; `409` naming the rows that moved. Spec first. **Spec ✅** (3.12.0: `saveRows`, `withVersion` on `getRows`). **SERV ✅ 2026-11-22** — `saveRows` and `withVersion` in `table.mjs`, tested through the route (`serv-save-rows.test.mjs`); deployed 2026-11-22 (`sam deploy`; smoke: a refusal and a versioned read, nothing written) |
 | **2** | 🟡 **SERV — a document save** (§6.4): the root and each child collection diffed (insert, update, delete) and written in one transaction, conditioned on the root's version; embeddings refreshed through `resolveEmbedding` as `table.mjs` does. Today's entity writes touch the root only. Spec first. **Spec ✅** (3.12.0: `saveEntity`, `withVersion` and `children` on `getEntity`). **SERV ✅ 2026-11-22** — in `entity.mjs` on the shared `row-writes.mjs` (Javear: a children-only save needs `allow_update` on the root; a new entity's children insert only; children read whole), tested through the route (`serv-save-entity.test.mjs`); deployed 2026-11-22 (smoke: a refusal and Recipe 5 read as a document, nothing written) |
-| **3** | 🟡 **The edit policy** (`arch-home-brain.md` §4.8): `PGC_EditPolicy` (AB) — open columns and add/delete per table; template, registry seed, created through SERV; `household/edit-policy.json` and its upsert script (`--check`, a rerun "no changes") (Z) |
+| **3** | ✅ **The edit policy** (`arch-home-brain.md` §4.8): `PGC_EditPolicy` (AB) — open columns and add/delete per table; template, registry seed, created through SERV; `household/edit-policy.json` and its upsert script (`--check`, a rerun "no changes") (Z). **DONE 2026-11-22** — table live (registry 20/20); `src/proc/edit-policy.mjs` `planEditPolicies`; `dev_scripts/upsert-edit-policy.mjs`; the household's policy written (Expenses add/delete; a recipe's fields; its ingredient lines and steps add/delete — Javear), rerun "no changes", a bad file refused whole. The check on the direct path comes with item 5 |
 | **4** | 🟡 **`PGC_ChangeLog`** (AA): template, registry seed, created live through SERV, never bootstrap; one row per direct change, written in the same transaction as the change. **Table ✅ live 2026-11-22** (`createTable`, `PGC_TableMap.allow_update` set false, registry `--check` 19/19); written by `saveRows` through the save's own connection — PGC and PGD are one database (Javear, 2026-11-22). `saveEntity` writes it too (item 2) |
 | **5** | ⬜ **PROC — record routes** (`arch-home-brain.md` §4.7), spec first: `GET /domains/{d}/schema`, `…/records`, `…/records/{id}` (with its children), the grid's batch save, the document's save, add and delete. Household role; the policy checked server-side, a request refused whole when any field is not open to it; the web allow-list |
 | **6** | ⬜ **Web — the editable grid** (§6.1, §6.2): cell editors from column type, changed cells marked, rows added and deleted where the table allows, one Save; a `409` re-reads and names the rows that moved |
@@ -100,8 +100,13 @@ behaviour-neutral commit of its own), then `saveEntity` and `getEntity` `withVer
 grouped root read with `_version` checked live, read-only. The backlog's *Novia creates domains*
 item now has her procedure set a new domain's edit policy (Javear).
 
-**Next:** item 3 (`PGC_EditPolicy`, `household/edit-policy.json`
-and its upsert script).
+Item 3 done: `PGC_EditPolicy` live with the household's policy; its flags renamed `add_rows`,
+`delete_rows` (Javear: runSql's guard refuses DELETE). Expenses' grid delete is a hard delete —
+soft delete is not this sprint (Javear).
+
+**Next:** item 5 — PROC's record routes, spec first: `GET /domains/{d}/schema` (with the policy),
+`…/records`, `…/records/{id}`, the grid's batch save, the document's save; the policy checked
+server-side, a request refused whole; the web allow-list.
 
 **Earlier plan:** item 2 (`saveEntity`, `getEntity`
 `withVersion` and `children`).
