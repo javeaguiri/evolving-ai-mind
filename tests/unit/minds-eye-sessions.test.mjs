@@ -8,9 +8,10 @@
 //
 // Run: node --test tests/unit/minds-eye-sessions.test.mjs
 
-import { describe, it } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { SQSClient } from '@aws-sdk/client-sqs';
 import {
   ROUND_CEILING_MS, ANSWERED_TEXT, parseSessionsQuery, parseMessagesQuery, sessionState, toSession,
   mergeConversation, readMessageBody, gateAnswer, handle,
@@ -279,5 +280,86 @@ describe('handle — paths, before anything is read', () => {
     const res = await handle({ ...req('GET', 'minds-eye/sessions'), query: { limit: '0' } });
     assert.equal(res.statusCode, 400);
     assert.equal(JSON.parse(res.body).error, 'invalid_query');
+  });
+});
+
+// AC5: the routes against stored sessions, SERV and SQS stubbed — a session that is not
+// minds_eye is never found, one that is not the principal's is forbidden, and the list reads
+// minds_eye sessions only, leaving out what the principal may not see.
+describe('handle — the session a route names, read from SERV', () => {
+  const realFetch = globalThis.fetch;
+  const realSend  = SQSClient.prototype.send;
+  let calls, sent;
+
+  /** Stub SERV: PGC_Session reads answer `sessions`; anything else answers empty. */
+  function stubServ(sessions) {
+    process.env.SERV_API_URL = 'https://serv.test';
+    globalThis.fetch = async (url, init) => {
+      const body = JSON.parse(init.body);
+      calls.push({ path: url.replace('https://serv.test', ''), body });
+      const rows = body.tableName === 'PGC_Session' ? sessions : [];
+      return new Response(JSON.stringify({ success: true, rows }), { status: 200 });
+    };
+  }
+
+  beforeEach(() => {
+    calls = []; sent = [];
+    process.env.HOUSEHOLD_PRINCIPALS = 'sub-1';
+    SQSClient.prototype.send = async command => { sent.push(command); return {}; };
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    SQSClient.prototype.send = realSend;
+    delete process.env.HOUSEHOLD_PRINCIPALS;
+  });
+
+  const req = (method, proxy, body = {}, query = {}) =>
+    ({ method, proxy, headers: { 'x-principal-user': 'sub-1' }, query, body, correlationId: 'c-1' });
+  const idRoutes = [
+    ['GET',   'minds-eye/sessions/7/messages',  {}],
+    ['PATCH', 'minds-eye/sessions/7',           { label: 'A name' }],
+    ['POST',  'minds-eye/sessions/7/messages',  { text: 'Hello' }],
+    ['POST',  'minds-eye/sessions/7/responses', { atSeq: 3, action: 'approve' }],
+  ];
+  const slackCallback = { provider: 'slack', channel: 'C1', threadId: '1.2' };
+
+  for (const session_type of ['general_chat', 'llm_call_diagnostic']) {
+    for (const [method, proxy, body] of idRoutes) {
+      it(`404 session_not_found for a ${session_type} id: ${method} /${proxy}`, async () => {
+        stubServ([{ id: '7', session_type, callback: slackCallback, last_active_at: ago(1000) }]);
+        const res = await handle(req(method, proxy, body));
+        assert.equal(res.statusCode, 404);
+        assert.equal(JSON.parse(res.body).error, 'session_not_found');
+        assert.deepEqual(calls.map(c => c.body.tableName), ['PGC_Session'], 'nothing read past the session');
+        assert.equal(sent.length, 0, 'nothing enqueued');
+      });
+    }
+  }
+
+  for (const [method, proxy, body] of idRoutes) {
+    it(`403 session_forbidden for another person's web session: ${method} /${proxy}`, async () => {
+      stubServ([{ id: '7', session_type: 'minds_eye', callback: { provider: 'web', channel: 'sub-2' }, last_active_at: ago(1000) }]);
+      const res = await handle(req(method, proxy, body));
+      assert.equal(res.statusCode, 403);
+      assert.equal(JSON.parse(res.body).error, 'session_forbidden');
+      assert.deepEqual(calls.map(c => c.body.tableName), ['PGC_Session'], 'nothing read past the session');
+      assert.equal(sent.length, 0, 'nothing enqueued');
+    });
+  }
+
+  it('the list asks for minds_eye sessions only, and leaves out one the principal may not see — its cursor past it', async () => {
+    const mine   = { id: '11', session_type: 'minds_eye', callback: slackCallback, last_active_at: ago(1000) };
+    const theirs = { id: '12', session_type: 'minds_eye', callback: { provider: 'web', channel: 'sub-2' }, last_active_at: ago(2000) };
+    const extra  = { id: '13', session_type: 'minds_eye', callback: slackCallback, last_active_at: ago(3000) };
+    stubServ([mine, theirs, extra]);
+
+    const res  = await handle(req('GET', 'minds-eye/sessions', {}, { limit: '2' }));
+    const body = JSON.parse(res.body);
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(calls[0].body.filters, [{ column: 'session_type', op: 'eq', value: 'minds_eye' }]);
+    assert.deepEqual(body.sessions.map(s => s.sessionId), [11]);
+    assert.equal(body.cursor, theirs.last_active_at);
+    assert.equal(body.more, true);
+    assert.doesNotMatch(calls[1].body.selectSql, /\b12\b/, 'facts read for visible sessions only');
   });
 });
