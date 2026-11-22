@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: evolving-mind-ai
-  version: 3.11.0
+  version: 3.12.0
   description: >
     Self-evolving cognitive automation system.
     Slack → Lambda → PostgreSQL → LLM pipeline.
@@ -506,6 +506,106 @@ components:
                   Index of the execution stack step that was active when cancelled.
                   Null when the run had not yet started executing steps.
                 example: 3
+
+    RowVersion:
+      type: string
+      description: >
+        A row's version — its `updated_at` as PostgreSQL text, to the microsecond
+        (`updated_at::text`). Opaque to the caller: read with `withVersion`, sent back
+        unchanged with a write. Never parsed or rebuilt through a JavaScript `Date`, which
+        keeps milliseconds only and would never match.
+      example: "2026-11-22 08:02:22.892341+00"
+
+    RowWrites:
+      type: object
+      description: >
+        One table's changes in a single save — rows changed, added and removed. Each
+        changed or removed row names the version it was read at. At least one of the
+        three is non-empty.
+      properties:
+        update:
+          type: array
+          items:
+            type: object
+            required: [id, version, changes]
+            properties:
+              id:
+                type: integer
+              version:
+                $ref: '#/components/schemas/RowVersion'
+              changes:
+                type: object
+                minProperties: 1
+                description: Column/value pairs to set. System columns and vector columns are refused.
+        insert:
+          type: array
+          items:
+            type: object
+            description: A new row's column/value pairs. System columns and vector columns are refused.
+        delete:
+          type: array
+          items:
+            type: object
+            required: [id, version]
+            properties:
+              id:
+                type: integer
+              version:
+                $ref: '#/components/schemas/RowVersion'
+
+    ChangeLogContext:
+      type: object
+      description: >
+        When present, every row the save writes is logged to `PGC_ChangeLog` in the same
+        transaction — one row per record, all sharing the save's `batch_id`, each field's
+        old and new value (`updated_at` and vector columns left out). Absent, nothing is
+        logged: a workflow's writes are traced by its run steps.
+      required: [via, domain]
+      properties:
+        actor:
+          type: string
+          nullable: true
+          description: The principal's `sub` — who made the change; null when no person did
+        via:
+          type: string
+          enum: [web]
+          description: How the change came in. Widened when another writer is added
+        runId:
+          type: integer
+          nullable: true
+          description: The run whose step made the change, once workflow writes are logged
+        domain:
+          type: string
+
+    VersionConflict:
+      type: object
+      description: >
+        `409` — a row changed or was removed since it was read. Nothing was written: the
+        whole save is rolled back. The caller reads again.
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          enum: [version_conflict]
+        conflicts:
+          type: array
+          items:
+            type: object
+            properties:
+              table:
+                type: string
+              id:
+                type: integer
+              reason:
+                type: string
+                enum: [changed, deleted]
+      example:
+        success: false
+        error: version_conflict
+        conflicts:
+          - { table: PGD_Expenses, id: 381, reason: changed }
 
     FilterItem:
       type: object
@@ -5608,6 +5708,13 @@ paths:
                     offset plus the rows returned. A stable page needs an orderBy that ends
                     on a unique column. With an offset, `truncated` means rows remain past
                     this page: `total_matching` exceeds offset plus the rows returned.
+                withVersion:
+                  type: boolean
+                  default: false
+                  description: >
+                    Each row also carries `_version` (RowVersion) — what a write through
+                    `saveRows` or `saveEntity` sends back. Refused (400) on a table without
+                    an `updated_at` column.
                 vectorSearch:
                   $ref: '#/components/schemas/VectorSearch'
             examples:
@@ -6038,6 +6145,86 @@ paths:
         '500':
           description: Upsert failed — transaction rolled back
 
+  /api/v1/serv/table/saveRows:
+    post:
+      summary: Write a table's changed, new and removed rows in one transaction, each checked against its version
+      description: >
+        A grid's save. Rows to change or remove are read `FOR UPDATE` and their versions
+        compared before anything is written; a row that changed or is gone fails the whole
+        save with `409 version_conflict`, naming every such row. Otherwise updates, inserts
+        and deletes run in one transaction, and with `changeLog` each written row is logged
+        to `PGC_ChangeLog` in that transaction.
+
+        Gated by PGC_TableMap — `allow_update`, `allow_insert`, `allow_delete` for each kind
+        the request carries. Columns validated against PGC_Schema; system columns (`id`,
+        `created_at`, `updated_at`) and vector columns are refused. Vector columns with
+        `embed_source` are recomputed server-side, as for insertRow and updateRows. A table
+        without `updated_at` is refused. The edit policy is not checked here — it governs
+        the direct path and is PROC's to enforce.
+      tags: [SERV-Table]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/RowWrites'
+                - type: object
+                  required: [tableName]
+                  properties:
+                    tableName:
+                      type: string
+                      pattern: '^PGD_[A-Za-z][A-Za-z0-9_]*$'
+                    changeLog:
+                      $ref: '#/components/schemas/ChangeLogContext'
+            example:
+              tableName: PGD_Expenses
+              update:
+                - { id: 381, version: "2026-11-21 10:02:11.120391+00", changes: { amount: 31.20 } }
+              insert:
+                - { date: "2026-11-22", title: Shop A, amount: 12.5, currency: EUR, category_id: 8 }
+              delete:
+                - { id: 377, version: "2026-11-20 18:40:02.004512+00" }
+              changeLog: { actor: "<sub>", via: web, domain: budgets_expenses }
+      responses:
+        '200':
+          description: >
+            Saved. Changed and new rows are returned whole, each with its new `_version`;
+            removed rows by id. `batchId` is present when the save was logged.
+          content:
+            application/json:
+              example:
+                success: true
+                tableName: PGD_Expenses
+                batchId: 8f0c2b9e-4a51-4c3e-9d0f-2b7a1e6c5d43
+                updated:
+                  - { id: 381, amount: "31.20", _version: "2026-11-22 09:14:03.551210+00" }
+                inserted:
+                  - { id: 384, title: Shop A, amount: "12.50", _version: "2026-11-22 09:14:03.551210+00" }
+                deleted: [377]
+        '400':
+          description: >
+            Validation error — bad table name, nothing to write, unknown or system column,
+            a malformed version, a table without `updated_at`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: A kind of write the request carries is not allowed by PGC_TableMap
+        '404':
+          description: Table not registered in PGC_TableMap
+        '409':
+          description: A row changed or was removed since it was read — nothing written
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionConflict'
+        '500':
+          description: Save failed — transaction rolled back
+
   /api/v1/serv/table/runSql:
     post:
       summary: Execute a read-only SELECT/WITH statement directly
@@ -6128,12 +6315,24 @@ paths:
                 id:
                   type: integer
                   example: 5
+                withVersion:
+                  type: boolean
+                  default: false
+                  description: >
+                    The root carries `_version` (RowVersion), and the response gains
+                    `children`: each child table's rows whole, with `id` and `_version`,
+                    by table name, ordered by `id`. A child table is a table of the
+                    entity's joins whose registered foreign key (`PGC_Schema.foreign_keys`)
+                    references the root table; a join without one is not a child
+                    collection and is not listed. What `saveEntity` writes.
             example:
               entityName: Recipe
               id: 5
       responses:
         '200':
-          description: Entity found
+          description: >
+            Entity found. With `withVersion`, also `children` and the root's `_version`
+            (see the request).
           content:
             application/json:
               example:
@@ -6501,3 +6700,109 @@ paths:
           description: Entity name not registered in PGC_EntitySchema
         '500':
           description: Delete failed
+
+  /api/v1/serv/entity/saveEntity:
+    post:
+      summary: Write a whole entity — its root and child collections — in one transaction, checked against versions
+      description: >
+        A document's save. The root's row and each child collection's changed, new and
+        removed rows are written in one transaction. Every row changed or removed — the
+        root included — is read `FOR UPDATE` and its version compared first; any that moved
+        fails the whole save with `409 version_conflict`. Any save touches the root's
+        `updated_at`, so the root's version moves whenever any part of the document changes:
+        the root's version is the document's.
+
+        Children are keyed by table name. A child table is one of the entity's joins whose
+        registered foreign key references the root table (`PGC_Schema.foreign_keys`) — the
+        same rule `getEntity` uses for `children`. SERV sets that foreign key on every new
+        child row and refuses a child row that names it, or a change or removal of a row that
+        is not this entity's.
+
+        Without `id` and `version` a new entity is created: the root inserted, then its
+        children. With `changeLog`, every written row is logged to `PGC_ChangeLog` in the
+        transaction, under one `batchId`. Gated by PGC_TableMap per table and kind of write;
+        system and vector columns refused; vector columns with `embed_source` recomputed. The
+        edit policy is PROC's to enforce.
+      tags: [SERV-Entity]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entityName]
+              properties:
+                entityName:
+                  type: string
+                id:
+                  type: integer
+                  description: The root's id. Absent with `version` absent — a new entity
+                version:
+                  $ref: '#/components/schemas/RowVersion'
+                root:
+                  type: object
+                  properties:
+                    changes:
+                      type: object
+                      description: The root's column/value pairs to set — for a new entity, its whole row
+                children:
+                  type: object
+                  description: By child table name
+                  additionalProperties:
+                    $ref: '#/components/schemas/RowWrites'
+                changeLog:
+                  $ref: '#/components/schemas/ChangeLogContext'
+            example:
+              entityName: Recipe
+              id: 3
+              version: "2026-11-21 09:31:10.551203+00"
+              root: { changes: { servings: 2 } }
+              children:
+                PGD_RecipeIngredients:
+                  update:
+                    - { id: 14, version: "2026-11-21 09:31:10.551203+00", changes: { quantity: 200 } }
+                  insert:
+                    - { ingredient_id: 9, quantity: 1, unit: tbsp }
+                  delete:
+                    - { id: 15, version: "2026-11-21 09:31:10.551203+00" }
+                PGD_RecipeSteps:
+                  insert:
+                    - { step_number: 4, instruction_text: "Serve warm." }
+              changeLog: { actor: "<sub>", via: web, domain: recipes }
+      responses:
+        '200':
+          description: >
+            Saved. The entity read back as `getEntity` with `withVersion` returns it — the
+            root with its `_version`, and `children` — plus `batchId` when the save was logged.
+          content:
+            application/json:
+              example:
+                success: true
+                entityName: Recipe
+                batchId: 3b1d6f0a-77c2-4e8a-a5d9-0c4e2f9b1a66
+                entity: { id: 3, title: Sweet Potato Black Bean Chili, servings: 2, _version: "2026-11-22 09:20:41.004113+00" }
+                children:
+                  PGD_RecipeSteps:
+                    - { id: 31, recipe_id: 3, step_number: 1, instruction_text: "…", _version: "2026-11-21 09:31:10.551203+00" }
+        '400':
+          description: >
+            Validation error — nothing to write, an unknown child table, an unknown or system
+            column, a child row naming its parent key, `id` without `version` or the reverse
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: A kind of write the request carries is not allowed by PGC_TableMap for its table
+        '404':
+          description: Entity not registered, its root id not found, or a child row not this entity's
+        '409':
+          description: A row changed or was removed since it was read — nothing written
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionConflict'
+        '500':
+          description: Save failed — transaction rolled back

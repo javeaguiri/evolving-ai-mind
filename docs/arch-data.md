@@ -745,25 +745,46 @@ seeds; seeded with a generic, empty Home only, never a domain-specific page.
 
 **Read by** `GET /proc/pages`; Phase 0 builds the table, the seed and the read, Phase 1 the writes.
 
-##### PGC_RecordEdit — Phase 1
+##### PGC_ChangeLog — Phase 1 (Sprint 19)
 
-The audit row for a **direct** edit — a change made from a domain page under the edit policy
-(`arch-home-brain.md` §4.8), not by a workflow. A workflow's writes are already traceable through
-`PGC_WorkflowRun` / `PGC_WorkflowRunStep`; this gives the direct path the same. One row per edit.
+One row per change to a record, whatever made it: who, how it came in, when, the record, and each
+field's old and new value. Written by SERV in the same transaction as the change, from a write's
+`changeLog` (`openapi.yaml` `ChangeLogContext`) — a change is never logged without being made, or
+made without being logged. The web's direct edits are logged; a workflow's writes are traced by
+`PGC_WorkflowRunStep` and carry no `changeLog`.
 
 | Column | Type | Notes |
 |---|---|---|
 | id | bigserial PK | |
-| user_sub | text | Who — the Cognito `sub` from the token, never a request field |
-| domain | text | |
-| table_name | text | The `PGD_` table edited |
-| record_id | text | The record's primary key, as text |
-| operation | text | `update`, `insert`, `delete` |
-| changes | jsonb | Each field's old and new value — `{ "<column>": { "old": …, "new": … } }` |
 | created_at | timestamptz | When |
+| batch_id | uuid | One save — a grid's rows, or a document's root and children, share it |
+| actor | text nullable | Who — the principal's `sub`, never a request field; null when no person made the change |
+| via | text | How it came in — check `('web')`, widened when another writer is added |
+| run_id | integer nullable | The run whose step made the change, for workflow writes. No FK |
+| domain | text | |
+| table_name | text | The `PGD_` table changed |
+| record_id | text | The record's primary key, as text |
+| operation | text | Check `('insert', 'update', 'delete')` |
+| changes | jsonb | `{ "<column>": { "old": …, "new": … } }` — an insert has `new` only, a delete `old` only; `updated_at` and vector columns left out |
 
-The content (who, when, domain, record, each field's old and new value) is decided; the column names
-are proposed and settled at the Phase 1 build.
+##### PGC_EditPolicy — Phase 1 (Sprint 19)
+
+What the web may change directly (`arch-home-brain.md` §4.8) — one row per `PGD_` table. A table
+without a row is read-only; a column not named is read-only. Workflows never meet it: it is checked
+by PROC on the direct path only, and `PGC_TableMap`'s `allow_*` gates still apply to every caller.
+The household's rows are written from `household/edit-policy.json`.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| table_name | text UNIQUE | The `PGD_` table |
+| columns | jsonb | `{ "<column>": true }` — the columns open to direct edits |
+| add | boolean | Rows may be added directly. Default false |
+| delete | boolean | Rows may be removed directly. Default false |
+| created_at, updated_at | timestamptz | |
+
+Columns the system maintains — `id`, `created_at`, `updated_at`, vector columns, the soft-delete
+column — are never editable directly, whatever a row says.
 
 ##### Changes to existing tables
 
@@ -802,12 +823,13 @@ edits (`arch-home-brain.md` §4.8).
 | 15 | PGC_Session | v3.2 — `general_chat` and `llm_call_diagnostic` sessions; see `docs/arch-session.md`. Sprint 8 — `request_fingerprint`, `fingerprint_hash` (indexed), `response_source`, `replayed_from_session_id` added (replay corpus, `docs/arch-replay.md`) |
 | 16 | PGC_SessionEntry | v3.2 — per-turn messages array rows; `reasoning` column for diagnostic metadata |
 | 17 | PGC_UiMessage | Web app inbox — every message to a person, all providers; see §4.3.7. Built Sprint 16 |
-| 18 | PGC_RecordEdit | Audit of direct edits from the web app; see §4.3.7. **Designed (Phase 1), not yet built** |
+| 18 | PGC_ChangeLog | One row per change to a record — the web's direct edits; see §4.3.7. **Sprint 19, not yet built** |
 | 19 | PGC_Page | The household's pages of panels — the web app's navigation; see §4.3.7. Built Sprint 16 |
+| 20 | PGC_EditPolicy | What the web may change directly, per table; see §4.3.7. **Sprint 19, not yet built** |
 | — | PGC_WorkflowStats | SQL view — not a physical table |
 
 **Total: 18 physical PGC tables (14 bootstrapped + 2 session added in v3.2 + 2 web app added in
-Sprint 16) + 1 view.** One more is designed for the web app and not yet built (18, Phase 1).
+Sprint 16) + 1 view.** Two more are designed for the web app and not yet built (18 and 20, Sprint 19).
 
 
 ---

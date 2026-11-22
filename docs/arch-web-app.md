@@ -655,17 +655,24 @@ registry fact.
 | `order_by` | Table, child collection | Default sort; a child list ordered by it can be reordered by dragging |
 | `default_filter` | Table | The filter a grid opens on — e.g. the current month |
 
-The edit policy (`arch-home-brain.md` §4.8) sits beside it: `editable` per column, add and delete
-per table.
+The edit policy (`arch-home-brain.md` §4.8) sits beside it, in `PGC_EditPolicy`: the columns open
+to direct edits, and add and delete, per table.
 
-### 6.4 Saving — and what SERV needs first
+### 6.4 Saving
 
-| Save | Request | SERV today | SERV needs |
-|---|---|---|---|
-| **Grid** | `PATCH /domains/{d}/records` — `[{ id, version, changes }]` plus new rows and deletions | `upsertRows` is one transaction; `updateRows` is not; no version check anywhere | A batch write in **one transaction**, each changed row conditioned on its version (`updated_at`), `409` naming the rows that moved |
-| **Document** | `PUT /domains/{d}/entities/{name}/{id}` — the whole entity with the root's version | `createEntity`, `updateEntity`, `upsertEntity` write the **root table only** — children are not written, there is no transaction, and embeddings are not maintained | An entity write that diffs each child collection (insert, update, delete), runs root and children in **one transaction**, conditions on the root's version, and re-embeds through `resolveEmbedding` as `table.mjs` does |
+A row's version is its `updated_at` as text, to the microsecond — read with `withVersion` (each
+row's `_version`), sent back unchanged. Both saves are one transaction: every row changed or
+removed is checked against the version it was read at, and any that moved fails the whole save with
+`409 version_conflict` naming the rows; the app reads again. Each written row is logged to
+`PGC_ChangeLog` in the same transaction.
 
-These are SERV system changes (Execution), built in Phase 1 before the views that need them.
+| Save | SERV | Writes |
+|---|---|---|
+| **Grid** | `POST /serv/table/saveRows` | One table's changed, new and removed rows |
+| **Document** | `POST /serv/entity/saveEntity` | The root and each child collection — a joined table whose registered foreign key references the root — inserted, changed and removed; the root's `updated_at` touched by any save, so the root's version is the document's; embeddings recomputed as `table.mjs` does |
+
+A document's children are read by `getEntity` with `withVersion` (`children`, by table name). PROC's
+record routes call these after checking the edit policy; the web never reaches SERV.
 
 ---
 
@@ -829,7 +836,7 @@ for every message, Slack's included; that is how a Slack-started run also appear
 | | Phase 0 — prove the seam | Phase 1 — the console |
 |---|---|---|
 | **Infrastructure** | S3 + CloudFront, Cognito pool and one user, `WebApiFunction`, the web routes, `deploy-web.mjs` | WebSocket only if polling is felt |
-| **PROC** | `PGC_UiMessage` and `enqueueCallback` writing it; `gate_id`; run labels (§2.4); `PGC_Page` with the seeded Home, and `upsert-page.mjs` for the household's pages; `GET /proc/gates`, `GET /proc/inbox`, `GET /proc/pages`, `GET /proc/runs`, `GET /proc/outputs` (§2.6), `GET /proc/workflows`, `GET /proc/me`, `PGC_DomainHelp.display` (`label`), the read-only `records` read behind `GET /sources/{source}/rows`, starting a named workflow | Navigate reads (§3.2), session topics (§2.5), the edit policy and `PGC_RecordEdit`, the `arch-home-brain.md` §3.2 Slack leaks removed |
+| **PROC** | `PGC_UiMessage` and `enqueueCallback` writing it; `gate_id`; run labels (§2.4); `PGC_Page` with the seeded Home, and `upsert-page.mjs` for the household's pages; `GET /proc/gates`, `GET /proc/inbox`, `GET /proc/pages`, `GET /proc/runs`, `GET /proc/outputs` (§2.6), `GET /proc/workflows`, `GET /proc/me`, `PGC_DomainHelp.display` (`label`), the read-only `records` read behind `GET /sources/{source}/rows`, starting a named workflow | Navigate reads (§3.2), session topics (§2.5), the edit policy (`PGC_EditPolicy`) and `PGC_ChangeLog`, the `arch-home-brain.md` §3.2 Slack leaks removed |
 | **Contract** | `row`, `column`, `group` on the `human_gate` contract | A gridded form's answer may carry a subset of rows (§5.4) |
 | **Pages** | Sign-in; the shell — 🏠, the *Pages* and *Domains* menus, 🔔, ⚙; the household's pages from `PGC_Page`, read-only — three to start: Home, Money, Inventory; workflow panels — *Start*, runs by label, the run stepped through in place; records panels with the view switch over the `grid` (read-only) and `list` views; summary panels with the `chart`, `metric` and `report` widgets; click-through and report Refresh; domain pages with their workflow panel; the run page and run drawer; Settings › Profile; every gate type of §5.2 | The page editor — *+ New page*, *Edit page*, *+ Add panel*, delete; the `document` view and the editable grid; Novia's region and Novia panels; 🧠 Help; Activity; the command bar; the rest of Settings; ⓘ on panels and terms; *Ask Novia about this*; Novia's `propose_page_change` |
 | **Slack** | `gate_id` on buttons; the ephemeral "already answered" | `GATE_ANSWERED` message update; the Slack pager and pick-one modal (§5.4), with L1's gate-size check narrowed |
