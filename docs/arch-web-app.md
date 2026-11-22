@@ -314,7 +314,7 @@ which one.
 |---|---|---|
 | **Page** | A title and an ordered list of panels | Data — a `PGC_Page` row (§2.3), an evolving artifact |
 | **Panel** | The frame on a page: title, width, ⓘ, *Ask Novia about this*, and one **kind** | The kinds are system code; which panels a page has, configured how, is data |
-| **View** | One way of showing a records source's rows — grid, list or document. A records panel offers every view that fits its source, and the viewer switches between them | A view type is system code — a React component and its options schema — the rule `step-executor.mjs` follows for step types |
+| **View** | One way of showing a records source's rows — grid or document. A records panel offers every view that fits its source, and the viewer switches between them | A view type is system code — a React component and its options schema — the rule `step-executor.mjs` follows for step types |
 | **Widget** | A summary of a source — a chart, a metric or a report. A summary panel shows exactly one | System code, as a view type is |
 
 **Panel kinds.**
@@ -344,13 +344,14 @@ source has one, so no row is repeated or skipped.
 | View | Fits | Shows | Options | Phase |
 |---|---|---|---|---|
 | `grid` | Table, view or entity (its root rows) | A spreadsheet, editable where the edit policy allows; an optional totals row (§6) | `columns`, `filter`, `order_by`, `limit` | 0 read-only, 1 editable |
-| `list` | Table, view or entity (its root rows) | Compact rows — *Olive oil · 1 left* | `title_column`, `detail_columns`, `filter`, `order_by`, `limit` | 0 |
 | `document` | Table or entity — one record at a time | One record as a form, child collections inline beneath it (§6.2); a record picker above | `picker_column` | 1 |
 
 **One config serves every view.** `filter`, `order_by` and `limit` are shared; a key only one view
-reads (`title_column`, `picker_column`) is ignored by the others. **No view requires an option:**
-each falls back to the registry — `columns` to the table's own, `title_column` and `picker_column`
-to its label column (`pickLabelColumn`) — so switching never lands on a view that cannot draw. What
+reads (`picker_column`) is ignored by the others; `title_column` names the column that titles a
+record wherever one is shown alone. **No view requires an option:** each falls back to the
+registry — `columns` to the table's own, `title_column` and `picker_column` to its label column
+(`pickLabelColumn`) — so switching never lands on a view that cannot draw. A grid naming two or
+three `columns` gives the compact rows a phone needs. What
 belongs to the data rather than to a view — column labels, `format`, `total`, `order_by`,
 `default_filter` — lives in the registry's `display` (§6.3), so every view of the source agrees.
 
@@ -369,7 +370,7 @@ registry carries `display` metadata (§6.3, Phase 1) it supplies them, and a pan
 it changes.
 
 ```
-┌ Expenses ──────────────────────── [▦ Grid] [☰ List] [▤ Document] ┐
+┌ Expenses ─────────────────────────────── [▦ Grid] [▤ Document] ┐
 │ Date     Store        Amount                                       │
 │ 14 Nov   Shop A       62,40 €                                      │
 │ 12 Nov   Shop B       18,90 €                                      │
@@ -389,8 +390,8 @@ disappearing.
 
 **Click-through.** A chart's bar, slice or point opens a drawer with a records panel over the same
 source, filtered to the clicked category (and series, when there are several value columns): the
-rows behind the mark. A row in a `grid` or `list` opens that record in the `document` view (in
-Phase 0, a read-only record drawer). Both come from the panel's own config, with no domain
+rows behind the mark. A row in a `grid` opens that record in the `document` view where the source
+is an entity, and in a read-only record drawer elsewhere. Both come from the panel's own config, with no domain
 knowledge; a specialised drill (a year into its months) is a widget option, added as system code
 when a page needs it.
 
@@ -627,9 +628,8 @@ than guesses around.
 |---|---|---|---|
 | **Grid** | A flat table — expenses, a stock portfolio, inventory, budgets | A spreadsheet: edit in place, add and delete rows, sort, filter, an optional totals row; changed cells marked; **one Save** sends every changed row | A table with no children |
 | **Document** | One entity — a recipe | The root record as a form; each child collection inline beneath it, as a sub-grid (ingredients) or an ordered list (steps, by `step_number`); **one Save** writes the whole entity | An entity in `PGC_EntitySchema` with joined children |
-| **List** | Browsing a large table read-mostly | Cards or rows, opening a record | — |
 
-These are the three views of a records panel (§4.2) — `grid`, `document`, `list` — offered together
+These are the two views of a records panel (§4.2) — `grid` and `document` — offered together
 by its view switch; "Default for" is the view it opens on when neither the panel nor `display.view`
 names one. A specialised way of showing records — a calendar — is a **new view type**, joining the
 switch wherever its source fits; a specialised summary — a portfolio chart — is a **new widget type**.
@@ -645,7 +645,7 @@ registry fact.
 
 | Key | Level | Meaning |
 |---|---|---|
-| `view` | Table, entity | The view a records panel over it opens on: `grid`, `document`, `list`, or a specialised view type. The viewer can switch to any other that fits (§4.2) |
+| `view` | Table, entity | The view a records panel over it opens on: `grid`, `document`, or a specialised view type. The viewer can switch to any other that fits (§4.2) |
 | `label` | Domain, table, entity, workflow | What a person reads instead of the identifier — a string or a language map (§13) |
 | `description` | Domain, workflow | One line under the label in menus — a string or a language map |
 | `icon` | Domain, workflow | A name from the app's own icon set; an unknown name draws the default |
