@@ -337,7 +337,7 @@ export function RecordsPanel({ pageKey, panel, title, context }) {
     body = <div className="skeleton" aria-busy="true" aria-label={t('shell.loading')}><i /><i /><i /></div>;
   } else if (shownView === DOCUMENT_VIEW) {
     body = <DocumentView key={opened ?? 'pick'} api={api} source={source} schema={schema} where={where} initialId={opened}
-      onSignInRequired={onSignInRequired} onNotice={setNotice} />;
+      title={title} onBack={() => { setOpened(null); setView('grid'); }} onSignInRequired={onSignInRequired} onNotice={setNotice} />;
   } else if (editing && state.status === 'ready') {
     const problems = editProblems(edits, shown);
     const touched  = key2 => {

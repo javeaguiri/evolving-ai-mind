@@ -6,8 +6,10 @@
 // GET /api/v1/proc/domains/{domain} — a domain's records, from the registry: what its domain page
 // draws a records panel for (docs/arch-web-app.md §4.4). Never stored, so a household cannot
 // break a domain page by editing it. An entity with child tables is one source and replaces its
-// root table; every other table and view of the domain is its own source, child tables included
-// (Javear, 2026-11-22). Each is labelled from its table's name until the registry holds labels.
+// root table; its child tables are shown inside its documents, not as sources of their own, unless
+// a child table is itself the root of a registered entity — an expense is a spending category's
+// child and an entity of its own (Javear, 2026-11-22). Every other table and view is its own
+// source. Each is labelled from its table's name until the registry holds labels.
 // Domain data belongs to the household.
 // Transport-agnostic — no AWS SDK, no Slack SDK.
 
@@ -20,7 +22,8 @@ const KIND_ORDER = { entity: 0, table: 1, view: 2 };
 
 /**
  * A domain's sources, in the order its page draws them: entities with child tables first —
- * each replacing its root table — then the other tables, then views, each by label.
+ * each replacing its root table — then the other tables, then views, each by label. A child
+ * table of such an entity is left to its documents unless it is an entity's root itself.
  * Pure — exported for test.
  *
  * @param {object[]} tables    The domain's PGC_Schema rows { table_name, type, foreign_keys }
@@ -29,7 +32,9 @@ const KIND_ORDER = { entity: 0, table: 1, view: 2 };
  */
 export function domainSources(tables, entities) {
   const documents = entities.filter(e => childTablesOf(e, tables).length > 0);
-  const replaced  = new Set(documents.map(e => e.root_table));
+  const roots     = new Set(entities.map(e => e.root_table));
+  const children  = new Set(documents.flatMap(e => childTablesOf(e, tables).map(c => c.tableName)).filter(t => !roots.has(t)));
+  const replaced  = new Set([...documents.map(e => e.root_table), ...children]);
   return [
     ...documents.map(e => ({ source: e.entity_name, kind: 'entity', label: tableLabel(e.root_table), labelFallback: true })),
     ...tables.filter(t => !replaced.has(t.table_name))

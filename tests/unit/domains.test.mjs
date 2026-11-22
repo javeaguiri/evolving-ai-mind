@@ -22,18 +22,20 @@ const TABLES = [
   { table_name: 'PGD_Things',    type: 'table', foreign_keys: [] },
   { table_name: 'PGD_Shelves',   type: 'table', foreign_keys: [] },
   { table_name: 'PGD_BoxTotals', type: 'view',  foreign_keys: [] },
+  { table_name: 'PGD_BoxLabels', type: 'table', foreign_keys: [fk('box_id', 'PGD_Boxes')] },   // a child and an entity of its own
 ];
 const ENTITIES = [
-  { entity_name: 'Box',   root_table: 'PGD_Boxes',   joins: [{ table: 'PGD_BoxItems' }] },
+  { entity_name: 'Box',   root_table: 'PGD_Boxes',   joins: [{ table: 'PGD_BoxItems' }, { table: 'PGD_BoxLabels' }] },
   { entity_name: 'Shelf', root_table: 'PGD_Shelves', joins: [] },                       // no children: just its table
   { entity_name: 'Thing', root_table: 'PGD_Things',  joins: [{ table: 'PGD_Shelves' }] }, // joined, but no key to it: no children
+  { entity_name: 'Label', root_table: 'PGD_BoxLabels', joins: [] },
 ];
 
 describe('domainSources', () => {
-  it('an entity with children replaces its root; every other table and view is its own, children included', () => {
+  it('an entity with children replaces its root; its children live in its documents unless an entity\'s root themselves', () => {
     assert.deepEqual(domainSources(TABLES, ENTITIES).map(s => [s.source, s.kind, s.label]), [
       ['Box', 'entity', 'Boxes'],
-      ['PGD_BoxItems', 'table', 'Box items'],
+      ['PGD_BoxLabels', 'table', 'Box labels'],
       ['PGD_Shelves', 'table', 'Shelves'],
       ['PGD_Things', 'table', 'Things'],
       ['PGD_BoxTotals', 'view', 'Box totals'],

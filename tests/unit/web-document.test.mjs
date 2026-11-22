@@ -158,11 +158,13 @@ describe('drawn', () => {
     assert.match(html, /<div class="changed"><div class="fld"><label for="f-root-size"/);
   });
 
-  it('the document view opens on its picker, named by the root table, while its records are read', () => {
+  it('the document view opens on a navigator above the form — back to the records, and Open — never a form field', () => {
     const html = ui.renderToString(ui.createElement(ui.DocumentView, {
-      api: { get: () => new Promise(() => {}) }, source: 'Box', schema: SCHEMA, where, onSignInRequired() {}, onNotice() {},
+      api: { get: () => new Promise(() => {}) }, source: 'Box', schema: SCHEMA, where, title: 'Boxes', onBack() {}, onSignInRequired() {}, onNotice() {},
     }));
-    assert.match(html, /<span class="flabel">Boxes<\/span><select[^>]*disabled=""[^>]*><option value="" selected="">Loading/);
+    assert.match(html, /<nav class="docnav" aria-label="Boxes"><button type="button" class="btn sm">← All Boxes<\/button>/);
+    assert.match(html, /<label class="docpick"><span>Open<\/span><select[^>]*disabled=""[^>]*><option value="" selected="">Loading/);
+    assert.doesNotMatch(html, /class="flabel"/);
   });
 
   it('a panel that fails keeps its error in its frame', () => {

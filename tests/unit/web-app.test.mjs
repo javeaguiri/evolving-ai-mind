@@ -388,7 +388,9 @@ describe('records — the read, the columns, the views (§4.2)', () => {
     assert.deepEqual(merged.filter(c => c.shown).map(c => [c.name, c.label]), [['date', 'Date'], ['amount', 'Gastado']]);
     assert.equal(merged.find(c => c.name === 'amount').format, 'currency');
     assert.deepEqual(merged.filter(c => !c.shown).map(c => c.name), ['id', 'created_at', 'title', 'currency']);
-    assert.ok(mergeColumns({}, READ, 'en').every(c => c.shown), 'no columns named — the grid shows every column read');
+    assert.deepEqual(mergeColumns({}, READ, 'en').filter(c => c.shown).map(c => c.name), ['title', 'amount', 'currency', 'date'],
+      'no columns named — the grid shows every column read but the system\'s (§6.1)');
+    assert.ok(mergeColumns({ columns: ['id', 'title'] }, READ, 'en').find(c => c.name === 'id').shown, 'a panel may name a system column');
   });
 
   it('listFields: the panel\'s choice, else the label column and the next two readable columns', () => {

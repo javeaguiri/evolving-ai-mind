@@ -450,7 +450,9 @@ table.grid.records tr.new td { background: var(--accent-soft); }
 table.grid.records tr.removed td { text-decoration: line-through; opacity: .55; }
 .etools { display: inline-flex; flex-wrap: wrap; gap: 6px; }
 .document { display: flex; flex-direction: column; gap: 16px; }
-.docpick { display: flex; flex-direction: column; gap: 4px; max-inline-size: 30rem; }
+.docnav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding-block-end: 12px; border-block-end: 1px solid var(--line); }
+.docpick { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.docpick select { max-inline-size: min(22rem, 70vw); }
 .docform { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(16rem, 100%), 1fr)); gap: 10px 16px; }
 .docform .field { display: flex; flex-direction: column; gap: 4px; }
 .docform .changed :is(input, textarea, select) { background: var(--warn-soft); }

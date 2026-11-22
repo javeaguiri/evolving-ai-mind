@@ -65,10 +65,13 @@ export function appendPage(body, page) {
   return { ...body, rows: [...body.rows, ...page.rows], more: page.more, ...(totalMatching !== undefined ? { totalMatching } : {}) };
 }
 
+/** Columns the system keeps, never shown unless a panel names them (§6.1). */
+const SYSTEM_COLUMNS = new Set(['id', 'created_at', 'updated_at']);
+
 /**
  * Every column read, each with the panel's own label and format where it gives them, in the
- * panel's order, then the rest. `shown`: the grid draws it — those the panel names, or every one
- * when it names none.
+ * panel's order, then the rest. `shown`: the grid draws it — those the panel names, or, when it
+ * names none, every one but the system's (§6.1: a key and timestamps are not shown).
  *
  * @param {object} config
  * @param {{ name: string, type: string, label: string }[]} read  The read's `columns`
@@ -83,7 +86,7 @@ export function mergeColumns(config, read, language) {
     label: s.label !== undefined ? resolveLanguageMap(s.label, language) : byName.get(s.name).label,
     shown: true,
   }));
-  const rest = read.filter(c => !named.some(n => n.name === c.name)).map(c => ({ ...c, shown: !specs }));
+  const rest = read.filter(c => !named.some(n => n.name === c.name)).map(c => ({ ...c, shown: !specs && !SYSTEM_COLUMNS.has(c.name) }));
   return [...named, ...rest];
 }
 

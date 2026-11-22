@@ -3,8 +3,9 @@
 // See LICENSE file in the project root for full license terms.
 // src/ui/web/app/records/DocumentView.jsx
 //
-// A records panel's document view (docs/arch-web-app.md §6.2): an entity — a recipe — chosen from
-// its records by label, read whole (GET /sources/{entity}/records/{id}), its root record a form
+// A records panel's document view (docs/arch-web-app.md §6.2): an entity — a recipe — opened from
+// its panel's grid, or from the navigator above it (*← All recipes*, *Open ▾*) — never a form
+// field, so it is not read as one — read whole (GET /sources/{entity}/records/{id}), its root record a form
 // and each child table beneath it a grid (EditGrid). What the edit policy opens is editable; a
 // foreign key is a drop-down of the rows it may name, by their label — never a typed id. Save
 // writes the whole document at once (POST /sources/{entity}/records/{id}). A refusal is named; a
@@ -15,11 +16,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation }  from 'react-i18next';
 import { SignInRequired }  from '../auth/session.mjs';
+import { tableLabel }      from '../../../../shared/schema-utils.mjs';
 import { Input }           from '../gates/Input.jsx';
 import { formatValue }     from './format.mjs';
 import { EditGrid }        from './EditGrid.jsx';
 import { editorFor, editsInGrid, cellText, setCell, addRow, setAddedCell, dropAdded, toggleRemoved, referenceOptions } from './edits.mjs';
-import { tableLabel }      from '../../../../shared/schema-utils.mjs';
 import { documentColumns, noDocumentEdits, childEdits, withChildEdits, hasDocumentEdits, documentProblems,
          problemCount, documentWrites, afterDocumentConflict, documentMoved } from './document.mjs';
 
@@ -92,8 +93,10 @@ export function RootForm({ columns, entity, edits, problems, options, where, onC
  * @param {() => void} props.onSignInRequired
  * @param {(notice: object|null) => void} props.onNotice  What became of a save, for the panel to show
  * @param {number|null} [props.initialId]  The record it opens on — a row clicked in the grid
+ * @param {string} props.title             The panel's title — what *← All …* returns to
+ * @param {() => void} props.onBack        Back to the panel's records
  */
-export function DocumentView({ api, source, schema, where, onSignInRequired, onNotice, initialId = null }) {
+export function DocumentView({ api, source, schema, where, onSignInRequired, onNotice, initialId = null, title, onBack }) {
   const { t, i18n } = useTranslation();
   const [picks, setPicks]   = useState(null);
   const [id, setId]         = useState(initialId);
@@ -216,13 +219,19 @@ export function DocumentView({ api, source, schema, where, onSignInRequired, onN
 
   return (
     <div className="document pbody">
-      <label className="docpick">
-        <span className="flabel">{t('records.choose', { what: tableLabel(schema.table.table) })}</span>
-        <select value={id ?? ''} onChange={e => choose(e.target.value)} disabled={saving || picks === null}>
-          <option value="">{picks === null ? t('shell.loading') : t('records.pick')}</option>
-          {(picks ?? []).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
-      </label>
+      <nav className="docnav" aria-label={title}>
+        <button type="button" className="btn sm" disabled={saving} onClick={() => {
+          if (hasDocumentEdits(edits) && !window.confirm(t('records.discard'))) return;
+          onNotice(null); onBack();
+        }}>{t('records.allOf', { what: title })}</button>
+        <label className="docpick">
+          <span>{t('records.open')}</span>
+          <select value={id ?? ''} onChange={e => choose(e.target.value)} disabled={saving || picks === null}>
+            <option value="">{picks === null ? t('shell.loading') : t('records.pick')}</option>
+            {(picks ?? []).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </label>
+      </nav>
       {body}
     </div>
   );
