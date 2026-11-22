@@ -1030,6 +1030,13 @@ describe('dialogToBlocks — reveal', () => {
     assert.equal(block.child_blocks[0].text.text, '_(none)_');
   });
 
+  // Without emoji: true, Slack drew a label's emoji as its name (:white_check_mark:).
+  it('the panel title draws an emoji in its label as the emoji', () => {
+    const field = { type: 'reveal', button_label: '✅ Done', content: 'x' };
+    const [block] = dialogToBlocks({ fields: [field] }, 1);
+    assert.deepEqual(block.title, { type: 'plain_text', text: '✅ Done', emoji: true });
+  });
+
   it('empty-string content renders a placeholder child block', () => {
     const field = { type: 'reveal', button_label: 'Notes', content: '' };
     const [block] = dialogToBlocks({ fields: [field] }, 1);

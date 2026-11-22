@@ -1343,7 +1343,7 @@ export function buildRevealBlock(field, budget = makeTableBudget()) {
   return {
     type:               'container',
     block_id:           `reveal_${randomUUID()}`,
-    title:              { type: 'plain_text', text: field.button_label ?? 'Details' },
+    title:              { type: 'plain_text', text: field.button_label ?? 'Details', emoji: true },
     is_collapsible:     true,
     default_collapsed:  true,
     child_blocks:       childBlocks,
