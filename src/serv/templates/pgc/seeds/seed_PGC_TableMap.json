@@ -165,5 +165,14 @@
     "allow_update": true,
     "allow_delete": false,
     "views": []
+  },
+  {
+    "table_name": "PGC_ChangeLog",
+    "target": "pgc",
+    "domain": null,
+    "allow_insert": true,
+    "allow_update": false,
+    "allow_delete": false,
+    "views": []
   }
 ]

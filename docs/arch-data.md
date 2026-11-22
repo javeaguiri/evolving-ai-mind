@@ -750,8 +750,10 @@ seeds; seeded with a generic, empty Home only, never a domain-specific page.
 One row per change to a record, whatever made it: who, how it came in, when, the record, and each
 field's old and new value. Written by SERV in the same transaction as the change, from a write's
 `changeLog` (`openapi.yaml` `ChangeLogContext`) — a change is never logged without being made, or
-made without being logged. The web's direct edits are logged; a workflow's writes are traced by
-`PGC_WorkflowRunStep` and carry no `changeLog`.
+made without being logged. The row is written through the connection that makes the change: PGC
+and PGD are addressed separately but are one database, and the log depends on it — separating them
+moves the log beside the records. The web's direct edits are logged; a workflow's writes are traced
+by `PGC_WorkflowRunStep` and carry no `changeLog`.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -823,7 +825,7 @@ edits (`arch-home-brain.md` §4.8).
 | 15 | PGC_Session | v3.2 — `general_chat` and `llm_call_diagnostic` sessions; see `docs/arch-session.md`. Sprint 8 — `request_fingerprint`, `fingerprint_hash` (indexed), `response_source`, `replayed_from_session_id` added (replay corpus, `docs/arch-replay.md`) |
 | 16 | PGC_SessionEntry | v3.2 — per-turn messages array rows; `reasoning` column for diagnostic metadata |
 | 17 | PGC_UiMessage | Web app inbox — every message to a person, all providers; see §4.3.7. Built Sprint 16 |
-| 18 | PGC_ChangeLog | One row per change to a record — the web's direct edits; see §4.3.7. **Sprint 19, not yet built** |
+| 18 | PGC_ChangeLog | One row per change to a record — the web's direct edits; see §4.3.7. Template and registry Sprint 19 |
 | 19 | PGC_Page | The household's pages of panels — the web app's navigation; see §4.3.7. Built Sprint 16 |
 | 20 | PGC_EditPolicy | What the web may change directly, per table; see §4.3.7. **Sprint 19, not yet built** |
 | — | PGC_WorkflowStats | SQL view — not a physical table |

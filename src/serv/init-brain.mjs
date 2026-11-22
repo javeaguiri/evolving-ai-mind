@@ -35,6 +35,7 @@ import PGC_SessionEntry    from './templates/pgc/PGC_SessionEntry.json'    with 
 import PGC_Memory          from './templates/pgc/PGC_Memory.json'          with { type: 'json' };
 import PGC_UiMessage       from './templates/pgc/PGC_UiMessage.json'       with { type: 'json' };
 import PGC_Page            from './templates/pgc/PGC_Page.json'            with { type: 'json' };
+import PGC_ChangeLog       from './templates/pgc/PGC_ChangeLog.json'       with { type: 'json' };
 import seedSchema        from './templates/pgc/seeds/seed_PGC_Schema.json'         with { type: 'json' };
 import seedTableMap      from './templates/pgc/seeds/seed_PGC_TableMap.json'       with { type: 'json' };
 import seedDomainHelp    from './templates/pgc/seeds/seed_PGC_DomainHelp.json'     with { type: 'json' };
@@ -92,6 +93,7 @@ const PGC_TEMPLATES = [
   PGC_Memory,
   PGC_UiMessage,
   PGC_Page,
+  PGC_ChangeLog,
 ];
 
 // ---------------------------------------------------------------------------

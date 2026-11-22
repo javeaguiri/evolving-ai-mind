@@ -1737,5 +1737,83 @@
       }
     ],
     "triggers": []
+  },
+  {
+    "table_name": "PGC_ChangeLog",
+    "target": "pgc",
+    "domain": null,
+    "description": "One row per change to a record: who (actor), how it came in (via), the run that made it (run_id), the record, the operation, and each field's old and new value. Written by SERV in the same transaction as the change, from a write's changeLog, through the connection that makes it \u2014 PGC and PGD share one database. batch_id groups one save. run_id has no FK \u2014 runs are purged independently.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "bigserial",
+        "primaryKey": true
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "batch_id",
+        "type": "uuid",
+        "nullable": false
+      },
+      {
+        "name": "actor",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "via",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "run_id",
+        "type": "integer",
+        "nullable": true
+      },
+      {
+        "name": "domain",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "table_name",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "record_id",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "operation",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "changes",
+        "type": "jsonb",
+        "nullable": false
+      }
+    ],
+    "foreign_keys": [],
+    "constraints": [
+      {
+        "type": "check",
+        "name": "chk_changelog_via",
+        "expression": "via IN ('web')"
+      },
+      {
+        "type": "check",
+        "name": "chk_changelog_operation",
+        "expression": "operation IN ('insert', 'update', 'delete')"
+      }
+    ],
+    "triggers": []
   }
 ]
