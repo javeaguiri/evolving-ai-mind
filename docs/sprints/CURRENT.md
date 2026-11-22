@@ -34,7 +34,7 @@ needs to see and correct them on the web.
 
 | # | Item |
 |---|---|
-| **1** | 🟡 **SERV — a grid save in one transaction** (§6.4): changed, new and deleted rows written together; each changed or deleted row conditioned on the version it was read at; `409` naming the rows that moved. Spec first. **Spec ✅** (3.12.0: `saveRows`, `withVersion` on `getRows`). **SERV ✅ 2026-11-22** — `saveRows` and `withVersion` in `table.mjs`, tested through the route (`serv-save-rows.test.mjs`); not yet deployed |
+| **1** | 🟡 **SERV — a grid save in one transaction** (§6.4): changed, new and deleted rows written together; each changed or deleted row conditioned on the version it was read at; `409` naming the rows that moved. Spec first. **Spec ✅** (3.12.0: `saveRows`, `withVersion` on `getRows`). **SERV ✅ 2026-11-22** — `saveRows` and `withVersion` in `table.mjs`, tested through the route (`serv-save-rows.test.mjs`); deployed 2026-11-22 (`sam deploy`; smoke: a refusal and a versioned read, nothing written) |
 | **2** | 🟡 **SERV — a document save** (§6.4): the root and each child collection diffed (insert, update, delete) and written in one transaction, conditioned on the root's version; embeddings refreshed through `resolveEmbedding` as `table.mjs` does. Today's entity writes touch the root only. Spec first. **Spec ✅** (3.12.0: `saveEntity`, `withVersion` and `children` on `getEntity`) |
 | **3** | ⬜ **The edit policy** (`arch-home-brain.md` §4.8): `PGC_EditPolicy` (AB) — open columns and add/delete per table; template, registry seed, created through SERV; `household/edit-policy.json` and its upsert script (`--check`, a rerun "no changes") (Z) |
 | **4** | 🟡 **`PGC_ChangeLog`** (AA): template, registry seed, created live through SERV, never bootstrap; one row per direct change, written in the same transaction as the change. **Table ✅ live 2026-11-22** (`createTable`, `PGC_TableMap.allow_update` set false, registry `--check` 19/19); written by `saveRows` through the save's own connection — PGC and PGD are one database (Javear, 2026-11-22). `saveEntity` writes it with item 2 |
@@ -93,7 +93,9 @@ Javear: the log goes through the save's own connection. `PGC_ChangeLog` created 
 covering TableMap. `saveRows` and `withVersion` built and tested through the route. The lock query's
 read checked live, read-only, on `PGD_Recipes`.
 
-**Next:** deploy SERV (`sam deploy`) so `saveRows` is live, then item 2 (`saveEntity`, `getEntity`
+Deployed (`sam deploy`); the two seed changes were already live through `createTable`.
+
+**Next:** item 2 (`saveEntity`, `getEntity`
 `withVersion` and `children`).
 
 **Previously (session 2's plan):** item 1. First `PGC_ChangeLog` — template, `seed_PGC_Schema.json`, created
