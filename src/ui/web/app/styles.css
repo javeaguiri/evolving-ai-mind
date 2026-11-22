@@ -449,6 +449,13 @@ select.cell { min-inline-size: 9rem; }
 table.grid.records tr.new td { background: var(--accent-soft); }
 table.grid.records tr.removed td { text-decoration: line-through; opacity: .55; }
 .etools { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.document { display: flex; flex-direction: column; gap: 16px; }
+.docpick { display: flex; flex-direction: column; gap: 4px; max-inline-size: 30rem; }
+.docform { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(16rem, 100%), 1fr)); gap: 10px 16px; }
+.docform .field { display: flex; flex-direction: column; gap: 4px; }
+.docform .changed :is(input, textarea, select) { background: var(--warn-soft); }
+.docchild .phead h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.docsave { display: flex; justify-content: flex-end; gap: 6px; }
 
 /* ---------- markdown from /proc ---------- */
 .md { overflow-wrap: anywhere; }

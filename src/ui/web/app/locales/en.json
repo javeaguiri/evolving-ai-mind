@@ -33,6 +33,11 @@
     "missing": "“{source}” can’t be found.",
     "failed": "This panel couldn’t be read.",
     "edit": "Edit",
+    "document": "Document",
+    "choose": "{what}",
+    "pick": "Choose one…",
+    "discardButton": "Discard",
+    "recordGone": "That record is no longer there.",
     "save": "Save",
     "saving": "Saving…",
     "cancel": "Cancel",
@@ -59,6 +64,10 @@
       "add_rows": "rows can’t be added to {name}",
       "delete_rows": "rows can’t be removed from {name}"
     }
+  },
+  "panel": {
+    "failed": "This panel ran into a problem:",
+    "retry": "Try again"
   },
   "report": {
     "refresh": "↻ Refresh",

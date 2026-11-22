@@ -399,11 +399,12 @@ describe('records — the read, the columns, the views (§4.2)', () => {
     assert.deepEqual(listFields({ columns: ['date', 'amount'] }, named), { title: 'title', details: ['date', 'amount'] });
   });
 
-  it('initialView: the viewer\'s last choice, else the panel\'s view, else grid — of the views Phase 0 draws', () => {
+  it('initialView: the viewer\'s last choice, else the panel\'s view, else grid — of the views there are', () => {
     assert.equal(initialView({}, null), 'grid');
     assert.equal(initialView({ view: 'list' }, null), 'list');
     assert.equal(initialView({ view: 'list' }, 'grid'), 'grid');
-    assert.equal(initialView({ view: 'document' }, 'gallery'), 'grid');
+    assert.equal(initialView({ view: 'document' }, 'gallery'), 'document');
+    assert.equal(initialView({ view: 'gallery' }, 'calendar'), 'grid');
     assert.equal(viewKey('money', 'expenses'), 'evomind.view.money.expenses');
   });
 });

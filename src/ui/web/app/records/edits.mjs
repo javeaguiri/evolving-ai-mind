@@ -205,14 +205,23 @@ export function afterConflict(edits, conflicts) {
 
 /**
  * The rows that moved, as a person names them: each row's label column (its `name` or `title`,
- * as the list view picks it), else its id.
+ * as the list view picks it) — a foreign key by the label of the row it names, never its id —
+ * else the row's own `#id`.
  *
+ * @param {Record<string, {value: string, label: string}[]>} [options]  A foreign key's rows, by column
  * @returns {{ name: string, reason: 'changed'|'deleted' }[]}
  */
-export function movedRows(conflicts, rows, columns) {
-  const label = pickLabelColumn(columns);
-  const byId  = new Map(rows.map(r => [r.id, r]));
-  return conflicts.map(c => ({ name: String((label && byId.get(c.id)?.[label]) || `#${c.id}`), reason: c.reason }));
+export function movedRows(conflicts, rows, columns, options = {}) {
+  const label  = pickLabelColumn(columns);
+  const column = columns.find(c => c.name === label);
+  const byId   = new Map(rows.map(r => [r.id, r]));
+  const nameOf = row => {
+    const value = row?.[label];
+    if (value === null || value === undefined || value === '') return null;
+    if (!column?.references) return String(value);
+    return (options[label] ?? []).find(o => o.value === String(value))?.label ?? null;
+  };
+  return conflicts.map(c => ({ name: (label && nameOf(byId.get(c.id))) || `#${c.id}`, reason: c.reason }));
 }
 
 /**

@@ -17,16 +17,19 @@
 // (records/EditGrid.jsx); Save sends every edit at once (POST /sources/{source}/rows). A refusal
 // names what was refused; a row that moved since it was read is named, its edits dropped, and
 // the rows read again. A foreign key shows the row it names, by its label column, in either mode.
+// An entity's panel also offers Document: one record and its child tables, edited and saved
+// together (records/DocumentView.jsx).
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation }      from 'react-i18next';
 import { SignInRequired }      from '../auth/session.mjs';
 import { Drawer }              from '../shell/Drawer.jsx';
 import { formatValue, isNumericColumn } from '../records/format.mjs';
-import { rowsRequest, appendPage, mergeColumns, listFields, initialView, viewKey, RECORD_VIEWS } from '../records/query.mjs';
+import { rowsRequest, appendPage, mergeColumns, listFields, initialView, viewKey, RECORD_VIEWS, DOCUMENT_VIEW } from '../records/query.mjs';
 import { withSchema, canEdit, noEdits, hasEdits, setCell, addRow, setAddedCell, dropAdded, toggleRemoved, editProblems,
          writesOf, applySaved, afterConflict, movedRows, referenceOptions } from '../records/edits.mjs';
 import { EditGrid }            from '../records/EditGrid.jsx';
+import { DocumentView }        from '../records/DocumentView.jsx';
 import { PanelFrame }          from './PanelFrame.jsx';
 
 function remembered(key) {
@@ -263,6 +266,9 @@ export function RecordsPanel({ pageKey, panel, title, context }) {
   const editable = state.status === 'ready' && canEdit(schema, shown);
   const allow    = { addRows: Boolean(schema?.table?.addRows), deleteRows: Boolean(schema?.table?.deleteRows) };
   const source   = rowsRequest(panel.config).source;
+  const isEntity = schema?.kind === 'entity';
+  const views    = isEntity ? [...RECORD_VIEWS, DOCUMENT_VIEW] : RECORD_VIEWS;
+  const shownView = view === DOCUMENT_VIEW && schema && !isEntity ? 'grid' : view;
 
   const choose = v => { setView(v); remember(key, v); };
   const startEditing = () => { setEditing(true); setOpen(null); setNotice(null); setTried(false); };
@@ -286,7 +292,7 @@ export function RecordsPanel({ pageKey, panel, title, context }) {
         if (e instanceof SignInRequired) { onSignInRequired(); return; }
         if (e.code === 'version_conflict') {
           const conflicts = e.conflicts ?? [];
-          setNotice({ kind: 'moved', rows: movedRows(conflicts, rows, columns) });
+          setNotice({ kind: 'moved', rows: movedRows(conflicts, rows, columns, options) });
           setEdits(current => afterConflict(current, conflicts));
           state.reload();
         } else if (e.code === 'not_editable') setNotice({ kind: 'refused', fields: e.fields ?? [] });
@@ -298,9 +304,9 @@ export function RecordsPanel({ pageKey, panel, title, context }) {
 
   const viewSwitch = (
     <span className="vsw" role="group" aria-label={t('records.view')}>
-      {RECORD_VIEWS.map(v => (
-        <button key={v} type="button" aria-pressed={v === view} onClick={() => choose(v)}>
-          {v === 'grid' ? t('records.grid') : t('records.list')}
+      {views.map(v => (
+        <button key={v} type="button" aria-pressed={v === shownView} onClick={() => choose(v)}>
+          {v === 'grid' ? t('records.grid') : v === 'list' ? t('records.list') : t('records.document')}
         </button>
       ))}
     </span>
@@ -316,12 +322,16 @@ export function RecordsPanel({ pageKey, panel, title, context }) {
     : (
       <>
         {viewSwitch}
-        {editable && <button type="button" className="btn sm" onClick={startEditing}>{t('records.edit')}</button>}
+        {editable && shownView !== DOCUMENT_VIEW && <button type="button" className="btn sm" onClick={startEditing}>{t('records.edit')}</button>}
       </>
     );
 
   let body;
-  if (editing && state.status === 'ready') {
+  if (shownView === DOCUMENT_VIEW && !schema) {
+    body = <div className="skeleton" aria-busy="true" aria-label={t('shell.loading')}><i /><i /><i /></div>;
+  } else if (shownView === DOCUMENT_VIEW) {
+    body = <DocumentView api={api} source={source} schema={schema} where={where} onSignInRequired={onSignInRequired} onNotice={setNotice} />;
+  } else if (editing && state.status === 'ready') {
     const problems = editProblems(edits, shown);
     const touched  = key2 => {
       const [row, column] = key2.split(/:(?=[^:]*$)/);
@@ -346,7 +356,7 @@ export function RecordsPanel({ pageKey, panel, title, context }) {
   } else if (state.status === 'failed') {
     body = <p className="muted">{t('records.failed')}</p>;
   } else {
-    body = <RecordsBody config={panel.config} body={state.body} view={view} where={where} onOpen={setOpen} selected={open}
+    body = <RecordsBody config={panel.config} body={state.body} view={shownView} where={where} onOpen={setOpen} selected={open}
       onMore={state.more} paging={state.paging} options={options} />;
   }
 
@@ -357,7 +367,7 @@ export function RecordsPanel({ pageKey, panel, title, context }) {
   };
 
   return (
-    <PanelFrame title={title} width={panel.width} tools={state.status === 'ready' ? tools : null}>
+    <PanelFrame title={title} width={panel.width} tools={state.status === 'ready' || shownView === DOCUMENT_VIEW ? tools : null}>
       {notice && <EditNotice notice={notice} onClose={() => setNotice(null)} />}
       {body}
       {open && (
@@ -395,6 +405,7 @@ export function EditNotice({ notice, onClose }) {
   } else if (notice.kind === 'refused') {
     text = t('records.refused', { parts: notice.fields.map(f => refusedPart(t, f)).join('; ') });
   } else if (notice.kind === 'invalid') text = t('records.invalid', { message: notice.message });
+  else if (notice.kind === 'gone') text = t('records.recordGone');
   else text = t('records.saveFailed');
   return (
     <p className={notice.kind === 'saved' ? 'msg' : 'msg error'} role={notice.kind === 'saved' ? 'status' : 'alert'}>

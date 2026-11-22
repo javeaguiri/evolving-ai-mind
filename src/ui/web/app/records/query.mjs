@@ -11,8 +11,11 @@
 import { pickLabelColumn, isReadableColumn } from '../../../../shared/schema-utils.mjs';
 import { resolveLanguageMap }                 from '../../../../shared/language-map.mjs';
 
-/** The views Phase 0 draws; `document` is Phase 1. */
+/** The views every records panel offers. */
 export const RECORD_VIEWS = ['grid', 'list'];
+
+/** An entity's records also open as a document: its root and child tables together (§6.2). */
+export const DOCUMENT_VIEW = 'document';
 
 /** A panel's `columns`, each as { name, label?, format?, … }, or null when it names none. */
 function columnSpecs(config) {
@@ -101,13 +104,14 @@ export function listFields(config, columns) {
 
 /**
  * The view a panel opens on: the viewer's last choice, else the panel's `view`, else `grid` —
- * whichever of them Phase 0 draws.
+ * whichever of them is a view. `document` draws only for an entity, which the panel learns from
+ * its schema; a table falls back to the grid.
  *
  * @param {object} config
  * @param {string|null} remembered
  */
 export function initialView(config, remembered) {
-  return [remembered, config.view, 'grid'].find(v => RECORD_VIEWS.includes(v));
+  return [remembered, config.view, 'grid'].find(v => [...RECORD_VIEWS, DOCUMENT_VIEW].includes(v));
 }
 
 /** Where the viewer's choice is kept, per panel, in this browser (§4.2). */
