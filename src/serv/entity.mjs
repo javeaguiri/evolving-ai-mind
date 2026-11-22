@@ -28,6 +28,7 @@
 import { ok, err }   from '../shared/lambda-utils.mjs';
 import { getClient } from './init-brain.mjs';
 import { normalizeOrderBy, buildOrderClause } from './query-utils.mjs';
+import { childTablesOf } from '../shared/schema-utils.mjs';
 import {
   isRecord, isVersion, checkRowWriteLists, checkChangeLog, writeCount, writtenRows, checkWriteColumns,
   refusedKind, findVersionConflicts, lockRows, writeRows, writeChangeLog, versionConflict,
@@ -134,20 +135,6 @@ function buildSelectSQL(tableName, joins = [], aggregations = [], extraCols = []
       ${groupBy}`,
     baseAlias: 'r',
   };
-}
-
-/**
- * An entity's child tables: those of its joins whose registered foreign key references the root
- * table, each with the column that holds the parent's id. A join without one is not a child
- * collection. `tables` are PGC_Schema rows with their PGC_TableMap flags.
- * Pure — exported for test.
- */
-export function childTablesOf(entity, tables) {
-  const joined = new Set((entity.joins ?? []).map(j => j.table));
-  return tables.filter(t => joined.has(t.table_name)).flatMap(t => {
-    const fk = (t.foreign_keys ?? []).find(f => f.references?.table === entity.root_table);
-    return fk ? [{ tableName: t.table_name, parentKey: fk.column, columns: t.columns, gate: t }] : [];
-  });
 }
 
 async function loadChildTables(pgcClient, entity) {

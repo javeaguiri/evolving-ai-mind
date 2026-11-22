@@ -12,7 +12,8 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert                                  from 'node:assert/strict';
 import pg                                      from 'pg';
 
-import { handle, checkEntityWrites, childTablesOf } from '../../src/serv/entity.mjs';
+import { handle, checkEntityWrites } from '../../src/serv/entity.mjs';
+import { childTablesOf }             from '../../src/shared/schema-utils.mjs';
 
 const V1 = '2026-11-21 09:31:10.551203+00';
 const V2 = '2026-11-22 09:20:41.004113+00';   // the save's transaction time

@@ -78,3 +78,57 @@ export function planEditPolicies(entries, liveRows, schemas) {
   }
   return plan;
 }
+
+/**
+ * The columns the web may edit directly on a table: those its policy row opens with `true`,
+ * less any the system maintains and the parent key a child row is given by the server. None
+ * without a row, or on a table without versions.
+ * Pure — exported for test.
+ *
+ * @param {object|null} policy        The table's PGC_EditPolicy row
+ * @param {object[]}    schemaColumns PGC_Schema.columns
+ * @param {string}      [parentKey]   A child table's column holding its parent's id
+ * @returns {Set<string>}
+ */
+export function editableColumns(policy, schemaColumns, parentKey) {
+  if (!policy || !schemaColumns.some(c => c.name === 'updated_at')) return new Set();
+  const names  = new Set(schemaColumns.map(c => c.name));
+  const system = systemMaintained(schemaColumns);
+  return new Set(Object.entries(policy.columns ?? {})
+    .filter(([col, open]) => open === true && names.has(col) && !system.has(col) && col !== parentKey)
+    .map(([col]) => col));
+}
+
+/**
+ * What one table's writes ask for that its edit policy does not allow — every refusal, so the
+ * request is refused whole and the person is told each part. An empty list means allowed.
+ * `{ name: '<table>.<column>', problem: 'column_not_editable' }`, or `{ name: '<table>', problem }`
+ * with `table_not_editable` (no policy row, or no versions), `add_rows` or `delete_rows`.
+ * Malformed parts are left to SERV, which refuses the request's shape.
+ * Pure — exported for test.
+ *
+ * @param {string}      table
+ * @param {object}      writes        { update?: [{ changes }], insert?: [row], delete?: [...] }
+ * @param {object|null} policy        The table's PGC_EditPolicy row
+ * @param {object[]}    schemaColumns PGC_Schema.columns
+ * @param {string}      [parentKey]
+ * @returns {{ name: string, problem: string }[]}
+ */
+export function policyRefusals(table, writes, policy, schemaColumns, parentKey) {
+  const list    = key => (Array.isArray(writes?.[key]) ? writes[key] : []);
+  const updates = list('update').map(r => (isRecord(r?.changes) ? r.changes : {}));
+  const inserts = list('insert').map(r => (isRecord(r) ? r : {}));
+  const deletes = list('delete');
+  if (updates.length + inserts.length + deletes.length === 0) return [];
+  if (!policy || !schemaColumns.some(c => c.name === 'updated_at')) return [{ name: table, problem: 'table_not_editable' }];
+
+  const open    = editableColumns(policy, schemaColumns, parentKey);
+  const refused = new Map();
+  const refuse  = (name, problem) => refused.set(`${name}|${problem}`, { name, problem });
+  if (inserts.length && policy.add_rows !== true)    refuse(table, 'add_rows');
+  if (deletes.length && policy.delete_rows !== true) refuse(table, 'delete_rows');
+  for (const row of [...updates, ...inserts]) {
+    for (const col of Object.keys(row)) if (!open.has(col)) refuse(`${table}.${col}`, 'column_not_editable');
+  }
+  return [...refused.values()];
+}

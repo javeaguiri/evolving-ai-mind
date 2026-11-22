@@ -54,12 +54,12 @@ beforeEach(() => {
 afterEach(() => { globalThis.fetch = realFetch; });
 
 describe('routes — an allow-list of the spec, never a proxy', () => {
-  it('holds exactly the eighteen UI-Web operations', () => {
+  it('holds exactly the twenty-three UI-Web operations', () => {
     assert.deepEqual(WEB_ROUTES.map(r => r.operationId).sort(), [
-      'webAnswerGate', 'webAnswerMindsEyeGate', 'webGetGate', 'webGetMe', 'webGetOutput', 'webGetRun', 'webListGates',
-      'webListMindsEyeSessions', 'webListPages', 'webListRuns', 'webListWorkflows', 'webReadInbox',
-      'webReadMindsEyeMessages', 'webReadSourceRows', 'webRenameMindsEyeSession', 'webSendMindsEyeMessage',
-      'webStartMindsEyeSession', 'webStartRun',
+      'webAnswerGate', 'webAnswerMindsEyeGate', 'webCreateSourceRecord', 'webGetGate', 'webGetMe', 'webGetOutput', 'webGetRun',
+      'webListGates', 'webListMindsEyeSessions', 'webListPages', 'webListRuns', 'webListWorkflows', 'webReadInbox',
+      'webReadMindsEyeMessages', 'webReadSourceRecord', 'webReadSourceRows', 'webReadSourceSchema', 'webRenameMindsEyeSession',
+      'webSaveSourceRecord', 'webSaveSourceRows', 'webSendMindsEyeMessage', 'webStartMindsEyeSession', 'webStartRun',
     ]);
   });
 
@@ -71,6 +71,8 @@ describe('routes — an allow-list of the spec, never a proxy', () => {
     ['GET', 'minds-eye'], ['GET', 'minds-eye/sessions/abc/messages'], ['GET', 'minds-eye/sessions/0'],
     ['DELETE', 'minds-eye/sessions/12'], ['PATCH', 'minds-eye/sessions'], ['GET', 'minds-eye/sessions/12/entries'],
     ['POST', 'minds-eye/sessions/12'], ['GET', 'minds-eye/sessions/12/responses'],
+    ['GET', 'sources/Thing/records'], ['PUT', 'sources/PGD_x/rows'], ['GET', 'sources/Thing/records/0'],
+    ['DELETE', 'sources/Thing/records/5'], ['POST', 'sources/PGD_x/schema'], ['GET', 'sources/Thing/records/5/x'],
   ]) {
     it(`refuses ${method} /${proxy} with 404 route_not_found and calls nothing`, async () => {
       const res = await handler(event(method, proxy));
