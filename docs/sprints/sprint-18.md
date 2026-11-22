@@ -1,10 +1,10 @@
 # Sprint 18 — Novia in the browser
 
-**Status: ACTIVE — started 2026-11-18; session 2 closed 2026-11-19.** Scope and ACs agreed with Javear at "start sprint". The
+**Status: CLOSED 2026-11-22 — started 2026-11-18. All seven ACs met: six live, AC5 by review and tests.** Scope and ACs agreed with Javear at "start sprint". The
 first slice of `docs/arch-web-app.md` (v0.10) §10 Phase 1. The prior sprint's retro is
 `docs/sprints/sprint-17.md`.
 
-**Branch:** `sprint/18-web-novia`
+**Branch:** `sprint/18-web-novia` — merged to main at close, as every sprint is.
 
 ---
 
@@ -132,3 +132,92 @@ query. Item 9 added and done (records panels read on as scrolled, AC7 met). Deci
 6 and 7 into `GATE_ANSWERED`; built and deployed, the inbox check migrated. **Blocked:** AC4 waits
 on Javear adding the bot's `channels:history`, `groups:history`, `im:history` scopes (Slack app
 console, then reinstall). Then AC5's review and the sprint close. Concurrency quota: still pending.
+
+**2026-11-22 (session 4).** Javear added the bot's history scopes and reinstalled (token
+unchanged). AC4 met live on run 1075 (`process_receipt`, started in Slack): a form gate and an
+approval answered on the web, each Slack message found by its `gate_id` and its buttons
+replaced, both answers under their questions after a reload. On the same run Javear saw Slack
+draw step 11 differently and asked whether the web work had reached Slack. It had not: step 11's
+`multi_select` (a multi-select menu in Slack since July) came from the workflow, changed
+2026-11-18 with Novia; the reveal headings' emoji came with the same change, and Slack showed
+their names because the reveal title went out without `emoji: true` (unchanged since August).
+Fixed and deployed (`emoji: true`, Execution); the iPhone app draws the icons, Slack desktop
+still shows the names in a collapsible container's title even with the flag — Slack's own
+rendering, left as is. AC5 reviewed: spec before code throughout; the refusals had been proved
+only by the 11-19 smoke, so route tests added (13), each shown to fail with its check removed.
+Concurrency quota raised to 1000 (approved). Sprint closed.
+
+## Outcome — closed 2026-11-22
+
+**The household talks to Novia on the web page.** Her region sits left of every page — collapsed
+to a strip, dragged wider, a tab on a phone — listing sessions by last activity, named by their
+label or first message. A session is started, continued, renamed and reopened there with its
+history, and her gates and questions are answered in place. A `minds_eye` panel keeps one domain's
+or topic's sessions on a page (Money's `ask-money`). A gate answered anywhere is kept in the run's
+thread, and Slack's buttons for it disappear when it was answered on the web.
+
+**Built:** `PGC_Session.callback` in place of `slack_thread_ts` (migrated add → backfill → deploy
+→ backfill → drop, 228 sessions), `topic`, `label`, `last_active_at` kept by a trigger;
+`PGC_UiMessage.session_id`. SERV's `POST /serv/schema/addTrigger`, its functions from a catalogue
+(`trigger-functions.mjs`) and never SQL from the caller; `createTable` checks triggers the same way.
+PROC's six `/proc/minds-eye/sessions…` routes (`minds-eye-sessions.mjs`, `canSeeSession`) and
+the web allow-list. The web app's region (`minds-eye/`), `MindsEyePanel.jsx`, the panel kind
+`minds_eye`. `GATE_ANSWERED` from `resumeGate`, drawn by the web and acted on by Slack's
+listener. `offset` on records reads, panels reading on as scrolled. Engine fixes found live in
+session 1367: progress lines without buttons (`invitesReply`), an empty *Send answers* answered,
+a continue gate's `reason`, a truncation notice carried across a round (`afterTruncation`), and a
+round that throws now says so. Spec 3.10.0 → 3.11.0. Unit tests 1774 → 1976.
+
+**Known edge, not fixed:** the lifetime-turn notice invites no reply, so a session it ends reads
+*working* until the round ceiling passes.
+
+**To the backlog-history:** a run's thread keeps its answers (decision L), done as items 6–7.
+**Stays in the backlog:** the custom domain, managing a session's topic.
+
+## Retro
+
+**What went right.**
+
+*Decisions were taken in one line each, and some mid-sprint.* O to W: four of them (S, T, V, W)
+were raised by Javear during the sprint and settled before the code was written. W merged two
+scope items into one message and saved a second mechanism (`GATE_RESOLVED`).
+
+*Live use found engine defects, and each was fixed the same day.* Session 1367 alone surfaced four:
+buttons on progress lines, a silent empty click, a continue gate claiming a limit it never hit, a
+truncation notice lost between rounds. None was a web defect; using Novia on the web exposed them.
+
+*A missing capability was built as a capability.* `last_active_at` needed a trigger on a live
+table and SERV had no way to add one. It got a route that installs named functions from a
+catalogue, rather than a one-off script or SQL passed through.
+
+*The schema migration ran cleanly across a deploy.* Add, backfill, deploy, backfill again, drop,
+with a rerun that was a no-op at each stage, and a script that replays on any older instance.
+
+**What went wrong, and what it says.**
+
+*The account's concurrency of 10 throttled Novia mid-session.* AC2's round died after an approved
+action: SERV was throttled 17 times while the web app polled, and each web read holds three
+functions at once (web API, PROC, SERV). **A polling client multiplies concurrency; check the
+account's Lambda limits before adding one.** The quota is now 1000, and a round that throws says
+so instead of vanishing.
+
+*A difference in Slack looked like the web work breaking it.* Javear asked, reasonably, how far
+the web changes had reached Slack. The evidence said not at all: a workflow change, plus a latent
+gap in the renderer that a new emoji in a label exposed, plus Slack desktop drawing container
+titles differently from the phone. But Slack's rendering is checked only by unit tests on block
+shapes, which say nothing about how a client draws them. **When Slack looks different, read the
+workflow's current definition and the renderer's history before suspecting the web change; and
+when a sprint touches `/ui/slack`, a gate run in Slack is part of its live checks.**
+
+*The spec's version never moved.* About 500 lines went into `openapi.yaml` across five spec-first
+commits and `info.version` stayed at Sprint 17's 3.10.0 until the close. **A spec-first commit
+bumps the version it changes.**
+
+*A backfill came up short by a fraction of a millisecond.* A JS `Date` keeps milliseconds and the
+column keeps microseconds, so the rerun found every row "different". **Copy a timestamp between
+columns as text, never through a `Date`.**
+
+*A route's refusals were proved only by a smoke run.* The predicate was unit-tested, but nothing
+ran a route against a stored session, so AC5 had to add the tests at close. **A route that
+refuses is tested through the route, against a stubbed read, in the commit that adds it.**
+
