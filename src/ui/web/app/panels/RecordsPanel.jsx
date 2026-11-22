@@ -256,6 +256,7 @@ export function RecordsPanel({ pageKey, panel, title, context }) {
   const [tried, setTried]     = useState(false);   // Save was pressed: every problem is shown
   const [saving, setSaving]   = useState(false);
   const [notice, setNotice]   = useState(null);
+  const [opened, setOpened]   = useState(null);   // the record a row click opened as a document
   const added             = useRef(0);
   const state             = useRows(api, panel.config, onSignInRequired, editing);
   const { schema, options } = useSchema(api, panel.config, i18n.language, onSignInRequired);
@@ -271,6 +272,11 @@ export function RecordsPanel({ pageKey, panel, title, context }) {
   const shownView = view === DOCUMENT_VIEW && schema && !isEntity ? 'grid' : view;
 
   const choose = v => { setView(v); remember(key, v); };
+  // An entity's row opens as a document — the record with its child tables; a table's in the drawer.
+  const openRow = row => {
+    if (isEntity && row.id !== undefined) { setOpened(row.id); setView(DOCUMENT_VIEW); }
+    else setOpen(row);
+  };
   const startEditing = () => { setEditing(true); setOpen(null); setNotice(null); setTried(false); };
   const stopEditing  = () => {
     if (hasEdits(edits) && !window.confirm(t('records.discard'))) return;
@@ -330,7 +336,8 @@ export function RecordsPanel({ pageKey, panel, title, context }) {
   if (shownView === DOCUMENT_VIEW && !schema) {
     body = <div className="skeleton" aria-busy="true" aria-label={t('shell.loading')}><i /><i /><i /></div>;
   } else if (shownView === DOCUMENT_VIEW) {
-    body = <DocumentView api={api} source={source} schema={schema} where={where} onSignInRequired={onSignInRequired} onNotice={setNotice} />;
+    body = <DocumentView key={opened ?? 'pick'} api={api} source={source} schema={schema} where={where} initialId={opened}
+      onSignInRequired={onSignInRequired} onNotice={setNotice} />;
   } else if (editing && state.status === 'ready') {
     const problems = editProblems(edits, shown);
     const touched  = key2 => {
@@ -356,7 +363,7 @@ export function RecordsPanel({ pageKey, panel, title, context }) {
   } else if (state.status === 'failed') {
     body = <p className="muted">{t('records.failed')}</p>;
   } else {
-    body = <RecordsBody config={panel.config} body={state.body} view={shownView} where={where} onOpen={setOpen} selected={open}
+    body = <RecordsBody config={panel.config} body={state.body} view={shownView} where={where} onOpen={openRow} selected={open}
       onMore={state.more} paging={state.paging} options={options} />;
   }
 

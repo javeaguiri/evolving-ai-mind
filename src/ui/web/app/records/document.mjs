@@ -10,7 +10,7 @@
 // with the grid's own edits (edits.mjs). Which tables are children, and which column holds a
 // child's parent, is the source's schema (GET /sources/{entity}/schema).
 
-import { pickLabelColumn } from '../../../../shared/schema-utils.mjs';
+import { pickLabelColumn, tableLabel } from '../../../../shared/schema-utils.mjs';
 import { noEdits, hasEdits, editProblems, writesOf, afterConflict, movedRows } from './edits.mjs';
 
 const SYSTEM = new Set(['id', 'created_at', 'updated_at']);
@@ -23,13 +23,6 @@ const SYSTEM = new Set(['id', 'created_at', 'updated_at']);
  */
 export function documentColumns(table) {
   return table.columns.filter(c => !SYSTEM.has(c.name) && c.name !== table.parentKey).map(c => ({ ...c, shown: true }));
-}
-
-/** A table's name as a heading: `PGD_RecipeSteps` → `Recipe steps`. */
-export function tableLabel(name) {
-  const words = String(name).replace(/^PG[CD]_/, '').replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(/[\s_]+/).filter(Boolean);
-  const text  = words.join(' ').toLowerCase();
-  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /** No edits to the root or any child table. */

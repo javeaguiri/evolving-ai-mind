@@ -49,6 +49,7 @@ import { handle as runs }               from './runs.mjs';
 import { handle as pages }              from './pages.mjs';
 import { handle as outputs }            from './outputs.mjs';
 import { handle as sources }            from './sources.mjs';
+import { handle as domains }            from './domains.mjs';
 import { handle as me }                 from './me.mjs';
 import { handle as workflows }          from './workflows.mjs';
 import { processScheduledRun }          from './scheduled-run.mjs';
@@ -293,6 +294,10 @@ async function dispatch(req) {
   }
   if ((req.proxy || '').split('/').filter(Boolean)[0] === 'sources') {
     return sources(req);
+  }
+  // A domain's records, for its page (/domains/{domain}).
+  if ((req.proxy || '').split('/').filter(Boolean)[0] === 'domains') {
+    return domains(req);
   }
   // Novia's sessions for the web (/minds-eye/sessions[/{id}[/messages|/responses]]).
   if ((req.proxy || '').split('/').filter(Boolean)[0] === 'minds-eye') {

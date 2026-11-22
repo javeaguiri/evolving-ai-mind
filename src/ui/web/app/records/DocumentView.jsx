@@ -19,7 +19,8 @@ import { Input }           from '../gates/Input.jsx';
 import { formatValue }     from './format.mjs';
 import { EditGrid }        from './EditGrid.jsx';
 import { editorFor, editsInGrid, cellText, setCell, addRow, setAddedCell, dropAdded, toggleRemoved, referenceOptions } from './edits.mjs';
-import { documentColumns, tableLabel, noDocumentEdits, childEdits, withChildEdits, hasDocumentEdits, documentProblems,
+import { tableLabel }      from '../../../../shared/schema-utils.mjs';
+import { documentColumns, noDocumentEdits, childEdits, withChildEdits, hasDocumentEdits, documentProblems,
          problemCount, documentWrites, afterDocumentConflict, documentMoved } from './document.mjs';
 
 /**
@@ -90,11 +91,12 @@ export function RootForm({ columns, entity, edits, problems, options, where, onC
  * @param {{ locale: string, timeZone: string }} props.where
  * @param {() => void} props.onSignInRequired
  * @param {(notice: object|null) => void} props.onNotice  What became of a save, for the panel to show
+ * @param {number|null} [props.initialId]  The record it opens on — a row clicked in the grid
  */
-export function DocumentView({ api, source, schema, where, onSignInRequired, onNotice }) {
+export function DocumentView({ api, source, schema, where, onSignInRequired, onNotice, initialId = null }) {
   const { t, i18n } = useTranslation();
   const [picks, setPicks]   = useState(null);
-  const [id, setId]         = useState(null);
+  const [id, setId]         = useState(initialId);
   const [doc, setDoc]       = useState({ status: 'idle' });
   const [edits, setEdits]   = useState(noDocumentEdits);
   const [tried, setTried]   = useState(false);

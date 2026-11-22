@@ -12,7 +12,8 @@ import { describe, it, before } from 'node:test';
 import assert                   from 'node:assert/strict';
 import * as esbuild             from 'esbuild';
 
-import { documentColumns, tableLabel, noDocumentEdits, childEdits, withChildEdits, hasDocumentEdits, documentProblems,
+import { tableLabel } from '../../src/shared/schema-utils.mjs';
+import { documentColumns, noDocumentEdits, childEdits, withChildEdits, hasDocumentEdits, documentProblems,
          problemCount, documentWrites, afterDocumentConflict, documentMoved } from '../../src/ui/web/app/records/document.mjs';
 import { setCell, addRow, setAddedCell, toggleRemoved } from '../../src/ui/web/app/records/edits.mjs';
 

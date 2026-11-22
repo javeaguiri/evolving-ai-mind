@@ -31,6 +31,7 @@ export const WEB_ROUTES = [
   { operationId: 'webReadSourceRows', method: 'GET',  path: ['sources', NAME, 'rows'], query: ['columns', 'filter', 'order_by', 'limit', 'offset', 'with_version'] },
   { operationId: 'webSaveSourceRows',     method: 'POST', path: ['sources', NAME, 'rows'], body: true },
   { operationId: 'webReadSourceSchema',   method: 'GET',  path: ['sources', NAME, 'schema'] },
+  { operationId: 'webGetDomain',          method: 'GET',  path: ['domains', NAME] },
   { operationId: 'webCreateSourceRecord', method: 'POST', path: ['sources', NAME, 'records'], body: true },
   { operationId: 'webReadSourceRecord',   method: 'GET',  path: ['sources', NAME, 'records', RECORD_ID] },
   { operationId: 'webSaveSourceRecord',   method: 'POST', path: ['sources', NAME, 'records', RECORD_ID], body: true },

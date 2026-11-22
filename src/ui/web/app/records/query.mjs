@@ -114,5 +114,16 @@ export function initialView(config, remembered) {
   return [remembered, config.view, 'grid'].find(v => [...RECORD_VIEWS, DOCUMENT_VIEW].includes(v));
 }
 
+/**
+ * A domain page's records panels (§4.4), one per source GET /domains/{domain} lists, in its order,
+ * each full width, titled by its label, naming its source and nothing else — every view falls
+ * back to the registry.
+ *
+ * @param {{ source: string, label: string }[]} sources
+ */
+export function domainPanels(sources) {
+  return sources.map(s => ({ id: s.source, kind: 'records', width: 'full', title: s.label, config: { source: s.source } }));
+}
+
 /** Where the viewer's choice is kept, per panel, in this browser (§4.2). */
 export const viewKey = (pageKey, panelId) => `evomind.view.${pageKey}.${panelId}`;
