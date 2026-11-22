@@ -133,7 +133,7 @@ save and create — and `GET /domains/{domain}`, an entity with child tables one
 children inside its documents unless themselves an entity's root. The web app's edit mode
 (`EditGrid.jsx`, `edits.mjs`), document view (`DocumentView.jsx`, `document.mjs`), domain page
 records (`DomainRecords.jsx`), and a per-panel error boundary (`PanelBoundary.jsx`); the `list`
-view retired. Spec 3.12.0 → 3.14.2. Unit tests 1976 → 2179.
+view retired. Spec 3.12.0 → 3.14.2. Unit tests 1976 → 2178.
 
 **To the backlog:** a column's format and label belong to the registry's `display`, before the page
 editor (Javear); Novia's domain procedure sets the edit policy (Javear). **Stays out:** logging
