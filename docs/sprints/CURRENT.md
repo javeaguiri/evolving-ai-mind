@@ -25,6 +25,8 @@ needs to see and correct them on the web.
 | **Y — a new ingredient from a recipe's document** | Existing only: an ingredient line picks from `PGD_Ingredients`. New ingredients come in through `add_recipe` or Novia; a document never writes a second table |
 | **Z — who writes the edit policy for existing domains** | The household's: a committed `household/edit-policy.json`, pushed by an upsert script with `--check`, as `domains.json` is. Nothing is editable until declared (§4.8's default) |
 | **AA — the change log** (Javear: more general than a record-edit table) | `PGC_ChangeLog` in place of the designed `PGC_RecordEdit`: one row per change to a record — who (`actor`), how it came (`via`), a nullable `run_id`, the domain, table and record, the operation, each field's old and new value. Shaped for any source; this sprint writes the web's direct edits only — workflow writes stay traced by their run steps until logging them is wanted. Column names settle at the spec |
+| **AB — where the edit policy lives** (Javear, 2026-11-22) | Its own table, `PGC_EditPolicy`, one row per `PGD_` table: `columns` (`{ "<col>": true }`), `add`, `delete` — not inside `PGC_Schema`, which describes a table's shape shared by every home. Kept open for tenancy (a `tenant` column: none is a domain's default, a home's row overrides) and for roles (`true` becomes a list of roles); checked by one pure function given the whole principal; system-maintained columns never opened by any row. `arch-home-brain.md` §4.8 corrected |
+| **The save shapes** (Javear, 2026-11-22) | `withVersion` on `getRows` and `getEntity` gives each row `_version`, `updated_at::text`; `getEntity` then also returns `children` by table name — a joined table whose registered foreign key references the root. `POST /serv/table/saveRows` and `POST /serv/entity/saveEntity`: rows read `FOR UPDATE`, versions compared, `409 version_conflict` naming the rows, nothing written. Any document save touches the root's `updated_at`, so the root's version is the document's. SERV writes `PGC_ChangeLog` in the same transaction from a `changeLog` the caller passes (`actor`, `via`, `runId`, `domain`), one `batch_id` per save |
 | **Versions** | A record's version is its `updated_at`. Every PGD table has one, kept by `set_updated_at` (checked 2026-11-22, all 14 tables); a table without it accepts no direct edits |
 | **Names** | The registry says entity (`PGC_EntitySchema`); a person reads *document* |
 
@@ -32,9 +34,9 @@ needs to see and correct them on the web.
 
 | # | Item |
 |---|---|
-| **1** | ⬜ **SERV — a grid save in one transaction** (§6.4): changed, new and deleted rows written together; each changed or deleted row conditioned on the version it was read at; `409` naming the rows that moved. Spec first |
-| **2** | ⬜ **SERV — a document save** (§6.4): the root and each child collection diffed (insert, update, delete) and written in one transaction, conditioned on the root's version; embeddings refreshed through `resolveEmbedding` as `table.mjs` does. Today's entity writes touch the root only. Spec first |
-| **3** | ⬜ **The edit policy** (`arch-home-brain.md` §4.8): `editable` per column and add/delete per table in `PGC_Schema`; `household/edit-policy.json` and its upsert script (`--check`, a rerun "no changes") (Z) |
+| **1** | 🟡 **SERV — a grid save in one transaction** (§6.4): changed, new and deleted rows written together; each changed or deleted row conditioned on the version it was read at; `409` naming the rows that moved. Spec first. **Spec ✅** (3.12.0: `saveRows`, `withVersion` on `getRows`) |
+| **2** | 🟡 **SERV — a document save** (§6.4): the root and each child collection diffed (insert, update, delete) and written in one transaction, conditioned on the root's version; embeddings refreshed through `resolveEmbedding` as `table.mjs` does. Today's entity writes touch the root only. Spec first. **Spec ✅** (3.12.0: `saveEntity`, `withVersion` and `children` on `getEntity`) |
+| **3** | ⬜ **The edit policy** (`arch-home-brain.md` §4.8): `PGC_EditPolicy` (AB) — open columns and add/delete per table; template, registry seed, created through SERV; `household/edit-policy.json` and its upsert script (`--check`, a rerun "no changes") (Z) |
 | **4** | ⬜ **`PGC_ChangeLog`** (AA): template, registry seed, created live through SERV, never bootstrap; one row per direct change, written in the same transaction as the change |
 | **5** | ⬜ **PROC — record routes** (`arch-home-brain.md` §4.7), spec first: `GET /domains/{d}/schema`, `…/records`, `…/records/{id}` (with its children), the grid's batch save, the document's save, add and delete. Household role; the policy checked server-side, a request refused whole when any field is not open to it; the web allow-list |
 | **6** | ⬜ **Web — the editable grid** (§6.1, §6.2): cell editors from column type, changed cells marked, rows added and deleted where the table allows, one Save; a `409` re-reads and names the rows that moved |
@@ -52,7 +54,7 @@ needs to see and correct them on the web.
 | **AC4** | ⬜ | A field or table the policy does not open is refused whole on the server, and the web offers no edit control for it | 3, 5, 6, 7 | Tests through the route |
 | **AC5** | ⬜ | Every direct edit leaves a `PGC_ChangeLog` row with each field's old and new value | 4, 5 | Read back after AC1 and AC2 |
 | **AC6** | ⬜ | `/d/recipes` lists the recipes and opens one as a document | 7, 8 | Shown live |
-| **AC7** | ⬜ | Each new endpoint is in `openapi.yaml` before it is built, its own commit, bumping the spec's version; every refusal is tested through its route | all | Review as each lands, and tests |
+| **AC7** | 🟡 | Each new endpoint is in `openapi.yaml` before it is built, its own commit, bumping the spec's version; every refusal is tested through its route | all | Review as each lands, and tests |
 | **AC8** | ⬜ | No view switch offers `list`; Inventory's panel opens as a grid | 9 | Shown live |
 
 ## Retro lessons to apply (sprint-18)
@@ -80,4 +82,7 @@ needs to see and correct them on the web.
 
 **2026-11-22 (session 1).** Sprint scoped with Javear: decisions X (retire `list`), Y (existing
 ingredients only), Z (the household's edit-policy file), AA (`PGC_ChangeLog`, general). Every PGD
-table checked for `updated_at` and its `set_updated_at` trigger — all 14 have both.
+table checked for `updated_at` and its `set_updated_at` trigger — all 14 have both. Decision AB
+(`PGC_EditPolicy`) and the save shapes agreed; spec 3.12.0 written with the design docs
+(`arch-data.md` §4.3.7 `PGC_ChangeLog` and `PGC_EditPolicy` replacing `PGC_RecordEdit`,
+`arch-home-brain.md` §4.8, `arch-web-app.md` §6.3–6.4).
