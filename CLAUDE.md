@@ -247,17 +247,17 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 
 ## Current State
 
-Sprints 7–17: see `docs/sprints/sprint-07.md` through `docs/sprints/sprint-17.md` (outcome, validation, retro).
+Sprints 7–18: see `docs/sprints/sprint-07.md` through `docs/sprints/sprint-18.md` (outcome, validation, retro).
 
-**Sprint 17 closed 2026-11-17 → 3 days, branch `sprint/17-web-front`. 1571 → 1774 unit tests. All 5 ACs met, live or by review.** **The household uses the brain from a web page** — Phase 0's front end. A React SPA on S3 + CloudFront (`dxghnv4qmxz62.cloudfront.net`), Cognito sign-in with TOTP, `WebApiFunction` an allow-list calling PROC as the token's `sub`; shipped by `dev_scripts/deploy-web.mjs`, not `sam deploy`. Home, Money and Inventory from `PGC_Page`: records panels (grid/list, column `label`/`format`), workflow panels, report panels with ↻ Refresh. A run's thread from the inbox, folded when long; every gate type answered in the browser, whichever surface started the run; a form with `row`/`column` drawn as a grid, a table per `group`. `edit_budget` v9 (Novia, session 1362) edits a month as three grids. `chart`/`metric` panels moved to Phase 1.
+**Sprint 18 closed 2026-11-22 → 5 days, branch `sprint/18-web-novia`. 1774 → 1976 unit tests. All 7 ACs met, six live, one by review and tests.** **The household talks to Novia on the web page.** Her region sits left of every page (collapsible, resizable, a tab on a phone): sessions by last activity, named by `label` or first message and renamed in place; a conversation reopened with its history; her gates and questions answered there. `minds_eye` panels keep one domain's or topic's sessions (Money's `ask-money`). `/proc/minds-eye/sessions…` read `minds_eye` sessions only, each checked against the principal. `PGC_Session.callback` replaced `slack_thread_ts`; `topic`, `label`, `last_active_at` (a trigger, installed by SERV's new `addTrigger` from `trigger-functions.mjs`); `PGC_UiMessage.session_id`. `GATE_ANSWERED`: a gate answered anywhere is kept in the inbox and drawn under its question; Slack replaces the buttons of a gate answered elsewhere (bot history scopes added). Records panels read on as scrolled (`offset`). Lambda concurrency quota raised from 10 to 1000.
 
-**Sprint 16 closed 2026-11-15 → 1 session, branch `sprint/16-web-seam`. 1487 → 1571 unit tests. All 7 ACs met, three of them live (runs 1030, 1031, 1032).** **`/proc` drives a second provider** — the web app's backend seam, Phase 0's first half. `enqueueCallback` writes every message to a person to `PGC_UiMessage` (the web's only delivery; Slack's too, then queued). The principal comes from `x-principal-user` with a household role from SSM `household-principals`; every id-taking route checks it. Runs carry a label from their workflow's `display.run_label`, which Novia writes (session 1355). `PGC_Page` and its panel contract (records panels switch views, `arch-web-app.md` v0.6) with the household's pages in the committed `household/`. Reads: inbox, runs (and starting one), pages, gates, outputs, sources. `row`/`column`/`group` on a form field, checked by an L0 item check composed from the contract. Slack buttons carry `gate_id`; a click on a gate answered elsewhere is refused and told (`GATE_MOVED`). Deployed from templates and seeds, no drift.
+**Sprint 17 closed 2026-11-17 → 3 days, branch `sprint/17-web-front`. 1571 → 1774 unit tests.** The household uses the brain from a web page — Phase 0's front end: the SPA on S3 + CloudFront (`dxghnv4qmxz62.cloudfront.net`), Cognito sign-in with TOTP, `WebApiFunction` an allow-list calling PROC as the token's `sub`; shipped by `dev_scripts/deploy-web.mjs`, not `sam deploy`. Pages of panels from `PGC_Page`; every gate type answered in the browser.
 
-Read `docs/sprints/sprint-17.md` (outcome, retro) before scoping Sprint 18.
+Read `docs/sprints/sprint-18.md` (outcome, retro) before scoping Sprint 19.
 
 ### Open Work
 
-None — Sprint 18 not yet scoped. Candidates: `arch-web-app.md` §10 Phase 1 (Novia in the browser, the page editor, `chart`/`metric` panels, `GATE_RESOLVED`), and the backlog's web items (custom domain, a thread that keeps its answers).
+None — Sprint 19 not yet scoped. Candidates: the rest of `arch-web-app.md` §10 Phase 1 (*Ask Novia about this*, the page editor, `chart`/`metric` panels, domain views and editable grids), and the backlog's web items (custom domain, managing a session's topic).
 
 ### Deferred
 

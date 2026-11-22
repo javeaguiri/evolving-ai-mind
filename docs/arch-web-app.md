@@ -82,7 +82,7 @@ enqueued to the results queue as today; for the web the row **is** the delivery.
 | channel | text | Slack channel, or the web user's `sub` |
 | thread_id | text | Slack thread ts. Null for a web run's message: the run is its own thread, named by `workflow_run_id` |
 | workflow_run_id | integer | Nullable, no FK — runs are purged independently |
-| message_type | text | `HUMAN_GATE`, `HUMAN_NOTIFICATION`, `WORKFLOW_ERROR` |
+| message_type | text | `HUMAN_GATE`, `HUMAN_NOTIFICATION`, `WORKFLOW_ERROR`, `GATE_ANSWERED` |
 | payload | jsonb | The message exactly as enqueued — markdown text, or `gate_type` + `dialog` |
 | created_at | timestamptz | |
 
@@ -124,7 +124,7 @@ system code or seed data.
 | version | integer | Unique with `page_key`; the latest is drawn |
 | title | jsonb | A string or a language map (§13) |
 | position | integer | Position in the *Pages* menu; Home is `0` |
-| panels | jsonb | Ordered `[{ id, kind, width, title?, config }]`; `kind` is `workflow`, `records`, `summary` or `novia` (§4.2). A records panel's `config` names its `source` (a table or view) or its `entity`, optionally the `view` it opens on, and the views' options; a summary panel's names its `source` (or `workflow`), its `widget` and that widget's options |
+| panels | jsonb | Ordered `[{ id, kind, width, title?, config }]`; `kind` is `workflow`, `records`, `summary` or `minds_eye` (§4.2). A records panel's `config` names its `source` (a table or view) or its `entity`, optionally the `view` it opens on, and the views' options; a summary panel's names its `source` (or `workflow`), its `widget` and that widget's options |
 | created_by | text | `seed`, `user` (the editor or `upsert-page.mjs`), `novia` |
 | created_at | timestamptz | |
 
@@ -156,7 +156,11 @@ This is an Execution change in `run-workflow.mjs` and a column on `PGC_WorkflowR
 A Novia panel (§4.2) lists the sessions on one topic, so a session carries one:
 `PGC_Session.topic`, text, nullable.
 
-- **Set only from the panel.** *New* in a Novia panel starts a session with the panel's `topic`, and
+- **Named by the panel.** A Novia panel's config names its topic as a `domain` of the registry or as
+  free text (`topic`), one of the two. A domain is preferred: it stays the same when the panel or
+  page is renamed, and two panels naming it share its sessions. The session's `topic` holds the
+  domain's name or the text.
+- **Set only from the panel.** *New* in a Novia panel starts a session on the panel's topic, and
   the user keeps that conversation on the topic. Nothing else writes the column.
 - **A session begun elsewhere** — her region, Slack — has no topic. It is listed in her region by
   its first message, and in no Novia panel.
@@ -223,7 +227,7 @@ when the base version moved, `422` naming the panel whose config fails its schem
 `DELETE /pages/{pageKey}` (never Home). `GET /sources/{source}/rows` (§3.1) gains the registry's
 edit policy and `display` metadata — the same read as a domain page, so a panel sees nothing a
 domain page could not — and a grid's edits save through §6.4. A Novia panel reads
-`GET /novia/sessions?topic=`.
+`GET /minds-eye/sessions?topic=`.
 
 Adds `arch-home-brain.md` §4.7's remaining resources — `GET /domains`, `/domains/{domain}/schema`,
 `/domains/{domain}/records[/{id}]`, `GET /runs/{runId}` (one run's steps, for Activity), the Novia
@@ -297,8 +301,8 @@ Page, domain and panel names above are illustrative; all of them are data.
 | **🔔 Needs you** | The count of questions waiting on a person, across every run and provider, shown only when there are some. Opens the list; each item opens the question **inside its run** (§4.3) |
 | **🧠 Help** | What the brain can do and how pages are built (§4.6) |
 | **⚙ Settings** | The user's own settings (§4.7) |
-| **Page body** | The page's title at its head — where the user is, with no side menu to say so — and *Edit page* (Phase 1); then its panels in a responsive grid; each panel declares a width (`1/3`, `1/2`, `2/3`, `full`); a phone stacks them in order, full width |
-| **Novia** (left) | Her sessions and the open conversation (§4.5). **«** collapses her to a strip and the page widens into the space; she collapses on her own while a run needs the full width, and reopens when it ends. Open or collapsed is remembered on the device. The *Novia* tab on a phone. Phase 1 — in Phase 0 the page has the full width |
+| **Page body** | The page's title at its head — where the user is, with no side menu to say so — and *Edit page* (Phase 1); then its panels in a responsive grid; each panel declares a width (`1/3`, `1/2`, `2/3`, `full`). The grid follows the page's own width, not the window's, so widening Novia narrows it: a narrow page draws thirds as halves and stacks halves; a phone stacks them all in order, full width |
+| **Novia** (left) | Her sessions and the open conversation (§4.5). **«** collapses her to a strip and the page widens into the space; her edge is dragged to widen or narrow her, between 280 px and 60% of the window (double-click for the usual width); she collapses on her own while a run needs the full width, and reopens when it ends. Open or collapsed, and her width, are remembered on the device. The *Novia* tab on a phone. Phase 1 — in Phase 0 the page has the full width |
 
 ### 4.2 Pages, panels and widgets
 
@@ -320,7 +324,7 @@ which one.
 | **Workflow** | One workflow, or every workflow of a domain | A *Start* button per workflow (its `display.label`); its runs by **run label** (§2.4), newest first; the active run stepped through in place (§4.3). With `show_output`, the latest output as a `report` widget above the runs | `workflow` or `domain`, `limit`, `show_output` | 0 |
 | **Records** | A table, view or entity of a domain | Its rows in one view at a time, with the **view switch** in the panel's header | `source` (a table or view) or `entity`, `view` (the one it opens on), the views' options | 0, read-only |
 | **Summary** | A table or view, or a workflow's latest output | Exactly one widget | `source` (or `workflow` for a report), `widget`, the widget's options | 0 |
-| **Novia** | A topic | Her sessions on that topic (§2.5), newest first; opening one continues it in the panel; *New* starts a session on the topic | `topic` | 1 |
+| **Novia** | A topic — a domain, or free text | Her sessions on that topic (§2.5), most recently active first; opening one continues it in the panel; *New* starts a session on the topic | `domain` or `topic` | 1 |
 
 **The view switch.** The views are renderings of the same rows, so choosing one is the viewer's
 choice, not the page's: the switch never writes a new page version, and the panel's config is the
@@ -328,6 +332,12 @@ same whichever view is showing. The switch offers only the views that fit the so
 opens on its config's `view`, else the source's `display.view` (§6.3), else `grid`. The viewer's
 last choice is remembered per panel, per viewer — in the browser in Phase 0 — and never stored on
 the page.
+
+**Reading on.** A records panel reads a page of rows (its `limit`, else 100) and scrolls inside
+itself. As the end of what it holds comes into view it reads the next page and adds it, until
+the source has no more; *Show more* at the end does the same from the keyboard, and tries again
+when a page was refused. Pages are read by `offset`, in the panel's order ended on `id` where the
+source has one, so no row is repeated or skipped.
 
 **View types.**
 
@@ -427,7 +437,7 @@ Novia has the left-hand region (§4.1), and only she answers there.
 
 | Behaviour | Design |
 |---|---|
-| **Region** | Her sessions at its head, newest first, each named by its topic (§2.5) or, without one, by its first message; opening one shows the conversation. Deep-linkable as `?novia=<sessionId>` on any route |
+| **Region** | Her sessions at its head, most recently active first, each named by its `label` or, without one, by its first message; opening one shows the conversation, its name renamed in place with ✎ — an empty name clears the `label`. Deep-linkable as `?minds-eye=<sessionId>` on any route |
 | **Novia panels** | A panel on a page holds one topic's sessions (§4.2), for a subject the household returns to; *New* there starts a session on that topic, the only way a session gets one |
 | **Messages** | `MINDS_EYE` / `MINDS_EYE_RESUME`, as `/novia` in Slack; her gated actions render with the gate components of §5 |
 | **Ask Novia about this** | From any panel, record, run or question: opens her region with the item's identifiers (panel config, run id, record) in the opening message |
@@ -478,7 +488,7 @@ Client-side; every page has a deep link.
 | `/activity/runs`, `/activity/schedules`, `/activity/memory` | Every run by its label, filterable by domain and status; the schedules; what the brain remembers, by domain | 1 |
 | `/settings/{entry}` | Settings (§4.7) | 0 (Profile), 1 |
 | `?run=<runId>` | The run drawer, over any route | 0 |
-| `?novia=<sessionId>` | Novia's region, open on a session | 1 |
+| `?minds-eye=<sessionId>` | Novia's region, open on a session | 1 |
 | `?help=<section>` | The Help drawer | 1 |
 
 ---
@@ -512,6 +522,9 @@ Block Kit. **No domain vocabulary, no Slack ceilings**: a gate is as long as its
 | `text_input` | Text area, then the gate's buttons | `{ action, inputValue }` |
 | `review_object` | Key/value table, then buttons | `{ action }` |
 | `followup_prompt` | Message, and *Ask follow-up* — a text box whose text answers the gate, as Slack's button does; the dialog's own buttons are not drawn, as Slack draws none | `{ action: 'confirm', inputValue }` — written to the step's `output_key` |
+| `minds_eye_gate` | Her action gate, in her conversation (§4.5): the message, then her confirm label (*Apply*, *Register*, *Drop* — drawn as danger when she says so), her test label when she offers one (*Apply and test*), and *Cancel*, as Slack draws them | `POST /minds-eye/sessions/{id}/responses` `{ atSeq, action: 'approve' \| 'test' \| 'cancel' }` |
+| `minds_eye_continue_gate` | Why she paused (by its `reason`), *Continue* and *End*; a follow-up is written in her box, which answers the gate as Slack's *Follow-up* does | `{ atSeq, action: 'continue' \| 'end' }` to the same route; a follow-up `POST …/messages` `{ text }` |
+| Her reply's `questions` | Under her latest reply while she waits: each question with its answer box — its choices as radios (a dropdown past ten) and a comment, or a text area — then *Anything else* and *Send answers*; under an older reply, only what she asked. *Continue with Novia* is her box | `POST /minds-eye/sessions/{id}/messages` `{ answers: [{ id, answer, comment }], note }` |
 
 **The grid.** A field may carry three optional, generic layout properties on the `human_gate`
 `PGC_StepType` contract:
@@ -788,9 +801,9 @@ for every message, Slack's included; that is how a Slack-started run also appear
 
 | Case | Behaviour |
 |---|---|
-| **Slack-started run, gate answered on the web** | The response is enqueued with the run's own callback (Slack). The next gate and the results post to the Slack thread as always, and through the inbox they also appear in 🔔 and in the run on the web. The Slack message's buttons stay live; each carries its `gate_id`, a click there is refused by `resumeGate` (§2.2), and the clicker alone is told *"Already answered — your click was not applied."* in the run's thread — a `GATE_MOVED` callback the listener posts ephemerally |
+| **Slack-started run, gate answered on the web** | The response is enqueued with the run's own callback (Slack). The next gate and the results post to the Slack thread as always, and through the inbox they also appear in 🔔 and in the run on the web. `resumeGate` sends `GATE_ANSWERED` with the run's callback; the listener finds the gate's message in the run's thread by the `gate_id` its buttons carry and replaces the buttons with the answer — *✅ Save — answered on the web* — keeping the message's content. A click on a message not yet updated is refused by `resumeGate` (§2.2), and the clicker alone is told *"Already answered — your click was not applied."* — a `GATE_MOVED` callback the listener posts ephemerally |
 | **Web-started run** | No Slack message exists, so it can only be answered on the web |
-| **Phase 1** | A `GATE_RESOLVED` callback updates the Slack message to show it was answered on the web, so the stale buttons disappear rather than refuse |
+| **Every answer** | `resumeGate` writes `GATE_ANSWERED` to the inbox once it accepts an answer, from either surface: `gateId`, the answer's `label` (the option's), a form's `changes` (its inputs that moved from where they opened) and `answeredIn` (`slack`, `web`, `minds_eye`). The web draws it under its question — *You chose Save · 3 changes* — so a thread keeps its answers after a reload and on another device. Slack ignores one answered in Slack, whose click already replaced the buttons. Finding the message needs the bot's history scopes (`channels:history`, `groups:history`, `im:history`); without them the listener logs and leaves the message as it is |
 
 ---
 
@@ -819,7 +832,7 @@ for every message, Slack's included; that is how a Slack-started run also appear
 | **PROC** | `PGC_UiMessage` and `enqueueCallback` writing it; `gate_id`; run labels (§2.4); `PGC_Page` with the seeded Home, and `upsert-page.mjs` for the household's pages; `GET /proc/gates`, `GET /proc/inbox`, `GET /proc/pages`, `GET /proc/runs`, `GET /proc/outputs` (§2.6), `GET /proc/workflows`, `GET /proc/me`, `PGC_DomainHelp.display` (`label`), the read-only `records` read behind `GET /sources/{source}/rows`, starting a named workflow | Navigate reads (§3.2), session topics (§2.5), the edit policy and `PGC_RecordEdit`, the `arch-home-brain.md` §3.2 Slack leaks removed |
 | **Contract** | `row`, `column`, `group` on the `human_gate` contract | A gridded form's answer may carry a subset of rows (§5.4) |
 | **Pages** | Sign-in; the shell — 🏠, the *Pages* and *Domains* menus, 🔔, ⚙; the household's pages from `PGC_Page`, read-only — three to start: Home, Money, Inventory; workflow panels — *Start*, runs by label, the run stepped through in place; records panels with the view switch over the `grid` (read-only) and `list` views; summary panels with the `chart`, `metric` and `report` widgets; click-through and report Refresh; domain pages with their workflow panel; the run page and run drawer; Settings › Profile; every gate type of §5.2 | The page editor — *+ New page*, *Edit page*, *+ Add panel*, delete; the `document` view and the editable grid; Novia's region and Novia panels; 🧠 Help; Activity; the command bar; the rest of Settings; ⓘ on panels and terms; *Ask Novia about this*; Novia's `propose_page_change` |
-| **Slack** | `gate_id` on buttons; the ephemeral "already answered" | `GATE_RESOLVED` message update; the Slack pager and pick-one modal (§5.4), with L1's gate-size check narrowed |
+| **Slack** | `gate_id` on buttons; the ephemeral "already answered" | `GATE_ANSWERED` message update; the Slack pager and pick-one modal (§5.4), with L1's gate-size check narrowed |
 | **Domain views** | — | Grid and document views, cell editors, `display` metadata (§6); SERV batch and entity writes with version checks (§6.4) |
 | **First workflow** | `manage_budget` (357): month pick, then one grid grouped by budget type, after Novia's four corrections | — |
 

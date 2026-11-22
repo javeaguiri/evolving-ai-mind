@@ -20,7 +20,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateForeignKey, upsertForeignKey } from '../../src/serv/schema.mjs';
+import { validateForeignKey, upsertNamed } from '../../src/serv/schema.mjs';
 
 const valid = {
   name:       'fk_inventory_category',
@@ -85,20 +85,20 @@ describe('validateForeignKey — rejects anything unsafe to interpolate', () => 
   });
 });
 
-describe('upsertForeignKey — a re-issued request converges', () => {
+describe('upsertNamed — a re-issued request converges', () => {
   it('appends when the named key is new', () => {
-    const result = upsertForeignKey([], valid);
+    const result = upsertNamed([], valid);
     assert.deepEqual(result, [valid]);
   });
 
   it('treats null existing as empty', () => {
-    assert.deepEqual(upsertForeignKey(null, valid), [valid]);
-    assert.deepEqual(upsertForeignKey(undefined, valid), [valid]);
+    assert.deepEqual(upsertNamed(null, valid), [valid]);
+    assert.deepEqual(upsertNamed(undefined, valid), [valid]);
   });
 
   it('replaces in place when the name already exists, rather than duplicating', () => {
     const stale  = { ...valid, onDelete: 'CASCADE' };
-    const result = upsertForeignKey([stale], valid);
+    const result = upsertNamed([stale], valid);
     assert.equal(result.length, 1);
     assert.equal(result[0].onDelete, 'SET NULL');
   });
@@ -106,7 +106,7 @@ describe('upsertForeignKey — a re-issued request converges', () => {
   it('leaves other foreign keys on the table untouched', () => {
     const other  = { name: 'fk_inventory_other', column: 'other_id',
                      references: { table: 'PGD_Other', column: 'id' }, onDelete: 'CASCADE' };
-    const result = upsertForeignKey([other], valid);
+    const result = upsertNamed([other], valid);
     assert.equal(result.length, 2);
     assert.deepEqual(result[0], other);
     assert.deepEqual(result[1], valid);
@@ -115,7 +115,7 @@ describe('upsertForeignKey — a re-issued request converges', () => {
   it('preserves order when replacing, so the registry does not churn', () => {
     const first  = { name: 'fk_a', column: 'a_id', references: { table: 'PGD_A', column: 'id' }, onDelete: 'CASCADE' };
     const last   = { name: 'fk_z', column: 'z_id', references: { table: 'PGD_Z', column: 'id' }, onDelete: 'CASCADE' };
-    const result = upsertForeignKey([first, valid, last], { ...valid, onDelete: 'RESTRICT' });
+    const result = upsertNamed([first, valid, last], { ...valid, onDelete: 'RESTRICT' });
     assert.deepEqual(result.map(fk => fk.name), ['fk_a', 'fk_inventory_category', 'fk_z']);
     assert.equal(result[1].onDelete, 'RESTRICT');
   });

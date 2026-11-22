@@ -4,6 +4,14 @@ Completed and closed tasks from backlog.md, preserved for reference. Items moved
 
 ---
 
+## Sprint 18 — closed items (2026-11-22)
+
+| Item | Resolution |
+|---|---|
+| **Web app — a run's thread keeps the answers given (Javear, 2026-11-17)** | **Done Sprint 18 (items 6–7, AC4, decision W).** One message, `GATE_ANSWERED`, sent by `resumeGate` once it accepts an answer and kept in the inbox: the web draws the answer under its question after a reload, and Slack replaces a gate's buttons when it was answered elsewhere. `GATE_RESOLVED` not built. |
+
+---
+
 ## Sprint 15 — closed items (2026-11-02)
 
 | Item | Resolution |

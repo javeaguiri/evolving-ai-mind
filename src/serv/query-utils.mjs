@@ -7,8 +7,8 @@
 // Shared by table.mjs (getRows) and entity.mjs (listEntities) — the two places a
 // caller-supplied orderBy becomes an ORDER BY clause. Kept in one place so the two
 // cannot drift: before this module existed they disagreed, and entity.mjs accepted
-// only the object form while table.mjs also accepted a string. `resolveReadLimit` is
-// getRows's alone: which bound a read applies, and who chose it.
+// only the object form while table.mjs also accepted a string. `resolveReadLimit` and
+// `resolveReadOffset` are getRows's alone: which bound a read applies, who chose it, and where it starts.
 
 /**
  * Normalise orderBy to an array of { column, direction }, whatever form it arrives in.
@@ -119,4 +119,17 @@ export function resolveReadLimit({ limit, vectorSearch } = {}) {
   const tightest = Math.min(...stated);
   if (tightest > MAX_READ_LIMIT) return { limit: MAX_READ_LIMIT, chosenBy: 'ceiling' };
   return { limit: tightest, chosenBy: 'caller' };
+}
+
+/**
+ * The rows a getRows read skips before its page: 0 when none is stated, null when what was
+ * stated is not a whole number of rows.
+ *
+ * @param {*} offset  the getRows request body's `offset`
+ * @returns {number|null}
+ */
+export function resolveReadOffset(offset) {
+  if (offset === undefined || offset === null) return 0;
+  const n = Number(offset);
+  return Number.isInteger(n) && n >= 0 ? n : null;
 }

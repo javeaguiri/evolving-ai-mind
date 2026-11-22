@@ -21,7 +21,7 @@
 
 import { randomUUID }        from 'node:crypto';
 import { WebClient }         from '@slack/web-api';
-import { FORM_BLOCK_PREFIX, EMPTY_OPTION_VALUE, listIdBlockId, numberActionId, NOVIA_ANSWER_PREFIX, NOVIA_COMMENT_PREFIX, NOVIA_NOTE_BLOCK } from './form-fields.mjs';
+import { FORM_BLOCK_PREFIX, EMPTY_OPTION_VALUE, listIdBlockId, numberActionId, NOVIA_ANSWER_PREFIX, NOVIA_COMMENT_PREFIX, NOVIA_NOTE_BLOCK, preservedContentBlocks } from './form-fields.mjs';
 import { summariseWorkflowError } from '../shared/workflow-error.mjs';
 import { formatColumnHeader }    from '../shared/column-header.mjs';
 
@@ -157,6 +157,10 @@ async function processRecord(record) {
 
       case 'GATE_MOVED':
         await postGateMoved(message);
+        break;
+
+      case 'GATE_ANSWERED':
+        await postGateAnswered(message);
         break;
 
       default:
@@ -526,8 +530,47 @@ export function noviaQuestionBlocks(questions, room) {
 // producing human-readable content before enqueuing.
 // ---------------------------------------------------------------------------
 
+/**
+ * The blocks under a minds-eye message that invites a reply (`invitesReply`, set by /proc): her
+ * questions, each with an answer box, and the buttons that answer or continue. A message from a
+ * session that invites none — a progress line — carries its sessionId for the record only, and
+ * gets nothing. Her questions sit under the message so they are answered in place: the follow-up
+ * modal covers the message it replies to, and a list in it cannot be copied apart from the rest.
+ * Pure — exported for test.
+ *
+ * @param {{ invitesReply?: boolean, sessionId?: number, questions?: Array }} message
+ * @returns {{ asked: object[], actions: object } | null}
+ */
+export function mindsEyeReplyBlocks({ invitesReply, sessionId, questions }) {
+  if (!invitesReply || !sessionId) return null;
+  const asked = Array.isArray(questions) && questions.length > 0
+    ? noviaQuestionBlocks(questions, QUESTION_BLOCK_ROOM)
+    : [];
+  return {
+    asked,
+    actions: {
+      type:     'actions',
+      elements: [
+        ...(asked.length ? [{
+          type:      'button',
+          text:      { type: 'plain_text', text: 'Send answers' },
+          style:     'primary',
+          action_id: 'minds_eye_answers',
+          value:     JSON.stringify({ action: 'minds_eye_answers', sessionId }),
+        }] : []),
+        {
+          type:      'button',
+          text:      { type: 'plain_text', text: 'Continue with Novia' },
+          action_id: 'minds_eye_followup',
+          value:     JSON.stringify({ action: 'minds_eye_followup', sessionId }),
+        },
+      ],
+    },
+  };
+}
+
 async function postHumanNotification(message) {
-  const { callback, traceId, workflowRunId, queryId, format, sessionId, reveals, breakActions, questions } = message;
+  const { callback, traceId, workflowRunId, queryId, format, reveals, breakActions } = message;
   const text = message.message ?? 'No message provided.';
   const contextText = workflowRunId
     ? `runId: ${workflowRunId} | traceId: ${traceId}`
@@ -549,32 +592,10 @@ async function postHumanNotification(message) {
   const suffixBlocks = [
     { type: 'context', elements: [{ type: 'mrkdwn', text: contextText }] },
   ];
-  if (format === 'markdown' && sessionId) {
-    // Her questions sit under the message with an answer box each, so they are answered in
-    // place: the follow-up modal covers the message it replies to, and a list in it cannot
-    // be copied apart from the rest. They ride on the last chunk, with the button that sends them.
-    const asked = Array.isArray(questions) && questions.length > 0
-      ? noviaQuestionBlocks(questions, QUESTION_BLOCK_ROOM)
-      : [];
-    suffixBlocks.unshift(...asked);
-    suffixBlocks.push({
-      type:     'actions',
-      elements: [
-        ...(asked.length ? [{
-          type:      'button',
-          text:      { type: 'plain_text', text: 'Send answers' },
-          style:     'primary',
-          action_id: 'minds_eye_answers',
-          value:     JSON.stringify({ action: 'minds_eye_answers', sessionId }),
-        }] : []),
-        {
-          type:      'button',
-          text:      { type: 'plain_text', text: 'Continue with Novia' },
-          action_id: 'minds_eye_followup',
-          value:     JSON.stringify({ action: 'minds_eye_followup', sessionId }),
-        },
-      ],
-    });
+  const reply = mindsEyeReplyBlocks(message);
+  if (reply) {
+    suffixBlocks.unshift(...reply.asked);
+    suffixBlocks.push(reply.actions);
   } else if (queryId) {
     suffixBlocks.push({
       type:     'actions',
@@ -645,6 +666,54 @@ async function postGateMoved(message) {
     ...(callback.threadId ? { thread_ts: callback.threadId } : {}),
   });
   console.info('callback: GATE_MOVED posted', { channel: callback.channel, workflowRunId, traceId });
+}
+
+// ---------------------------------------------------------------------------
+// GATE_ANSWERED — a gate's answer (docs/arch-web-app.md §8). One answered in Slack needs nothing:
+// its click already replaced the buttons. One answered elsewhere finds the gate's message in the
+// run's thread by the gate_id its buttons carry, and replaces the buttons with the answer, keeping
+// the content. Reading the thread needs the bot's history scopes; without them the message is
+// left as it is (a click there is still refused and told, GATE_MOVED).
+// ---------------------------------------------------------------------------
+
+const THREAD_UNREADABLE = new Set(['missing_scope', 'not_in_channel', 'channel_not_found', 'thread_not_found']);
+
+/** The line that takes a gate's buttons' place. */
+export function gateAnsweredText({ label, changes, answeredIn }) {
+  const where = answeredIn === 'web' ? 'answered on the web' : 'answered elsewhere';
+  return `✅ ${label} — ${where}${changes > 0 ? ` · ${changes} ${changes === 1 ? 'change' : 'changes'}` : ''}`;
+}
+
+/** Does this message still offer buttons that answer the gate? */
+export function carriesGate(message, gateId) {
+  return (message.blocks ?? []).some(b => b.type === 'actions'
+    && (b.elements ?? []).some(e => typeof e.value === 'string' && e.value.includes(`"gateId":"${gateId}"`)));
+}
+
+async function postGateAnswered(message) {
+  const { callback, gateId, workflowRunId, answeredIn, traceId } = message;
+  if (answeredIn === 'slack' || !callback?.channel || !callback.threadId) return;
+
+  const found = [];
+  try {
+    for (let cursor; ;) {
+      const page = await slack.conversations.replies({ channel: callback.channel, ts: callback.threadId, limit: 200, ...(cursor ? { cursor } : {}) });
+      found.push(...(page.messages ?? []).filter(m => carriesGate(m, gateId)));
+      cursor = page.response_metadata?.next_cursor;
+      if (!cursor) break;
+    }
+  } catch (error) {
+    if (!THREAD_UNREADABLE.has(error.data?.error)) throw error;
+    console.warn('callback: GATE_ANSWERED — the run\'s thread cannot be read; the gate\'s message is left as it is',
+      { reason: error.data.error, workflowRunId, gateId, traceId });
+    return;
+  }
+
+  const answered = { type: 'context', elements: [{ type: 'mrkdwn', text: gateAnsweredText(message) }] };
+  for (const m of found) {
+    await slack.chat.update({ channel: callback.channel, ts: m.ts, text: m.text ?? '', blocks: [...preservedContentBlocks(m.blocks), answered] });
+  }
+  console.info('callback: GATE_ANSWERED — buttons replaced', { workflowRunId, gateId, messages: found.length, traceId });
 }
 
 async function postWorkflowError(message) {
@@ -751,11 +820,25 @@ export function mindsEyeGateButtons({ sessionId, confirmLabel = 'Approve', confi
 }
 
 /**
- * A Novia continue gate's buttons: Continue, Follow-up, Cancel, each carrying atSeq as the
- * action gate's do. Exported for tests.
+ * What a minds-eye continue gate says, by the reason /proc gives for posting it. Exported for tests.
  */
-export function mindsEyeContinueButtons({ sessionId, resetActionCount = false, atSeq }) {
-  const at = atSeq != null ? { atSeq } : {};
+export const CONTINUE_GATE_TEXT = {
+  action_limit:   "I've reached my action limit. Continue to keep going (resets the limit), ask a Follow-up question, or Cancel to end the session.",
+  round_budget:   "I've used up this round's time — nothing has gone wrong, and everything so far is saved. Continue to pick up where I left off, ask a Follow-up question, or Cancel to end the session.",
+  turn_limit:     "I've reached my turn limit. Continue to keep reasoning, ask a Follow-up question, or Cancel to end the session.",
+  after_followup: 'Continue the earlier task, ask another Follow-up question, or Cancel to end the session.',
+};
+
+/**
+ * A Novia continue gate's buttons: Continue, Follow-up, Cancel, each carrying atSeq as the
+ * action gate's do, and afterTruncation when the next round must open with the cut-off notice.
+ * Exported for tests.
+ */
+export function mindsEyeContinueButtons({ sessionId, resetActionCount = false, atSeq, afterTruncation = false }) {
+  const at = {
+    ...(atSeq != null ? { atSeq } : {}),
+    ...(afterTruncation ? { afterTruncation: true } : {}),
+  };
   return [
     {
       type:      'button',
@@ -899,26 +982,23 @@ async function postHumanGate(message) {
     return;
   }
 
-  // minds_eye_continue_gate \u2014 Novia turn-limit gate. Three options: Continue resumes the loop,
-  // Follow-up opens a modal for the user to ask a question, Cancel ends the session.
+  // minds_eye_continue_gate \u2014 Novia continue gate. Three options: Continue resumes the loop,
+  // Follow-up opens a modal for the user to ask a question, Cancel ends the session. What it
+  // says is chosen by the reason /proc gives.
   if (gateType === 'minds_eye_continue_gate') {
-    const { sessionId, resetActionCount = false, budgetExhausted = false, atSeq } = message;
-    const gateText = resetActionCount
-      ? "I've reached my action limit. Continue to keep going (resets the limit), ask a Follow-up question, or Cancel to end the session."
-      : budgetExhausted
-        ? "I've used up this round's time — nothing has gone wrong, and everything so far is saved. Continue to pick up where I left off, ask a Follow-up question, or Cancel to end the session."
-        : "I've reached my turn limit. Continue to keep reasoning, ask a Follow-up question, or Cancel to end the session.";
+    const { sessionId, reason, resetActionCount = false, afterTruncation = false, atSeq } = message;
+    const gateText = CONTINUE_GATE_TEXT[reason];
     const sessionContextBlock = { type: 'context', elements: [{ type: 'mrkdwn', text: `sessionId: ${sessionId} | traceId: ${traceId}` }] };
     const gateBlocks = [
       ...markdownToBlocks(gateText),
       sessionContextBlock,
       {
         type: 'actions',
-        elements: mindsEyeContinueButtons({ sessionId, resetActionCount, atSeq }),
+        elements: mindsEyeContinueButtons({ sessionId, resetActionCount, atSeq, afterTruncation }),
       },
     ];
     await routeCallback(callback, gateText, gateBlocks);
-    console.info('callback: minds_eye_continue_gate posted', { sessionId, resetActionCount, traceId });
+    console.info('callback: minds_eye_continue_gate posted', { sessionId, reason, afterTruncation, traceId });
     return;
   }
 
@@ -1263,7 +1343,7 @@ export function buildRevealBlock(field, budget = makeTableBudget()) {
   return {
     type:               'container',
     block_id:           `reveal_${randomUUID()}`,
-    title:              { type: 'plain_text', text: field.button_label ?? 'Details' },
+    title:              { type: 'plain_text', text: field.button_label ?? 'Details', emoji: true },
     is_collapsible:     true,
     default_collapsed:  true,
     child_blocks:       childBlocks,

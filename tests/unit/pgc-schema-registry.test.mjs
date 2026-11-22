@@ -33,5 +33,8 @@ describe('PGC templates and the seed registry describe the same tables', () => {
         assert.deepEqual(row[field] ?? [], template[field] ?? []);
       });
     }
+    it(`${template.table_name} — description`, () => {
+      assert.equal(row.description, template.description);
+    });
   }
 });

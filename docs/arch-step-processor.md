@@ -351,6 +351,8 @@ SlackbotFunction enqueues:
 Step Processor receives resume_gate
   ├── Validates: top frame is human_gate, run status is awaiting_human_gate
   ├── Applies mutation (text_input value write, list_selection row resolution, etc.)
+  ├── Sends GATE_ANSWERED — the option's label, a form's changes, answeredIn (slack: a click
+  │   carries slackUserId; web or minds_eye: the message's answeredIn, from /proc/gates)
   ├── Pops gate frame
   ├── Resolves on_select → next step key
   ├── Advances parent frame.current_step

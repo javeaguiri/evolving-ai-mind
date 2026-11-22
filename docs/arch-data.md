@@ -564,15 +564,14 @@ flows are specified in `docs/arch-session.md`.
 
 ##### PGC_Session
 One row per session, regardless of session type. Created at the start of any `/novia`, `/chat`,
-or `/explain` command, or by the `llm_call` step handler when diagnostics are enabled
-for the current workflow.
+or `/explain` command, a minds-eye session started on the web, or by the `llm_call` step handler
+when diagnostics are enabled for the current workflow.
 
 ```sql
 CREATE TABLE "PGC_Session" (
   id                    SERIAL PRIMARY KEY,
   session_type          VARCHAR(30)   NOT NULL,   -- 'minds_eye' | 'general_chat' | 'llm_call_diagnostic'
   query_id              UUID          NOT NULL UNIQUE DEFAULT gen_random_uuid(),
-  slack_thread_ts       VARCHAR(50)   NULL,        -- session lookup key (Slack thread_ts)
   workflow_name         VARCHAR(100)  NULL,        -- llm_call_diagnostic: PGC_Workflow.name
   run_id                UUID          NULL,        -- llm_call_diagnostic
   trace_id              VARCHAR(100)  NULL,        -- llm_call_diagnostic; matches Slack trace
@@ -584,7 +583,11 @@ CREATE TABLE "PGC_Session" (
   fingerprint_hash      TEXT          NULL,        -- replay harness: composite lookup key (indexed)
   response_source       TEXT          NULL,        -- replay harness: 'live' | 'replayed' | 'recorded'
   replayed_from_session_id INTEGER    NULL,        -- replay harness: which recording was served (provenance)
-  created_at            TIMESTAMP     NOT NULL DEFAULT NOW()
+  created_at            TIMESTAMP     NOT NULL DEFAULT NOW(),
+  callback              JSONB         NULL,        -- where the session's messages go (as PGC_WorkflowRun.callback)
+  topic                 TEXT          NULL,        -- minds_eye: the panel topic it is filed under
+  label                 TEXT          NULL,        -- minds_eye: its name, as the person set it
+  last_active_at        TIMESTAMPTZ   NOT NULL DEFAULT NOW()  -- its latest entry's time (trigger on PGC_SessionEntry)
 );
 ```
 
@@ -593,7 +596,6 @@ CREATE TABLE "PGC_Session" (
 | id | serial PK | |
 | session_type | varchar(30) NOT NULL | `minds_eye` \| `general_chat` \| `llm_call_diagnostic` |
 | query_id | uuid UNIQUE NOT NULL | User-facing reference; appears in Slack diagnostic notifications and is the `/explain` argument |
-| slack_thread_ts | varchar(50) NULL | Session follow-up lookup key (Slack thread_ts); used by Novia thread continuation and /chat |
 | workflow_name | varchar(100) NULL | `llm_call_diagnostic` only: `PGC_Workflow.name` — stored without ID join for readability |
 | run_id | uuid NULL | `llm_call_diagnostic` only |
 | trace_id | varchar(100) NULL | `llm_call_diagnostic` only; consistent with trace shown in Slack replies |
@@ -606,8 +608,12 @@ CREATE TABLE "PGC_Session" (
 | response_source | text NULL | `live` \| `replayed` \| `recorded` — where this call's response came from |
 | replayed_from_session_id | integer NULL | Provenance — the `PGC_Session.id` whose recording was served on a replayed call |
 | created_at | timestamp | |
+| callback | jsonb NULL | Where the session's messages go — the shape of `PGC_WorkflowRun.callback`: Slack `{ provider, channel, threadId }`, web `{ provider: 'web', channel: <principal> }` (the session is its own thread). A message's own callback wins; this is the fallback, field by field. Ownership: a web session belongs to its `channel`, a Slack one to the household (`principal.mjs`). Replaced `slack_thread_ts` (Sprint 18) |
+| topic | text NULL | `minds_eye` only — the subject a `minds_eye` panel lists sessions by — a domain's name, or free text; set only from the panel that starts the session (`arch-web-app.md` §2.5) |
+| label | text NULL | `minds_eye` only — the session's name, set or cleared from the web; null means it is named by its first message |
+| last_active_at | timestamptz NOT NULL DEFAULT now() | The latest entry's `created_at`, set by `trg_pgc_sessionentry_last_active` on every `PGC_SessionEntry` insert (`touch_session_last_active()`, `src/serv/trigger-functions.mjs`); never written by code. `minds_eye` sessions are listed by it, newest first (Sprint 18) |
 
-Indexes: `(slack_thread_ts)`, `(query_id)`, `(run_id)`, `(fingerprint_hash)`
+Indexes: `(query_id)`, `(run_id)`, `(fingerprint_hash)`
 
 **`chk_pgc_session_type` constraint:** `session_type IN ('minds_eye', 'general_chat', 'llm_call_diagnostic')`
 **`chk_pgc_session_response_source` constraint:** `response_source IS NULL OR response_source IN ('live', 'replayed', 'recorded')`
@@ -644,6 +650,8 @@ CREATE TABLE "PGC_SessionEntry" (
 | created_at | timestamp | |
 
 **`chk_pgc_sessionentry_role` constraint:** `role IN ('system', 'user', 'assistant', 'tool')`
+
+**`trg_pgc_sessionentry_last_active` trigger:** `AFTER INSERT`, `touch_session_last_active()` — sets the session's `last_active_at` to the entry's `created_at`.
 
 **Messages array reconstruction:**
 ```sql
@@ -707,9 +715,10 @@ the browser through `GET /inbox?after=<id>` (`arch-web-app.md` §2.1, §7.2).
 | channel | text | Slack channel, or the web user's Cognito `sub` |
 | thread_id | text | Slack thread ts. Null for a web run's message: the run is its own thread, named by `workflow_run_id` |
 | workflow_run_id | integer | Nullable, **no FK** — runs are purged independently of the inbox |
-| message_type | text | `HUMAN_GATE`, `HUMAN_NOTIFICATION`, `WORKFLOW_ERROR` |
+| message_type | text | `HUMAN_GATE`, `HUMAN_NOTIFICATION`, `WORKFLOW_ERROR`, `GATE_ANSWERED` (Sprint 18 — the answer a gate was given) |
 | payload | jsonb | The message exactly as enqueued — markdown text, or `gate_type` + `dialog` |
 | created_at | timestamptz | |
+| session_id | integer | Nullable, **no FK** — the minds-eye session the message belongs to, from `payload.sessionId`; a session's conversation is its rows with the person's own `PGC_SessionEntry` entries, by time (Sprint 18) |
 
 **Written by** `enqueueCallback` (`sqs-callback.mjs`), through SERV, before it enqueues to Slack —
 the single delivery point for every provider. A run with no callback (a scheduled run) writes
@@ -730,7 +739,7 @@ seeds; seeded with a generic, empty Home only, never a domain-specific page.
 | version | integer | |
 | title | jsonb | A string or a language map |
 | position | integer | Position in the web app's *Pages* menu; Home is `0` |
-| panels | jsonb | Ordered `[{ id, kind, width, title?, config }]` — `kind` is `workflow`, `records`, `summary` or `novia`; a records panel's `config` names its `source` and optionally the `view` it opens on (the viewer switches views without changing it), a summary panel's its `source` and `widget`. Each `config` is validated on write against its kind's schema — the fitting view types' options, or the widget type's |
+| panels | jsonb | Ordered `[{ id, kind, width, title?, config }]` — `kind` is `workflow`, `records`, `summary` or `minds_eye`; a records panel's `config` names its `source` and optionally the `view` it opens on (the viewer switches views without changing it), a summary panel's its `source` and `widget`. Each `config` is validated on write against its kind's schema — the fitting view types' options, or the widget type's |
 | created_by | text | `seed`, `user` (the page editor or `upsert-page.mjs`), `novia` |
 | created_at | timestamptz | |
 
@@ -760,7 +769,7 @@ are proposed and settled at the Phase 1 build.
 
 | Table | Change | Phase | Design |
 |---|---|---|---|
-| `PGC_Session` | `topic` text, nullable — the subject a Novia panel lists sessions by; set only from the Novia panel that starts the session | 1 | `arch-web-app.md` §2.5 |
+| `PGC_Session` | `topic` text, nullable — the subject a `minds_eye` panel lists sessions by — a domain's name, or free text; set only from the panel that starts the session. `label` text, nullable — the session's name, edited from the web. `callback` jsonb replaces `slack_thread_ts` | 1 (Sprint 18) | `arch-web-app.md` §2.5 |
 | `PGC_WorkflowRun` | `label` text, nullable — the run's name in lists, resolved from its workflow's `display.run_label` once every token resolves, then not again | 0 | `arch-web-app.md` §2.4 |
 | `PGC_WorkflowRun` | No column. A `human_gate` frame in `stack` gains `gate_id` (UUID), set when the frame is pushed; `resumeGate` refuses an answer whose `gate_id` differs from the top frame's. An answer carrying none (a Slack button posted before the change) is accepted as today | 0 | `arch-web-app.md` §2.2 |
 | `PGC_Schema`, `PGC_EntitySchema` | `display` jsonb, nullable — how a table or entity is shown: `view`, `label`, `columns` (order, label, hidden, width), `format`, `total`, `soft_delete`, `order_by`, `default_filter`. Every key optional; absent means the default | 1 | `arch-web-app.md` §6.3 |
@@ -1016,6 +1025,7 @@ DDL executor and PGC metadata registry.
 | `/api/v1/serv/schema/modifyConstraint` | POST | Add a named CHECK, or replace its expression if one of that name exists. **Upserts** `PGC_Schema.constraints` — appends when new. A CHECK the DB enforces but the registry omits is invisible to `domain_schema`, so `design_workflow_process`/`design_workflow_prompts` never see the enum and generated workflows keep emitting values the DB rejects. |
 | `/api/v1/serv/schema/addForeignKey` | POST | ALTER TABLE ... ADD CONSTRAINT ... FOREIGN KEY + `PGC_Schema.foreign_keys` sync. **`createTable` was previously the only place a foreign key could be created**, so a relationship introduced after a domain was built had no route — `modifyConstraint` emits CHECK only, and `updateTable` writes the registry without touching DDL, which would leave the registry asserting a constraint the database does not enforce. Idempotent. Both tables must be registered and share the same `target` (PGC and PGD are separate databases, so a cross-target FK cannot exist physically); the referencing column must already exist. `onDelete` limited to CASCADE / SET NULL / RESTRICT / NO ACTION. |
 | `/api/v1/serv/schema/addUniqueConstraint` | POST | ALTER TABLE ... ADD CONSTRAINT ... UNIQUE + `PGC_Schema.constraints` sync (`type: "unique"`). Same gap as above one type over: `modifyConstraint` covers CHECK only, so a uniqueness rule discovered after a table was built — a lookup table that must not accumulate duplicate names — had no route. Idempotent; every column must already be registered. |
+| `/api/v1/serv/schema/addTrigger` | POST | CREATE OR REPLACE TRIGGER on an existing table + `PGC_Schema.triggers` sync, upserted by name. `createTable` and bootstrap were the only places a trigger was created. The function is named from SERV's catalogue (`trigger-functions.mjs`, each with the databases it is installed in) and installed first — never SQL from the caller. Idempotent |
 | `/api/v1/serv/schema/dropConstraint` | POST | Drop a named constraint from a PGD table (DDL + PGC_Schema sync). Accepts any constraint type. Wired into Novia `propose_schema_fix` tool. |
 
 > **`target` is never supplied by the caller** on `dropColumn` / `modifyColumn` / `modifyConstraint` / `dropConstraint` — it is read from `PGC_Schema`. A correctness requirement only a technical caller would know is a bug, not a contract.
@@ -1030,7 +1040,7 @@ DML executor gated by `PGC_TableMap`. All four operations live.
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/v1/serv/table/getRows` | POST | Parameterised SELECT — `filters`, `orderBy`, `limit`, plus an optional `columns` projection and an optional `vectorSearch` descriptor. Both are honoured together: `columns` projects on the vector path as well as the standard one, with `similarity` appended. Every response carries `limit` and `limit_applied` (`caller` when `limit` or `vectorSearch.limit` was stated, `default`, or `ceiling`); a read that fills its limit is counted, returning `total_matching`, and `truncated: true` only when the count exceeds the rows returned (`query-utils.mjs` `resolveReadLimit`) |
+| `/api/v1/serv/table/getRows` | POST | Parameterised SELECT — `filters`, `orderBy`, `limit`, `offset` (rows skipped; `truncated` then means rows remain past offset plus those returned), plus an optional `columns` projection and an optional `vectorSearch` descriptor. Both are honoured together: `columns` projects on the vector path as well as the standard one, with `similarity` appended. Every response carries `limit` and `limit_applied` (`caller` when `limit` or `vectorSearch.limit` was stated, `default`, or `ceiling`); a read that fills its limit is counted, returning `total_matching`, and `truncated: true` only when the count exceeds the rows returned (`query-utils.mjs` `resolveReadLimit`) |
 | `/api/v1/serv/table/insertRow` | POST | Single INSERT RETURNING * — gated by `allow_insert` |
 | `/api/v1/serv/table/updateRows` | POST | Parameterised UPDATE RETURNING * — gated by `allow_update` |
 | `/api/v1/serv/table/deleteRows` | POST | Parameterised DELETE — gated by `allow_delete` |
@@ -1276,6 +1286,13 @@ Adds a FK to an **existing** table and records it in `PGC_Schema.foreign_keys` i
 curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/addUniqueConstraint" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGD_InventoryCategory", "constraintName": "uq_inventorycategory_name", "columns": ["name"] }'
 ```
 Adds a UNIQUE constraint over one or more columns and registers it as `type: "unique"`. Deduplicate the existing rows first — the DDL fails on a table that already violates it.
+
+#### SERV-Schema — addTrigger
+
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/addTrigger" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_SessionEntry", "trigger": { "name": "trg_pgc_sessionentry_last_active", "timing": "AFTER INSERT", "function": "touch_session_last_active()" } }'
+```
+Adds a trigger to an **existing** table and records it in `PGC_Schema.triggers`, upserted by name. Build the body from the table's template. `function` names one of the functions SERV holds (`src/serv/trigger-functions.mjs`), installed before the trigger; any other is refused. Idempotent.
 
 ---
 

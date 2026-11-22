@@ -55,7 +55,7 @@ export async function handle(req) {
         type:      'MINDS_EYE',
         traceId,
         prompt,
-        slackUser,
+        user:     slackUser,
         callback: {
           provider: 'slack',
           channel:  slackChannel,

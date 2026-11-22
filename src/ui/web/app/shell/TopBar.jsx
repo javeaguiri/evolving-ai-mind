@@ -4,7 +4,8 @@
 // src/ui/web/app/shell/TopBar.jsx
 //
 // The top bar (docs/arch-web-app.md §4.1): 🏠, the Pages and Domains menus. On a phone the menus
-// give way to the page's title, and move to tabs at the foot of the screen (PhoneTabs).
+// give way to the page's title, and move to tabs at the foot of the screen (PhoneTabs), with
+// her region's tab beside them.
 
 import { useState }       from 'react';
 import { useTranslation } from 'react-i18next';
@@ -47,8 +48,8 @@ export function TopBar({ route, title, pages, domains, children }) {
   );
 }
 
-/** The phone's Pages and Domains tabs, each opening its list from the side. */
-export function PhoneTabs({ route, pages, domains }) {
+/** The phone's Pages and Domains tabs, each opening its list from the side, and any tab the shell adds. */
+export function PhoneTabs({ route, pages, domains, children }) {
   const { t }           = useTranslation();
   const menus           = useMenus(route, pages, domains);
   const [open, setOpen] = useState(null);
@@ -59,6 +60,7 @@ export function PhoneTabs({ route, pages, domains }) {
         {menus.map(m => (
           <button key={m.key} type="button" aria-current={m.current ? 'true' : undefined} onClick={() => setOpen(m.key)}>{m.label}</button>
         ))}
+        {children}
       </nav>
       {menu && (
         <Drawer title={menu.label} onClose={() => setOpen(null)}>

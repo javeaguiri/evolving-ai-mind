@@ -50,7 +50,7 @@ describe('executeServQuery — vectorSearch reaches SERV', () => {
   it('getRows still takes vectorSearch 5th — a reorder would silently pass columns instead', () => {
     assert.match(
       clientSrc,
-      /export async function getRows\(tableName, filters = \[\], orderBy, limit, vectorSearch, columns\)/,
+      /export async function getRows\(tableName, filters = \[\], orderBy, limit, vectorSearch, columns, offset\)/,
       'serv-client getRows signature changed; the positional call in step-executor must change with it'
     );
   });

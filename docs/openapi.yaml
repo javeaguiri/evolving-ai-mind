@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: evolving-mind-ai
-  version: 3.10.0
+  version: 3.11.0
   description: >
     Self-evolving cognitive automation system.
     Slack → Lambda → PostgreSQL → LLM pipeline.
@@ -105,9 +105,53 @@ components:
         provider:      { type: string, enum: [slack, web] }
         threadId:      { type: string, nullable: true }
         workflowRunId: { type: integer, nullable: true }
-        messageType:   { type: string, enum: [HUMAN_GATE, HUMAN_NOTIFICATION, WORKFLOW_ERROR] }
+        messageType:   { type: string, enum: [HUMAN_GATE, HUMAN_NOTIFICATION, WORKFLOW_ERROR, GATE_ANSWERED], description: "GATE_ANSWERED's payload: { gateId, label, changes?, answeredIn: slack | web | minds_eye } — the answer a gate was given, wherever it was given" }
         payload:       { type: object, description: "The message exactly as enqueued, without its callback — text for a notification, gate_type + dialog for a gate." }
         createdAt:     { type: string, format: date-time }
+    MindsEyeSession:
+      type: object
+      description: >
+        One minds-eye session as Novia's region and a minds_eye panel list it
+        (docs/arch-web-app.md §4.5). Named by label, else by firstMessage — the app shortens it.
+      required: [sessionId, label, firstMessage, topic, provider, createdAt, lastActiveAt, state]
+      properties:
+        sessionId:    { type: integer }
+        label:        { type: string, nullable: true, description: "PGC_Session.label — the name the person gave it, or null." }
+        firstMessage: { type: string, nullable: true, description: "The session's first entry, the person's opening message." }
+        topic:        { type: string, nullable: true, description: "PGC_Session.topic — set when a minds_eye panel started it (§2.5)." }
+        provider:     { type: string, enum: [slack, web], description: "The surface that started it, from its callback; her replies go there (decision O)." }
+        createdAt:    { type: string, format: date-time }
+        lastActiveAt: { type: string, format: date-time, description: "When the latest message in it was written — the person's or hers." }
+        state:
+          type: string
+          enum: [waiting, working]
+          description: >
+            waiting — her last message is a reply that invites one, or a gate that is still
+            current (its atSeq is the session's latest entry). working — a round is under way.
+            A session whose last activity is older than the longest a round can run (ProcFunction's
+            timeout) is waiting, so a round that died never leaves it stuck.
+        gate:
+          type: object
+          nullable: true
+          description: "The gate the session is waiting at, when state is waiting at one."
+          required: [kind, atSeq]
+          properties:
+            kind:  { type: string, enum: [action, continue], description: "action — minds_eye_gate; continue — minds_eye_continue_gate." }
+            atSeq: { type: integer, description: "The entry it was posted at — what an answer names." }
+    MindsEyeMessage:
+      type: object
+      description: >
+        One message of a session's conversation (decision Q): the person's own entries from
+        PGC_SessionEntry and her messages from PGC_UiMessage, by time — never her tool calls.
+      required: [kind, createdAt]
+      properties:
+        kind:        { type: string, enum: [person, inbox] }
+        createdAt:   { type: string, format: date-time }
+        seq:         { type: integer, description: "person — the entry's sequence_number." }
+        text:        { type: string,  description: "person — what was sent: typed text, answers as paired with their questions, a follow-up." }
+        id:          { type: integer, description: "inbox — the PGC_UiMessage id." }
+        messageType: { type: string, enum: [HUMAN_GATE, HUMAN_NOTIFICATION, WORKFLOW_ERROR, GATE_ANSWERED], description: inbox only. }
+        payload:     { type: object,  description: "inbox — as GET /inbox returns it: a progress line with its turn, a reply with questions and invitesReply, a gate with gate_type and atSeq." }
     Page:
       type: object
       required: [pageKey, version, title, position, panels]
@@ -123,10 +167,10 @@ components:
             required: [id, kind, width, config]
             properties:
               id:     { type: string }
-              kind:   { type: string, enum: [workflow, records, summary, novia] }
+              kind:   { type: string, enum: [workflow, records, summary, minds_eye] }
               width:  { type: string, enum: ['1/3', '1/2', '2/3', full] }
               title:  { description: A string or a language map. }
-              config: { type: object, description: "workflow: workflow | domain, limit?, show_output?. records: source (a table or view) | entity, view? (grid, list, document), columns?, filter?, order_by?, limit?, title_column?, detail_columns?, picker_column?. summary: widget (chart, metric, report) with source and its options, or workflow for a report. novia: topic." }
+              config: { type: object, description: "workflow: workflow | domain, limit?, show_output?. records: source (a table or view) | entity, view? (grid, list, document), columns?, filter?, order_by?, limit?, title_column?, detail_columns?, picker_column?. summary: widget (chart, metric, report) with source and its options, or workflow for a report. minds_eye: domain | topic — the sessions' topic, a domain's name or free text." }
     RunSummary:
       type: object
       required: [runId, workflowName, status, startedAt]
@@ -305,6 +349,9 @@ components:
           enum: [BEFORE UPDATE, BEFORE INSERT, AFTER UPDATE, AFTER INSERT]
         function:
           type: string
+          description: >
+            One of the trigger functions SERV holds in code (src/serv/trigger-functions.mjs),
+            written with its parentheses — never SQL from the caller.
           example: set_updated_at()
 
     SchemaRow:
@@ -1771,6 +1818,7 @@ paths:
         - { name: filter,   in: query, required: false, schema: { type: string } }
         - { name: order_by, in: query, required: false, schema: { type: string } }
         - { name: limit,    in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: offset,   in: query, required: false, schema: { type: integer, minimum: 0, default: 0 } }
       responses:
         '200': { description: "{ columns: [{ name, type, label, labelFallback }], rows, more, totalMatching? } — as GET /proc/sources/{source}/rows" }
         '400': { description: invalid_query, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
@@ -1977,6 +2025,178 @@ paths:
         '404': { description: run_not_found, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '409': { description: "gate_not_waiting, or gate_moved", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
         '422': { description: "invalid_fields — WebError.error.fields names each", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+
+  /api/v1/ui/web/minds-eye/sessions:
+    get:
+      summary: Novia's sessions the user may see, most recently active first — her region and a minds_eye panel
+      description: GET /proc/minds-eye/sessions, its query passed through.
+      operationId: webListMindsEyeSessions
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      parameters:
+        - { name: topic,  in: query, required: false, schema: { type: string } }
+        - { name: limit,  in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { name: before, in: query, required: false, schema: { type: string } }
+      responses:
+        '200':
+          description: "{ sessions, cursor, more }"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessions, cursor, more]
+                properties:
+                  sessions: { type: array, items: { $ref: '#/components/schemas/MindsEyeSession' } }
+                  cursor:   { type: string, nullable: true }
+                  more:     { type: boolean }
+        '400': { description: invalid_query, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
+    post:
+      summary: Start a session with Novia — her region's New, or a minds_eye panel's New on its topic
+      description: >
+        POST /proc/minds-eye/sessions. The session's callback is { provider: 'web', channel: <sub> },
+        so her replies reach this user's inbox and nowhere else.
+      operationId: webStartMindsEyeSession
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text:  { type: string }
+                topic: { type: string }
+      responses:
+        '202': { description: "{ sessionId }" }
+        '400': { description: missing_fields — text missing or blank, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
+        '403': { description: household_required, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+
+  /api/v1/ui/web/minds-eye/sessions/{sessionId}:
+    patch:
+      summary: Rename a session, or clear its name
+      description: PATCH /proc/minds-eye/sessions/{sessionId}, the body passed through.
+      operationId: webRenameMindsEyeSession
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label: { type: string, nullable: true }
+      responses:
+        '200':
+          description: The session as renamed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MindsEyeSession' }
+        '400': { description: missing_fields — label missing, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
+        '403': { description: session_forbidden, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '404': { description: session_not_found, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+
+  /api/v1/ui/web/minds-eye/sessions/{sessionId}/messages:
+    get:
+      summary: A session's conversation after a cursor — what her region polls while it is open
+      description: >
+        GET /proc/minds-eye/sessions/{sessionId}/messages, its query passed through. A
+        WORKFLOW_ERROR's payload carries `summary` in place of `message`, as GET /inbox's does.
+      operationId: webReadMindsEyeMessages
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      parameters:
+        - { name: sessionId, in: path,  required: true,  schema: { type: integer } }
+        - { name: after,     in: query, required: false, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: afterSeq,  in: query, required: false, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: limit,     in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: "{ session, messages, cursor, more, repliesKeptFrom }"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session, messages, cursor, more, repliesKeptFrom]
+                properties:
+                  session:         { $ref: '#/components/schemas/MindsEyeSession' }
+                  messages:        { type: array, items: { $ref: '#/components/schemas/MindsEyeMessage' } }
+                  cursor:          { type: object, required: [after, afterSeq], properties: { after: { type: integer }, afterSeq: { type: integer } } }
+                  more:            { type: boolean }
+                  repliesKeptFrom: { type: string, format: date-time, nullable: true }
+        '400': { description: invalid_query, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
+        '403': { description: session_forbidden, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '404': { description: session_not_found, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+    post:
+      summary: Send Novia a message — typed text, or answers to her questions
+      description: POST /proc/minds-eye/sessions/{sessionId}/messages, the body passed through.
+      operationId: webSendMindsEyeMessage
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Either text or answers.
+              properties:
+                text:    { type: string }
+                answers: { type: array, items: { type: object, required: [id], properties: { id: { type: string }, answer: { type: string, nullable: true }, comment: { type: string, nullable: true } } } }
+                note:    { type: string, nullable: true }
+      responses:
+        '202': { description: "{ sessionId }" }
+        '400': { description: "missing_fields — neither text nor an answer", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
+        '403': { description: session_forbidden, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '404': { description: session_not_found, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '409': { description: "session_busy, or gate_waiting", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+
+  /api/v1/ui/web/minds-eye/sessions/{sessionId}/responses:
+    post:
+      summary: Answer the gate a session is waiting at — an action gate's or a continue gate's buttons
+      description: >
+        POST /proc/minds-eye/sessions/{sessionId}/responses, the body passed through. A 409
+        gate_moved is shown as "This was answered elsewhere", as for a run's gate.
+      operationId: webAnswerMindsEyeGate
+      tags: [UI-Web]
+      security: [{ CognitoBearer: [] }]
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [atSeq, action]
+              properties:
+                atSeq:  { type: integer }
+                action: { type: string, enum: [approve, test, cancel, continue, end] }
+      responses:
+        '202': { description: "{ sessionId }" }
+        '400': { description: "missing_fields, or invalid_action — the action is not one of the waiting gate's", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '401': { description: The Cognito authorizer refused the token. }
+        '502': { $ref: '#/components/responses/WebUpstreamUnavailable' }
+        '403': { description: session_forbidden, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '404': { description: session_not_found, content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
+        '409': { description: "gate_not_waiting, or gate_moved", content: { application/json: { schema: { $ref: '#/components/schemas/WebError' } } } }
 
   # ── PROC ───────────────────────────────────────────────────────────────────
 
@@ -2399,7 +2619,7 @@ paths:
         table or view, or an entity name (its root table is read); a PGC_ system table is never
         a source. Read-only in Phase 0. Columns default to every non-vector column; a named
         column, or one a filter names, must be registered. The page is bounded and says so:
-        `more` is true when SERV withheld rows past `limit`, with `totalMatching`. Each column
+        `more` is true when SERV withheld rows past `limit`, with `totalMatching`; `offset` reads the next page. Each column
         carries the `label` a person reads (docs/arch-web-app.md §13): the registry's, once it
         holds column labels (§6.3, Phase 1); until then the humanised name, marked
         `labelFallback: true`. The household role is required — domain data belongs to the
@@ -2414,13 +2634,221 @@ paths:
         - { name: filter,   in: query, required: false, schema: { type: string }, description: "JSON array of { column, op, value } — SERV's getRows filters." }
         - { name: order_by, in: query, required: false, schema: { type: string }, description: "SQL ORDER BY terms, e.g. \"date DESC\"." }
         - { name: limit,    in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: offset,   in: query, required: false, schema: { type: integer, minimum: 0, default: 0 }, description: "Rows skipped — the next page is offset plus the rows read. A table's `id` ends the order, so pages neither repeat nor skip a row." }
       responses:
         '200':
-          description: "{ columns: [{ name, type, label, labelFallback }], rows, more, totalMatching? }"
+          description: "{ columns: [{ name, type, label, labelFallback }], rows, more, totalMatching? } — `more` is true while rows remain past this page"
         '400': { description: "invalid_query — a malformed filter, an unregistered column, or limit out of range." }
         '401': { description: principal_required }
         '403': { description: household_required }
         '404': { description: source_not_found }
+
+  /api/v1/proc/minds-eye/sessions:
+    get:
+      summary: The minds-eye sessions the principal may see, most recently active first
+      description: >
+        Lists PGC_Session rows of session_type minds_eye only (docs/arch-web-app.md §4.5) — a
+        general_chat or llm_call_diagnostic session is never listed. Each is checked against the
+        principal by its callback, as a run is (canSeeSession): a web-started session is its
+        starter's, a Slack-started one the household's. With `topic`, only that topic's sessions —
+        a minds_eye panel's list. Ordered by lastActiveAt, newest first; `cursor` is the
+        lastActiveAt of the last session examined, and `more` is true when sessions past it
+        remain. A page can hold fewer than `limit` when some were not the principal's.
+      operationId: listMindsEyeSessions
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+        - { name: topic,  in: query, required: false, schema: { type: string }, description: Only sessions filed under this topic. }
+        - { name: limit,  in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { name: before, in: query, required: false, schema: { type: string, format: date-time }, description: Only sessions last active before this — the previous response's cursor. }
+      responses:
+        '200':
+          description: "{ sessions, cursor, more }"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessions, cursor, more]
+                properties:
+                  sessions: { type: array, items: { $ref: '#/components/schemas/MindsEyeSession' } }
+                  cursor:   { type: string, format: date-time, nullable: true }
+                  more:     { type: boolean }
+        '400': { description: "invalid_query — limit or before out of range." }
+        '401': { description: principal_required }
+    post:
+      summary: Start a minds-eye session for the principal
+      description: >
+        Creates the PGC_Session row here, synchronously — session_type minds_eye, callback
+        { provider: 'web', channel: <principal> }, and `topic` when a minds_eye panel sent one
+        (§2.5) — then enqueues MINDS_EYE with its sessionId, `text` as the prompt and `user` the
+        principal. The session is its own thread, so the callback carries no threadId; every
+        message she sends in it is written to the inbox with its session_id and nowhere else.
+      operationId: startMindsEyeSession
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text:  { type: string, description: The opening message. }
+                topic: { type: string, description: The topic of the minds_eye panel it was started from. }
+      responses:
+        '202': { description: "Accepted; MINDS_EYE enqueued. Body: { sessionId }" }
+        '400': { description: "missing_fields — text missing or blank." }
+        '401': { description: principal_required }
+        '403': { description: "household_required — only a household principal talks to the household's Novia." }
+
+  /api/v1/proc/minds-eye/sessions/{sessionId}:
+    patch:
+      summary: Set or clear a session's name
+      description: >
+        Writes PGC_Session.label (decision S), synchronously. A blank or null label clears it,
+        and the session is named by its first message again. A session that is not minds_eye
+        is session_not_found; one the principal may not see is session_forbidden.
+      operationId: renameMindsEyeSession
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+        - { name: sessionId, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label: { type: string, nullable: true }
+      responses:
+        '200':
+          description: The session as renamed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MindsEyeSession' }
+        '400': { description: "missing_fields — label missing (send null to clear it)." }
+        '401': { description: principal_required }
+        '403': { description: session_forbidden }
+        '404': { description: session_not_found }
+
+  /api/v1/proc/minds-eye/sessions/{sessionId}/messages:
+    get:
+      summary: A session's conversation, after a cursor
+      description: >
+        The conversation as Slack showed it (decision Q): the person's own PGC_SessionEntry rows
+        (role user) and the session's PGC_UiMessage rows (session_id), merged by time — never her
+        tool calls or reasoning. Two cursors, one per source: `after` an inbox id, `afterSeq` an
+        entry's sequence_number; the response's `cursor` is the pair to send next. `session` is
+        the session as listed, so a poll also learns its state. `repliesKeptFrom` is when the
+        session's first inbox row was written, null when it has none: her replies before it were
+        sent before the inbox existed and were not kept. Bounded: `more` is true when messages
+        past those returned remain. A session that is not minds_eye is session_not_found.
+      operationId: readMindsEyeMessages
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+        - { name: sessionId, in: path,  required: true,  schema: { type: integer } }
+        - { name: after,     in: query, required: false, schema: { type: integer, minimum: 0, default: 0 }, description: Inbox rows with an id greater than this. }
+        - { name: afterSeq,  in: query, required: false, schema: { type: integer, minimum: 0, default: 0 }, description: The person's entries with a sequence_number greater than this. }
+        - { name: limit,     in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: "{ session, messages, cursor, more, repliesKeptFrom }"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session, messages, cursor, more, repliesKeptFrom]
+                properties:
+                  session:         { $ref: '#/components/schemas/MindsEyeSession' }
+                  messages:        { type: array, items: { $ref: '#/components/schemas/MindsEyeMessage' } }
+                  cursor:          { type: object, required: [after, afterSeq], properties: { after: { type: integer }, afterSeq: { type: integer } } }
+                  more:            { type: boolean }
+                  repliesKeptFrom: { type: string, format: date-time, nullable: true }
+        '400': { description: "invalid_query — after, afterSeq or limit is not a valid integer in range." }
+        '401': { description: principal_required }
+        '403': { description: session_forbidden }
+        '404': { description: session_not_found }
+    post:
+      summary: Send Novia a message in a session
+      description: >
+        Typed text, or answers to the questions of her last reply (each paired with its
+        question's text by minds-eye.mjs, as from Slack). Refused while a round is under way
+        (session_busy; state working), so two rounds never run on one session. While a continue
+        gate waits, typed text is its follow-up — MINDS_EYE_RESUME with resumeType followup, as
+        Slack's Follow-up button sends — and closes it; while an action gate waits, a message is
+        refused (gate_waiting): approve or cancel it first. Otherwise enqueues MINDS_EYE with the
+        sessionId. Either way the message carries the session's own callback, so a Slack-started
+        session continued here still replies in its Slack thread (decision O), and is read here
+        through the inbox.
+      operationId: sendMindsEyeMessage
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+        - { name: sessionId, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Either text or answers; answers only when her last reply asked questions.
+              properties:
+                text:    { type: string }
+                answers: { type: array, items: { type: object, required: [id], properties: { id: { type: string, description: "The question's id, as the reply sent it." }, answer: { type: string, nullable: true }, comment: { type: string, nullable: true } } } }
+                note:    { type: string, nullable: true, description: Free text sent with the answers. }
+      responses:
+        '202': { description: "Accepted; MINDS_EYE or MINDS_EYE_RESUME enqueued. Body: { sessionId }" }
+        '400': { description: "missing_fields — neither text nor an answer or note." }
+        '401': { description: principal_required }
+        '403': { description: session_forbidden }
+        '404': { description: session_not_found }
+        '409': { description: "session_busy — a round is under way; gate_waiting — an action gate waits for an answer." }
+
+  /api/v1/proc/minds-eye/sessions/{sessionId}/responses:
+    post:
+      summary: Answer the gate a session is waiting at
+      description: >
+        One route for both of her gates; which one waits is read from the session, not sent. The
+        answer names the gate by `atSeq`, the entry it was posted at, and is refused when that is
+        no longer the waiting gate (gate_moved) — checked here, synchronously, by the rule
+        staleGateRefusal applies when the message is consumed. An action gate (minds_eye_gate)
+        takes approve, test (offered only when the gate has a test label) or cancel; a continue
+        gate (minds_eye_continue_gate) takes continue or end. What the gate's own message carried
+        — resetActionCount, afterTruncation — is read from its inbox row, never from the body.
+        Enqueues MINDS_EYE_RESUME with the session's own callback.
+      operationId: answerMindsEyeGate
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/PrincipalUser'
+        - $ref: '#/components/parameters/CorrelationId'
+        - { name: sessionId, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [atSeq, action]
+              properties:
+                atSeq:  { type: integer, description: "The gate's atSeq, from its inbox payload or the session's gate." }
+                action: { type: string, enum: [approve, test, cancel, continue, end] }
+      responses:
+        '202': { description: "Accepted; MINDS_EYE_RESUME enqueued. Body: { sessionId }" }
+        '400': { description: "missing_fields — atSeq or action missing; invalid_action — not one the waiting gate offers." }
+        '401': { description: principal_required }
+        '403': { description: session_forbidden }
+        '404': { description: session_not_found }
+        '409': { description: "gate_not_waiting — the session is not at a gate; gate_moved — atSeq is not the gate it is waiting at." }
 
   /api/v1/proc/me:
     get:
@@ -4977,6 +5405,61 @@ paths:
         '404':
           description: Table not found in PGC_Schema
 
+  /api/v1/serv/schema/addTrigger:
+    post:
+      summary: Add a trigger to an existing table — DDL + PGC_Schema sync
+      description: >
+        Executes CREATE OR REPLACE TRIGGER on an existing table and records it in
+        PGC_Schema.triggers, upserted by name. createTable and bootstrap were the only places
+        a trigger could be created, so a trigger needed after a table was built had no route;
+        updateTable writes the registry without touching DDL. A trigger's function is never
+        SQL from the caller: `function` names one of the trigger functions SERV holds in code
+        (src/serv/trigger-functions.mjs), each with the databases it may be installed in, and
+        the function is installed (CREATE OR REPLACE) before the trigger. Idempotent. Which
+        database the table lives in is read from PGC_Schema.target, never supplied by the
+        caller.
+      tags: [SERV-Schema]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tableName, trigger]
+              properties:
+                tableName:
+                  type: string
+                  example: PGC_SessionEntry
+                trigger:
+                  $ref: '#/components/schemas/TriggerDefinition'
+            examples:
+              session_last_active:
+                summary: Keep a session's last activity current as entries are written
+                value:
+                  tableName: PGC_SessionEntry
+                  trigger: { name: trg_pgc_sessionentry_last_active, timing: AFTER INSERT, function: touch_session_last_active() }
+      responses:
+        '200':
+          description: Trigger applied and PGC_Schema updated
+          content:
+            application/json:
+              examples:
+                added:
+                  summary: Trigger was new — appended to the registry
+                  value:
+                    success: true
+                    tableName: PGC_SessionEntry
+                    trigger: { name: trg_pgc_sessionentry_last_active, timing: AFTER INSERT, function: touch_session_last_active() }
+                    action: added
+        '400':
+          description: >
+            Invalid trigger name or timing, a function SERV does not hold, or one not
+            installable in the table's database
+        '404':
+          description: Table not found in PGC_Schema
+
   /api/v1/serv/schema/dropConstraint:
     post:
       summary: Drop a named constraint — DDL + PGC_Schema sync
@@ -5116,6 +5599,15 @@ paths:
                   minimum: 1
                   maximum: 1000
                   default: 100
+                offset:
+                  type: integer
+                  minimum: 0
+                  default: 0
+                  description: >
+                    Rows skipped before the page — the next page of the same read is its
+                    offset plus the rows returned. A stable page needs an orderBy that ends
+                    on a unique column. With an offset, `truncated` means rows remain past
+                    this page: `total_matching` exceeds offset plus the rows returned.
                 vectorSearch:
                   $ref: '#/components/schemas/VectorSearch'
             examples:

@@ -71,5 +71,6 @@ export function createApiClient({ session, fetch }) {
     request,
     get:  (path, query)  => request('GET', path, { query }),
     post: (path, body)   => request('POST', path, { body }),
+    patch: (path, body)  => request('PATCH', path, { body }),
   };
 }

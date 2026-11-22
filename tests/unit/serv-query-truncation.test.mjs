@@ -122,7 +122,7 @@ describe('the two ends of the contract stay wired together', () => {
     assert.match(tableSrc, /if \(result\.rows\.length === effectiveLimit\) \{/);
     assert.match(tableSrc, /SELECT COUNT\(\*\)::int AS total FROM "\$\{tableName\}" \$\{matchWhere\}`, matchValues/,
       'the count must ask the question the read asked — including the similarity threshold');
-    assert.match(tableSrc, /const truncated = totalMatching > result\.rows\.length;/,
+    assert.match(tableSrc, /const truncated = totalMatching > offset \+ result\.rows\.length;/,
       'a read that matched exactly its limit is complete, not cut');
     assert.doesNotMatch(tableSrc, /truncated && !vectorSearch/,
       'an uncounted vector read left the failure message asserting rows nobody had counted');

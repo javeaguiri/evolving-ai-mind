@@ -1,7 +1,7 @@
 {
   "table_name": "PGC_SessionEntry",
   "target": "pgc",
-  "description": "One row per turn in a session. Reconstructs the LLM messages array by ordering on sequence_number. Append-only — never updated after insert. reasoning is diagnostic metadata, never included in messages array reconstruction.",
+  "description": "One row per turn in a session. Reconstructs the LLM messages array by ordering on sequence_number. Append-only — never updated after insert. reasoning is diagnostic metadata, never included in messages array reconstruction. Each insert sets its session's last_active_at (touch_session_last_active).",
   "columns": [
     { "name": "id",              "type": "serial",      "primaryKey": true },
     { "name": "session_id",      "type": "integer",     "nullable": false },
@@ -24,5 +24,7 @@
     { "type": "unique", "name": "uq_pgc_sessionentry_session_seq", "columns": ["session_id", "sequence_number"] },
     { "type": "check",  "name": "chk_pgc_sessionentry_role", "expression": "role IN ('system', 'user', 'assistant', 'tool')" }
   ],
-  "triggers": []
+  "triggers": [
+    { "name": "trg_pgc_sessionentry_last_active", "timing": "AFTER INSERT", "function": "touch_session_last_active()" }
+  ]
 }

@@ -33,7 +33,9 @@
                                 "type",
                                 { "name": "total_budgeted", "label": "Budgeted", "format": "currency", "currency": "EUR" },
                                 { "name": "total_actual",   "label": "Spent",    "format": "currency", "currency": "EUR" },
-                                { "name": "variance",                            "format": "currency", "currency": "EUR" }] } }
+                                { "name": "variance",                            "format": "currency", "currency": "EUR" }] } },
+      { "id": "ask-money",      "kind": "minds_eye", "width": "1/2",
+        "config": { "domain": "budgets_expenses" } }
     ]
   },
   {

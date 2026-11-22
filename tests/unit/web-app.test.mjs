@@ -20,11 +20,12 @@ import { createSession, safeReturnPath, SignInRequired, AuthUnavailable, REFRESH
 import { createApiClient, ApiError } from '../../src/ui/web/app/api/client.mjs';
 import { matchPath, matchLocation }  from '../../src/ui/web/app/router.mjs';
 import { formatValue, isNumericColumn }   from '../../src/ui/web/app/records/format.mjs';
-import { rowsRequest, mergeColumns, listFields, initialView, viewKey } from '../../src/ui/web/app/records/query.mjs';
+import { rowsRequest, appendPage, mergeColumns, listFields, initialView, viewKey } from '../../src/ui/web/app/records/query.mjs';
 import { inputsOf, initialValues, isChanged, fieldProblems, formValues, answerFor, gridOf, gridSections, moveCell, listColumns, revealContent } from '../../src/ui/web/app/gates/gate.mjs';
 import { liveScript, isNewBuild } from '../../src/ui/web/app/shell/version.mjs';
 import { runName, panelWorkflows, foldPoint, addMessages, threadDelay, isActive, isWorking, THREAD_POLL_MS, THREAD_POLL_MAX_MS } from '../../src/ui/web/app/runs/runs.mjs';
 import { pageItems, domainItems, sectionOf, currentItem, gateHeadline, relativeAge, pollDelay, POLL_MS, POLL_MAX_MS } from '../../src/ui/web/app/shell/nav.mjs';
+import { sessionName, addConversation, groupTurns, repliesMissing, conversationDelay, readCollapsed, writeCollapsed, withSession, answerable, answerField, answersFrom, RADIO_LIMIT, stillExpecting, personCount, panelTopic, sessionsQuery, startBody, labelBody, clampWidth, readWidth, writeWidth, WIDTH_KEY, DEFAULT_WIDTH, MIN_WIDTH, EXPECT_MS, COLLAPSED_KEY, WORKING_POLL_MS, WAITING_POLL_MS, POLL_MAX_MS as CONVO_MAX_MS, ROUND_CEILING_MS } from '../../src/ui/web/app/minds-eye/conversation.mjs';
 
 const APP_DIR = new URL('../../src/ui/web/app/', import.meta.url).pathname;
 const CONFIG  = { userPoolId: 'us-east-2_pool', clientId: 'client123', authDomain: 'https://auth.example', siteUrl: 'https://site.example', region: 'us-east-2' };
@@ -194,6 +195,10 @@ describe('createApiClient — the bearer, one retry on 401, WebError codes', () 
     await api.post('runs', { workflow: 'w' });
     assert.equal(calls[1].init.method, 'POST');
     assert.equal(calls[1].init.body, '{"workflow":"w"}');
+    await api.patch('minds-eye/sessions/7', { label: 'Garden' });
+    assert.equal(calls[2].init.method, 'PATCH');
+    assert.equal(calls[2].url, '/api/v1/ui/web/minds-eye/sessions/7');
+    assert.equal(calls[2].init.body, '{"label":"Garden"}');
   });
 
   it('a 401 refreshes once and retries with the new token', async () => {
@@ -223,16 +228,20 @@ describe('createApiClient — the bearer, one retry on 401, WebError codes', () 
 
 describe('matchPath — the §4.8 routes', () => {
   for (const [path, search, expected] of [
-    ['/', '', { page: 'home', params: {}, run: null }],
-    ['/p/money', '', { page: 'householdPage', params: { pageKey: 'money' }, run: null }],
-    ['/d', '', { page: 'domains', params: {}, run: null }],
-    ['/d/budgets_expenses', '?run=1500', { page: 'domain', params: { domain: 'budgets_expenses' }, run: 1500 }],
-    ['/runs/42', '', { page: 'run', params: { runId: '42' }, run: null }],
-    ['/settings/profile', '', { page: 'settings', params: { entry: 'profile' }, run: null }],
-    ['/runs/0', '', { page: 'notFound', params: {}, run: null }],
-    ['/d/x/y', '', { page: 'notFound', params: {}, run: null }],
-    ['/p/%E0%A4%A', '', { page: 'notFound', params: {}, run: null }],
-    ['/', '?run=abc', { page: 'home', params: {}, run: null }],
+    ['/', '', { page: 'home', params: {}, run: null, mindsEye: null }],
+    ['/p/money', '', { page: 'householdPage', params: { pageKey: 'money' }, run: null, mindsEye: null }],
+    ['/d', '', { page: 'domains', params: {}, run: null, mindsEye: null }],
+    ['/d/budgets_expenses', '?run=1500', { page: 'domain', params: { domain: 'budgets_expenses' }, run: 1500, mindsEye: null }],
+    ['/runs/42', '', { page: 'run', params: { runId: '42' }, run: null, mindsEye: null }],
+    ['/settings/profile', '', { page: 'settings', params: { entry: 'profile' }, run: null, mindsEye: null }],
+    ['/runs/0', '', { page: 'notFound', params: {}, run: null, mindsEye: null }],
+    ['/d/x/y', '', { page: 'notFound', params: {}, run: null, mindsEye: null }],
+    ['/p/%E0%A4%A', '', { page: 'notFound', params: {}, run: null, mindsEye: null }],
+    ['/', '?run=abc', { page: 'home', params: {}, run: null, mindsEye: null }],
+    ['/p/money', '?minds-eye=1367', { page: 'householdPage', params: { pageKey: 'money' }, run: null, mindsEye: 1367 }],
+    ['/runs/42', '?run=7&minds-eye=12', { page: 'run', params: { runId: '42' }, run: 7, mindsEye: 12 }],
+    ['/', '?minds-eye=0', { page: 'home', params: {}, run: null, mindsEye: null }],
+    ['/nowhere', '?minds-eye=5', { page: 'notFound', params: {}, run: null, mindsEye: 5 }],
   ]) {
     it(`${path}${search}`, () => assert.deepEqual(matchPath(path, search), expected));
   }
@@ -361,9 +370,17 @@ describe('records — the read, the columns, the views (§4.2)', () => {
     assert.deepEqual(rowsRequest({ source: 'PGD_Things', columns: ['date', { name: 'amount', format: 'currency', currency_column: 'currency' }],
       title_column: 'title', filter: [{ column: 'deleted_at', op: 'is_null' }], order_by: 'date DESC', limit: 50 }), {
       source: 'PGD_Things',
-      query:  { columns: 'date,amount,currency,title', filter: '[{"column":"deleted_at","op":"is_null"}]', order_by: 'date DESC', limit: 50 },
+      query:  { columns: 'date,amount,currency,title', filter: '[{"column":"deleted_at","op":"is_null"}]', order_by: 'date DESC', limit: 50, offset: undefined },
     });
-    assert.deepEqual(rowsRequest({ entity: 'Thing' }), { source: 'Thing', query: { columns: undefined, filter: undefined, order_by: undefined, limit: undefined } });
+    assert.deepEqual(rowsRequest({ entity: 'Thing' }), { source: 'Thing', query: { columns: undefined, filter: undefined, order_by: undefined, limit: undefined, offset: undefined } });
+    assert.equal(rowsRequest({ entity: 'Thing', limit: 50 }, 100).query.offset, 100, 'the next page starts after the rows read');
+  });
+
+  it('appendPage: the rows run on, more is the new page\'s, the total the first page\'s (item 9)', () => {
+    const first = { columns: [{ name: 'id' }], rows: [{ id: 1 }, { id: 2 }], more: true, totalMatching: 3 };
+    assert.deepEqual(appendPage(first, { columns: [{ name: 'id' }], rows: [{ id: 3 }], more: false }),
+      { columns: [{ name: 'id' }], rows: [{ id: 1 }, { id: 2 }, { id: 3 }], more: false, totalMatching: 3 });
+    assert.equal('totalMatching' in appendPage({ rows: [], more: true }, { rows: [], more: false }), false);
   });
 
   it('mergeColumns: the panel\'s order, labels (a language map read in the language) and formats; the rest read but not in the grid', () => {
@@ -554,6 +571,8 @@ describe('components and catalog', () => {
                    export { Markdown } from './Markdown.jsx';
                    export { WorkflowList } from './panels/WorkflowPanel.jsx';
                    export { ThreadView } from './runs/RunThread.jsx';
+                   export { SessionList, ConversationView, Composer, ConvoTitle } from './minds-eye/Region.jsx';
+                   export { MindsEyePanel } from './panels/MindsEyePanel.jsx';
                    export { Gate, AnsweredRecord } from './gates/Gate.jsx';
                    export { ReportBody } from './panels/ReportPanel.jsx';
                    export { initI18n } from './i18n.mjs';
@@ -814,6 +833,18 @@ describe('components and catalog', () => {
     assert.match(body('list', {}, BODY.rows[0]), /<button type="button" aria-current="true"><span class="rt">Shop A/);
   });
 
+  it('a read with more ends on Show more inside its scroll, which reads on (item 9); none without onMore or more', () => {
+    const paged = (view, extra = {}, paging) => ui.renderToString(ui.createElement(ui.RecordsBody, {
+      config: CONFIG, body: { ...BODY, ...extra }, view, where: { locale: 'en', timeZone: 'Europe/Madrid' }, onOpen() {}, onMore() {}, paging,
+    }));
+    assert.match(paged('grid'), /<\/table><div class="more"><button type="button" class="btn">Show more<\/button><\/div><\/div><p class="pfoot">/);
+    assert.match(paged('list'), /<li class="more"><button type="button" class="btn">Show more<\/button><\/li><\/ul>/);
+    assert.match(paged('grid', {}, { busy: true, failed: false }), /<div class="more"><span class="muted">Loading…<\/span><\/div>/);
+    assert.match(paged('grid', {}, { busy: false, failed: true }), /Couldn&#x27;t read more — try again/);
+    assert.doesNotMatch(paged('grid', { more: false }), /class="more"/);
+    assert.doesNotMatch(body('grid'), /class="more"/);
+  });
+
   it('a drawer beside the page has no scrim and does not hold the page; the others do', () => {
     const drawer = props => ui.renderToString(ui.createElement(ui.Drawer, { title: 'Shop A', onClose() {}, ...props }));
     assert.match(drawer({ beside: true }), /^<div class="drawer beside" role="dialog" aria-modal="false" aria-label="Shop A">/);
@@ -987,6 +1018,24 @@ describe('components and catalog', () => {
       assert.match(html, /<div class="msg gate waiting" aria-busy="false"><div class="md"><p><strong>Pick<\/strong> one<\/p>.*>OK<\/button>/);
     });
 
+    it('an answer from the inbox (GATE_ANSWERED, item 7) is drawn under its question after a reload, wherever it was given', () => {
+      const sent = (id, gid, text) => ({ id, messageType: 'HUMAN_GATE', payload: { dialog: { gate_id: gid, fields: [{ type: 'typography', value: text }] } } });
+      const kept = (id, gid, label, changes) => ({ id, messageType: 'GATE_ANSWERED', payload: { gateId: gid, label, ...(changes ? { changes } : {}), answeredIn: 'slack' } });
+      const html = ui.renderToString(ui.createElement(ui.ThreadView, {
+        run: { status: 'completed' }, messages: [sent(1, 'g-0', 'First'), kept(2, 'g-0', 'Save', 3), { id: 3, messageType: 'HUMAN_NOTIFICATION', payload: { message: 'Done' } }],
+        problem: null,
+      })).replace(/<!-- -->/g, '');
+      assert.match(html, /<button type="button" class="fold">Show 1 earlier message<\/button>/, 'the answer is not a message of its own');
+      const open = ui.renderToString(ui.createElement(ui.ThreadView, {
+        run: { status: 'running' }, messages: [sent(1, 'g-0', 'First'), kept(2, 'g-0', 'Save', 3)], problem: null,
+      })).replace(/<!-- -->/g, '');
+      assert.match(open, /<p>First<\/p><\/div><\/div><p class="answered">You chose Save · 3 changes<\/p><\/div>/);
+      const both = ui.renderToString(ui.createElement(ui.ThreadView, {
+        run: { status: 'running' }, messages: [sent(1, 'g-0', 'First'), kept(2, 'g-0', 'Save')], answered: { 'g-0': { label: 'Old', changes: 0 } }, problem: null,
+      })).replace(/<!-- -->/g, '');
+      assert.match(both, /You chose Save/, 'the inbox\'s record wins over the page\'s');
+    });
+
     it('a waiting gate with no copy in the inbox — a scheduled run\'s — is still answered', () => {
       const html = ui.renderToString(ui.createElement(ui.ThreadView, {
         run: { status: 'awaiting_human_gate' }, messages: [], gate: gateOf('confirm', [actions({ action: 'ok', label: 'OK' })]), problem: null, context: CONTEXT, onAnswered() {}, onMoved() {},
@@ -1002,6 +1051,167 @@ describe('components and catalog', () => {
     assert.match(html, /<button type="button">Sign in again<\/button>/);
   });
 
+  describe('her region', () => {
+    const strip = html => html.replace(/<!-- -->/g, '');
+    const NOW   = Date.parse('2026-11-19T12:00:00.000Z');
+    const S     = { sessionId: 7, label: null, firstMessage: 'Plan the   garden beds', topic: null, provider: 'web',
+      createdAt: '2026-11-19T11:00:00.000Z', lastActiveAt: '2026-11-19T11:58:00.000Z', state: 'waiting', gate: null };
+    const person = (seq, text, at) => ({ kind: 'person', seq, text, createdAt: at });
+    const her    = (id, payload, at, messageType = 'HUMAN_NOTIFICATION') => ({ kind: 'inbox', id, messageType, payload, createdAt: at });
+    const convo  = props => strip(ui.renderToString(ui.createElement(ui.ConversationView, { session: S, messages: [], repliesKeptFrom: '2026-11-19T11:00:05.000Z', problem: null, ...props })));
+
+    it('the list names each session by label, else first message, with its age or Working…', () => {
+      const html = strip(ui.renderToString(ui.createElement(ui.SessionList, {
+        sessions: [{ ...S, label: 'Garden' }, { ...S, sessionId: 8, state: 'working' }, { ...S, sessionId: 9, firstMessage: null }],
+        currentId: 8, problem: false, now: NOW, locale: 'en', onOpen() {},
+      })));
+      assert.match(html, /<span class="lbl">Garden<\/span><span class="when">2 minutes ago<\/span>/);
+      assert.match(html, /aria-current="true"[^>]*><span class="lbl">Plan the garden beds<\/span><span class="when">Working…<\/span>/);
+      assert.match(html, /<span class="lbl">New conversation<\/span>/);
+    });
+
+    it('a minds_eye panel is titled by its own title, else its domain\'s label or its topic, and opens on its list', () => {
+      const panel = (config, title = '') => strip(ui.renderToString(ui.createElement(ui.MindsEyePanel, {
+        panel: { id: 'n', kind: 'minds_eye', width: '1/2', config }, title,
+        context: { api, domains: DOMAINS, locale: 'en', onSignInRequired() {} },
+      })));
+      assert.match(panel({ domain: 'pantry' }), /<h2>Pantry<\/h2>/);
+      assert.match(panel({ topic: 'Holidays' }), /<h2>Holidays<\/h2>/);
+      assert.match(panel({ domain: 'pantry' }, 'Ask about food'), /<h2>Ask about food<\/h2>/);
+      assert.match(panel({ domain: 'pantry' }), /class="panel w-half"[\s\S]*\+ New[\s\S]*Loading…/);
+    });
+
+    it('the open conversation is named with ✎ beside it; renaming, a box holds its label, the name its placeholder', () => {
+      const title = props => strip(ui.renderToString(ui.createElement(ui.ConvoTitle, { onRename: async () => {}, ...props })));
+      assert.match(title({ name: 'Plan the garden beds', label: null }),
+        /<div class="convo-head"><h3 class="convo-title">Plan the garden beds<\/h3><button type="button" class="ib" aria-label="Rename" title="Rename">✎<\/button><\/div>/);
+      const box = title({ name: 'Garden', label: 'Garden', editing: true });
+      assert.match(box, /<form class="convo-head"><input class="convo-rename" placeholder="Garden" aria-label="Name this conversation"[^>]* value="Garden"\/>/);
+      assert.match(title({ name: 'Plan the garden beds', label: null, editing: true }), /placeholder="Plan the garden beds"[^>]* value=""\/>/);
+    });
+
+    it('an empty list says how to start, and a list not yet read says Loading…', () => {
+      assert.match(ui.renderToString(ui.createElement(ui.SessionList, { sessions: [], currentId: null, problem: false, now: NOW, locale: 'en', onOpen() {} })), /No conversations yet/);
+      assert.match(ui.renderToString(ui.createElement(ui.SessionList, { sessions: null, currentId: null, problem: false, now: NOW, locale: 'en', onOpen() {} })), /Loading…/);
+    });
+
+    it('the person\'s messages and hers, a turn\'s calls on one line', () => {
+      const html = convo({ messages: [
+        person(1, 'Plan the beds', '2026-11-19T11:00:00.000Z'),
+        her(10, { message: '_Turn 1 · `read_a`_ — first', format: 'markdown', turn: 1, call: '`read_a`', detail: 'first' }, '2026-11-19T11:00:02.000Z'),
+        her(11, { message: '_Turn 1 · `read_b`_', format: 'markdown', turn: 1, call: '`read_b`' }, '2026-11-19T11:00:03.000Z'),
+        her(12, { message: '_Turn 2 · `read_c`_ — then', format: 'markdown', turn: 2, call: '`read_c`', detail: 'then' }, '2026-11-19T11:00:04.000Z'),
+        her(13, { message: 'Here is **the plan**.', format: 'markdown', invitesReply: true }, '2026-11-19T11:00:05.000Z'),
+      ] });
+      assert.match(html, /<div class="msg mine"><p class="plain">Plan the beds<\/p><\/div>/);
+      assert.match(html, /<details class="turn"><summary>Turn 1 · 2 calls<\/summary><ul><li><div class="md"><p><code>read_a<\/code> — first<\/p><\/div><\/li><li><div class="md"><p><code>read_b<\/code><\/p>/);
+      assert.match(html, /<div class="turn"><div class="md"><p><em>Turn 2 · <code>read_c<\/code><\/em> — then<\/p>/);
+      assert.match(html, /<strong>the plan<\/strong>/);
+      assert.doesNotMatch(html, /Turn 1 ·.*Turn 1 ·/s);
+    });
+
+    it('her questions are drawn under her reply, with their options', () => {
+      const html = convo({ messages: [her(13, { message: 'Two things.', format: 'markdown', invitesReply: true,
+        questions: [{ id: 'q1', text: 'Raised beds?', options: ['Yes', 'No'] }, { id: 'q2', text: 'How many?' }] }, '2026-11-19T11:00:05.000Z')] });
+      assert.match(html, /<ol class="questions"><li><div class="md"><p>Raised beds\?<\/p><\/div><p class="muted">Yes · No<\/p><\/li><li><div class="md"><p>How many\?<\/p>/);
+    });
+
+    it('a continue gate says why she paused; the one waiting is marked', () => {
+      const gate = her(14, { gate_type: 'minds_eye_continue_gate', atSeq: 6, reason: 'round_budget' }, '2026-11-19T11:05:00.000Z', 'HUMAN_GATE');
+      const html = convo({ session: { ...S, gate: { kind: 'continue', atSeq: 6 } }, messages: [gate] });
+      assert.match(html, /<div class="msg gate waiting"><p class="plain">I’ve used up this round’s time/);
+      assert.match(html, /Waiting for your answer\./);
+      assert.match(convo({ messages: [{ ...gate, payload: { gate_type: 'minds_eye_continue_gate', atSeq: 6 } }] }), /I’ve reached my turn limit/);
+    });
+
+    it('Working… while she works; the lost-replies notice only on a session older than the inbox', () => {
+      assert.match(convo({ session: { ...S, state: 'working' } }), /<p class="working" role="status">Working…<\/p>/);
+      assert.doesNotMatch(convo({}), /were not kept/);
+      assert.match(convo({ repliesKeptFrom: '2026-11-19T11:30:00.000Z' }), /were not kept/);
+    });
+
+    it('a session that is not the person\'s, or gone, says it cannot be shown', () => {
+      assert.match(convo({ session: null, problem: 'gone' }), /This conversation can’t be shown\./);
+    });
+
+    it('the composer says why nothing can be sent while she works', () => {
+      const html = ui.renderToString(ui.createElement(ui.Composer, { blocked: 'Novia is still working — wait for her reply.', onSend: async () => {} }));
+      assert.match(html, /Novia is still working/);
+      assert.match(html, /<button type="submit" class="btn primary" disabled="">Send<\/button>/);
+    });
+
+    describe('answered in place (item 4)', () => {
+      const on    = { onGate: async () => {}, onAnswers: async () => {} };
+      const ask   = (id, questions, at = '2026-11-19T11:00:05.000Z') => her(id, { message: 'Two things.', format: 'markdown', invitesReply: true, questions }, at);
+      const QS    = [{ id: 'q1', text: 'Raised beds?', options: ['Yes', 'No'] }, { id: 'q2', text: 'How many?' },
+        { id: 'q3', text: 'Which?', options: Array.from({ length: RADIO_LIMIT + 1 }, (_, i) => `o${i}`) }];
+
+      it('an action gate: its confirm label, the test label when offered, and Cancel', () => {
+        const gate = her(20, { gate_type: 'minds_eye_gate', atSeq: 9, confirmLabel: 'Apply', testLabel: 'Apply and test',
+          dialog: { fields: [{ type: 'typography', value: '**Change** step 4' }] } }, '2026-11-19T11:05:00.000Z', 'HUMAN_GATE');
+        const html = convo({ session: { ...S, gate: { kind: 'action', atSeq: 9 } }, messages: [gate], ...on });
+        assert.match(html, /<div class="msg gate waiting"><div class="md"><p><strong>Change<\/strong> step 4<\/p><\/div><div class="btnrow"><button type="button" class="btn primary">Apply<\/button><button type="button" class="btn">Apply and test<\/button><button type="button" class="btn">Cancel<\/button>/);
+        const drop = convo({ session: { ...S, gate: { kind: 'action', atSeq: 9 } }, messages: [{ ...gate, payload: { ...gate.payload, confirmLabel: 'Drop', confirmStyle: 'danger', testLabel: undefined } }], ...on });
+        assert.match(drop, /<button type="button" class="btn danger">Drop<\/button><button type="button" class="btn">Cancel<\/button><\/div>/);
+      });
+
+      it('a continue gate: Continue and End, a follow-up written below', () => {
+        const gate = her(21, { gate_type: 'minds_eye_continue_gate', atSeq: 6, reason: 'turn_limit' }, '2026-11-19T11:05:00.000Z', 'HUMAN_GATE');
+        const html = convo({ session: { ...S, gate: { kind: 'continue', atSeq: 6 } }, messages: [gate], ...on });
+        assert.match(html, /<button type="button" class="btn primary">Continue<\/button><button type="button" class="btn">End<\/button><\/div><p class="hint">Or write a follow-up below\.<\/p>/);
+      });
+
+      it('a gate the session has moved past has no buttons', () => {
+        const gate = her(21, { gate_type: 'minds_eye_continue_gate', atSeq: 6 }, '2026-11-19T11:05:00.000Z', 'HUMAN_GATE');
+        assert.doesNotMatch(convo({ session: { ...S, state: 'working' }, messages: [gate], ...on }), /<button/);
+      });
+
+      it('her latest reply\'s questions: choices and a comment, text, a dropdown past ten; Anything else; Send answers', () => {
+        const html = convo({ messages: [ask(30, QS)], ...on });
+        assert.match(html, /<div class="msg waiting">/);
+        assert.match(html, /<span role="radiogroup" aria-labelledby="f-a-q1-l" class="opts"><label><input type="radio" name="a-q1" value="Yes"/);
+        assert.match(html, /<label for="f-c-q1" class="flabel">Comment/);
+        assert.match(html, /<label for="f-a-q2" class="flabel">Your answer[^<]*<i> \(optional\)<\/i><\/label><textarea id="f-a-q2"/);
+        assert.match(html, /<select id="f-a-q3"/);
+        assert.doesNotMatch(html, /f-c-q2/);
+        assert.match(html, /<label for="f-note" class="flabel">Anything else/);
+        assert.match(html, /<button type="button" class="btn primary" disabled="">Send answers<\/button>/);
+      });
+
+      it('an older reply\'s questions are only what she asked', () => {
+        const html = convo({ messages: [ask(30, QS), her(31, { message: 'Done.', format: 'markdown', invitesReply: true }, '2026-11-19T11:06:00.000Z')], ...on });
+        assert.doesNotMatch(html, /<input|<textarea|Send answers/);
+        assert.match(html, /<p class="muted">Yes · No<\/p>/);
+      });
+    });
+
+    it('what the person just sent shows at once, marked Sent, with Working… — before the session is even read', () => {
+      const html = convo({ session: null, pending: 'Plan the beds' });
+      assert.match(html, /<div class="msg mine pending"><p class="plain">Plan the beds<\/p><p class="sent">Sent<\/p><\/div><p class="working" role="status">Working…<\/p>/);
+      const waiting = convo({ messages: [her(13, { message: 'Two?', format: 'markdown', invitesReply: true, questions: [{ id: 'q1', text: 'x' }] }, '2026-11-19T11:00:05.000Z')],
+        pending: 'Answers sent.', onGate: async () => {}, onAnswers: async () => {} });
+      assert.doesNotMatch(waiting, /Send answers/);
+    });
+
+    it('the shell draws her region at the left, headed by her name, with a Novia tab for a phone', () => {
+      const html = strip(draw('/p/money?minds-eye=7'));
+      assert.match(html, /<div class="body"><aside class="region" aria-label="Novia" style="flex-basis:320px"><div class="region-head"><h2>Novia<\/h2><button type="button" class="ib" aria-label="Collapse Novia"/);
+      assert.match(html, /<div class="region-handle" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Drag to resize Novia — double-click for the usual width"[^>]*aria-valuenow="320" aria-valuemin="280"[^>]*><\/div><\/aside>/);
+      assert.match(html, /<nav class="tabbar"[^>]*>.*<button type="button">Novia<\/button><\/nav>/s);
+    });
+
+    it('collapsed, her region is a strip that names her, the whole strip opening it', () => {
+      const held = globalThis.localStorage;
+      globalThis.localStorage = { getItem: k => (k === COLLAPSED_KEY ? 'true' : null), setItem() {} };
+      try {
+        const html = strip(draw('/p/money'));
+        assert.match(html, /<aside class="region collapsed"><button type="button" class="strip" aria-label="Open Novia" title="Open Novia"><span aria-hidden="true">»<\/span><span class="name" aria-hidden="true">Novia<\/span><\/button><\/aside>/);
+      } finally {
+        globalThis.localStorage = held;
+      }
+    });
+  });
+
   it('every catalog key is used by the app, and every key the app uses is in the catalog', () => {
     const catalog = JSON.parse(readFileSync(join(APP_DIR, 'locales/en.json'), 'utf8'));
     const flat    = (obj, prefix = '') => Object.entries(obj).flatMap(([k, v]) => (typeof v === 'object' ? flat(v, `${prefix}${k}.`) : [`${prefix}${k}`]));
@@ -1010,5 +1220,141 @@ describe('components and catalog', () => {
     const used    = new Set(sources(APP_DIR).flatMap(src => [...src.matchAll(/\bt\('([a-zA-Z0-9_.]+)'/g)].map(m => m[1])));
     assert.deepEqual([...used].filter(k => !keys.has(k)), [], 'used but not in the catalog');
     assert.deepEqual([...keys].filter(k => !used.has(k)), [], 'in the catalog but never used');
+  });
+});
+
+describe('her region — the decisions, pure', () => {
+  it('sessionName: label, else first message, whitespace folded; null with neither', () => {
+    assert.equal(sessionName({ label: ' Garden ', firstMessage: 'x' }), 'Garden');
+    assert.equal(sessionName({ label: '', firstMessage: 'Plan\n the  beds' }), 'Plan the beds');
+    assert.equal(sessionName({ label: null, firstMessage: null }), null);
+  });
+
+  it('addConversation: each message once, keyed by side', () => {
+    const p1 = { kind: 'person', seq: 1 }, i1 = { kind: 'inbox', id: 1 }, i2 = { kind: 'inbox', id: 2 };
+    assert.deepEqual(addConversation([p1, i1], [i1, i2, { kind: 'person', seq: 1 }]), [p1, i1, i2]);
+  });
+
+  it('groupTurns: consecutive lines of one turn together; a line without a turn stays itself', () => {
+    const line = (id, turn) => ({ kind: 'inbox', id, messageType: 'HUMAN_NOTIFICATION', payload: { turn, call: `c${id}` } });
+    const old  = { kind: 'inbox', id: 9, messageType: 'HUMAN_NOTIFICATION', payload: { message: '_Turn 3 · `x`_' } };
+    const items = groupTurns([line(1, 1), line(2, 1), line(3, 2), old, line(4, 2)]);
+    assert.deepEqual(items.map(i => (i.kind === 'turn' ? `t${i.turn}:${i.calls.length}` : i.id)), ['t1:2', 't2:1', 9, 't2:1']);
+    assert.deepEqual(items[0].calls[1], { call: 'c2', detail: null, id: 2 });
+  });
+
+  it('repliesMissing: a first reply long after the session began, or none once it stopped', () => {
+    const s = { createdAt: '2026-11-10T10:00:00.000Z', state: 'waiting' };
+    assert.equal(repliesMissing(s, '2026-11-10T10:00:30.000Z'), false);
+    assert.equal(repliesMissing(s, new Date(Date.parse(s.createdAt) + ROUND_CEILING_MS + 1).toISOString()), true);
+    assert.equal(repliesMissing(s, null), true);
+    assert.equal(repliesMissing({ ...s, state: 'working' }, null), false);
+  });
+
+  it('conversationDelay: by her state, doubling on failure, capped', () => {
+    assert.equal(conversationDelay(0, 'working'), WORKING_POLL_MS);
+    assert.equal(conversationDelay(0, 'waiting'), WAITING_POLL_MS);
+    assert.equal(conversationDelay(1, 'working'), WORKING_POLL_MS * 2);
+    assert.equal(conversationDelay(10, 'waiting'), CONVO_MAX_MS);
+  });
+
+  it('the collapsed region is remembered on the device, and a storage that throws forgets', () => {
+    const store = new MemoryStorage();
+    assert.equal(readCollapsed(store), false);
+    writeCollapsed(store, true);
+    assert.equal(store.getItem(COLLAPSED_KEY), 'true');
+    assert.equal(readCollapsed(store), true);
+    writeCollapsed(store, false);
+    assert.equal(readCollapsed(store), false);
+    const broken = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); }, removeItem() {} };
+    assert.equal(readCollapsed(broken), false);
+    assert.doesNotThrow(() => writeCollapsed(broken, true));
+  });
+
+  it('her region\'s width: held between its minimum and 60% of the window, remembered unless it is the usual one', () => {
+    assert.equal(clampWidth(500, 1600), 500);
+    assert.equal(clampWidth(100, 1600), MIN_WIDTH);
+    assert.equal(clampWidth(1400, 1600), 960);
+    assert.equal(clampWidth(400, 300), MIN_WIDTH);      // a window too narrow still leaves the minimum
+    assert.equal(clampWidth(333.6, 1600), 334);
+    const store = new MemoryStorage();
+    assert.equal(readWidth(store), DEFAULT_WIDTH);
+    writeWidth(store, 480);
+    assert.equal(store.getItem(WIDTH_KEY), '480');
+    assert.equal(readWidth(store), 480);
+    writeWidth(store, DEFAULT_WIDTH);
+    assert.equal(store.getItem(WIDTH_KEY), null);
+    store.setItem(WIDTH_KEY, 'wide');
+    assert.equal(readWidth(store), DEFAULT_WIDTH);
+    const broken = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); }, removeItem() { throw new Error('denied'); } };
+    assert.equal(readWidth(broken), DEFAULT_WIDTH);
+    assert.doesNotThrow(() => writeWidth(broken, 480));
+  });
+
+  it('answerable: the gate she waits at, or her last reply with questions — nothing while she works', () => {
+    const reply = q => ({ kind: 'inbox', id: 5, messageType: 'HUMAN_NOTIFICATION', payload: { invitesReply: true, ...(q ? { questions: [{ id: 'q1', text: 'x' }] } : {}) } });
+    const gate  = { kind: 'inbox', id: 6, messageType: 'HUMAN_GATE', payload: { gate_type: 'minds_eye_gate', atSeq: 9 } };
+    const me    = { kind: 'person', seq: 3 };
+    assert.equal(answerable({ state: 'waiting', gate: { kind: 'action', atSeq: 9 } }, [reply(true), gate]), gate);
+    assert.equal(answerable({ state: 'waiting', gate: { kind: 'action', atSeq: 8 } }, [gate]), null);
+    assert.equal(answerable({ state: 'waiting', gate: null }, [reply(true)]).id, 5);
+    assert.equal(answerable({ state: 'waiting', gate: null }, [reply(false)]), null);
+    assert.equal(answerable({ state: 'waiting', gate: null }, [reply(true), me]).id, 5);
+    assert.equal(answerable({ state: 'working', gate: null }, [reply(true)]), null);
+    assert.equal(answerable(null, []), null);
+  });
+
+  it('answerField: radio up to ten choices, a dropdown past, text without', () => {
+    assert.equal(answerField({ id: 'q1', options: ['a', 'b'] }, 'L').input_type, 'radio');
+    assert.equal(answerField({ id: 'q1', options: Array.from({ length: RADIO_LIMIT + 1 }, (_, i) => `${i}`) }, 'L').input_type, 'select');
+    assert.deepEqual(answerField({ id: 'q2' }, 'Your answer'), { name: 'a-q2', input_type: 'textarea', label: 'Your answer', optional: true });
+  });
+
+  it('answersFrom: the answers with something in them, the note, or null', () => {
+    const qs = [{ id: 'q1' }, { id: 'q2' }, { id: 'q3' }];
+    assert.deepEqual(answersFrom(qs, { q1: { answer: ' Yes ' }, q2: { answer: '  ' }, q3: { comment: 'later' } }, '  '),
+      { answers: [{ id: 'q1', answer: 'Yes', comment: null }, { id: 'q3', answer: null, comment: 'later' }], note: null });
+    assert.deepEqual(answersFrom(qs, {}, ' just this '), { answers: [], note: 'just this' });
+    assert.equal(answersFrom(qs, { q1: { answer: '' } }, ''), null);
+  });
+
+  it('stillExpecting: until the person\'s message is stored, she is working, or a minute passes', () => {
+    const since = 1_000_000;
+    const e = { since, persons: 2 };
+    assert.equal(stillExpecting(e, { persons: 2, state: 'waiting', now: since + 5_000 }), true);
+    assert.equal(stillExpecting(e, { persons: 3, state: 'waiting', now: since + 5_000 }), false);
+    assert.equal(stillExpecting(e, { persons: 2, state: 'working', now: since + 5_000 }), false);
+    assert.equal(stillExpecting(e, { persons: 2, state: 'waiting', now: since + EXPECT_MS }), false);
+    assert.equal(stillExpecting(null, { persons: 0, state: 'waiting', now: since }), false);
+    assert.equal(personCount([{ kind: 'person' }, { kind: 'inbox' }, { kind: 'person' }]), 2);
+  });
+
+  it('a panel\'s topic (§2.5): its domain, titled by the domain\'s label, or its text; the list asks for it, New sends it', () => {
+    const domains = [{ domain: 'pantry', label: 'Pantry' }];
+    assert.deepEqual(panelTopic({ domain: 'pantry' }, domains), { topic: 'pantry', title: 'Pantry' });
+    assert.deepEqual(panelTopic({ domain: 'garden' }, domains), { topic: 'garden', title: 'garden' });
+    assert.deepEqual(panelTopic({ topic: 'Holidays' }, domains), { topic: 'Holidays', title: 'Holidays' });
+    assert.deepEqual(sessionsQuery('pantry'), { topic: 'pantry' });
+    assert.equal(sessionsQuery(null), undefined);
+    assert.deepEqual(startBody('hello', 'pantry'), { text: 'hello', topic: 'pantry' });
+    assert.deepEqual(startBody('hello', null), { text: 'hello' });
+  });
+
+  it('labelBody (decision S): the name typed, trimmed; an empty name clears the label', () => {
+    assert.deepEqual(labelBody('  Garden beds '), { label: 'Garden beds' });
+    assert.deepEqual(labelBody('   '), { label: null });
+    assert.deepEqual(labelBody(''), { label: null });
+  });
+
+  it('withSession: sets or clears ?minds-eye=, keeping the rest of the location', () => {
+    assert.equal(withSession('/p/money', 7), '/p/money?minds-eye=7');
+    assert.equal(withSession('/d/x?run=4', 7), '/d/x?run=4&minds-eye=7');
+    assert.equal(withSession('/d/x?run=4&minds-eye=7', null), '/d/x?run=4');
+    assert.equal(withSession('/?minds-eye=7', null), '/');
+  });
+
+  it('the app\'s round ceiling is ProcFunction\'s, as /proc\'s is', async () => {
+    const proc = await import('../../src/proc/minds-eye-sessions.mjs');
+    assert.equal(ROUND_CEILING_MS, proc.ROUND_CEILING_MS);
   });
 });

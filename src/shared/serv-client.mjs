@@ -118,13 +118,15 @@ export async function bestEffort(label, ctx, fn) {
  * @param {object} [vectorSearch]  { column, queryText, threshold?, limit? }
  * @param {string|object|Array} [orderBy]  One sort term or several — "priority DESC",
  *   { column, direction }, or an array of either for a composite sort
+ * @param {number} [offset]  Rows skipped — a later page of the same read
  */
-export async function getRows(tableName, filters = [], orderBy, limit, vectorSearch, columns) {
+export async function getRows(tableName, filters = [], orderBy, limit, vectorSearch, columns, offset) {
   return servPost('/api/v1/serv/table/getRows', {
     tableName,
     ...(filters.length  && { filters }),
     ...(orderBy         && { orderBy }),
     ...(limit           && { limit }),
+    ...(offset          && { offset }),
     ...(vectorSearch    && { vectorSearch }),
     ...(columns?.length && { columns }),
   });

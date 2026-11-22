@@ -7,8 +7,9 @@
 // notifications as markdown, a failure by its summary, each question with its message — and the
 // question the run waits at answered in place. That question is read from GET /gates/{runId},
 // rebuilt from the run with the gateId an answer names, whichever surface started the run; the
-// copies in the inbox are what was sent. A question answered here becomes a one-line record for as
-// long as the page holds it. What came before the person's last answer folds into one line, and a
+// copies in the inbox are what was sent. A question answered, here or anywhere, becomes a one-line
+// record under it, from its GATE_ANSWERED (§8) — or, until that arrives, from the answer given on
+// this page. What came before the person's last answer folds into one line, and a
 // new question is brought into view. The run's id is shown, for talking about it. Read from
 // GET /runs/{runId} and GET /inbox?run= while the run is going
 // and the tab visible: often while it works, less while it waits on a person, less still after
@@ -113,7 +114,7 @@ export function Message({ message, waiting }) {
  * @param {(gateId: string, record: object) => void} [props.onAnswered]
  * @param {() => void} [props.onMoved]
  */
-export function ThreadView({ run, messages, gate = null, answered = {}, problem, context, onAnswered, onMoved }) {
+export function ThreadView({ run, messages: all, gate = null, answered = {}, problem, context, onAnswered, onMoved }) {
   const { t, i18n } = useTranslation();
   const [unfolded, setUnfolded] = useState(false);
   const liveRef = useRef(null);
@@ -128,10 +129,14 @@ export function ThreadView({ run, messages, gate = null, answered = {}, problem,
   if (problem === 'gone') return <p className="muted">{t('run.gone')}</p>;
   if (!run) return problem ? <p className="muted">{t('run.unreachable')}</p> : <p className="muted">{t('shell.loading')}</p>;
 
+  // An answer is drawn under its question, never as a message of its own.
+  const messages = all.filter(m => m.messageType !== 'GATE_ANSWERED');
+  const answers  = new Map(all.filter(m => m.messageType === 'GATE_ANSWERED').map(m => [m.payload?.gateId, m.payload]));
+  const recordOf = gid => answers.get(gid) ?? answered[gid];
   const live    = run.status === 'awaiting_human_gate' ? gate : null;
   const lastOf  = new Map(messages.filter(m => m.messageType === 'HUMAN_GATE').map(m => [m.payload?.dialog?.gate_id, m.id]));
   const liveSent = live && lastOf.has(live.gateId);
-  const answer  = live && !answered[live.gateId] && context
+  const answer  = live && !recordOf(live.gateId) && context
     ? <Gate key={live.gateId} gate={live} context={context} onAnswered={record => onAnswered(live.gateId, record)} onMoved={onMoved} />
     : null;
   const waitingAt = run.status === 'awaiting_human_gate' && !live ? messages.findLast(m => m.messageType === 'HUMAN_GATE') : null;
@@ -153,7 +158,7 @@ export function ThreadView({ run, messages, gate = null, answered = {}, problem,
         return (
           <div key={m.id}>
             <Message message={m} waiting={m === waitingAt} />
-            {last && answered[gid] && <AnsweredRecord record={answered[gid]} />}
+            {last && recordOf(gid) && <AnsweredRecord record={recordOf(gid)} />}
           </div>
         );
       })}

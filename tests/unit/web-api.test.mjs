@@ -54,10 +54,12 @@ beforeEach(() => {
 afterEach(() => { globalThis.fetch = realFetch; });
 
 describe('routes — an allow-list of the spec, never a proxy', () => {
-  it('holds exactly the twelve UI-Web operations', () => {
+  it('holds exactly the eighteen UI-Web operations', () => {
     assert.deepEqual(WEB_ROUTES.map(r => r.operationId).sort(), [
-      'webAnswerGate', 'webGetGate', 'webGetMe', 'webGetOutput', 'webGetRun', 'webListGates', 'webListPages',
-      'webListRuns', 'webListWorkflows', 'webReadInbox', 'webReadSourceRows', 'webStartRun',
+      'webAnswerGate', 'webAnswerMindsEyeGate', 'webGetGate', 'webGetMe', 'webGetOutput', 'webGetRun', 'webListGates',
+      'webListMindsEyeSessions', 'webListPages', 'webListRuns', 'webListWorkflows', 'webReadInbox',
+      'webReadMindsEyeMessages', 'webReadSourceRows', 'webRenameMindsEyeSession', 'webSendMindsEyeMessage',
+      'webStartMindsEyeSession', 'webStartRun',
     ]);
   });
 
@@ -66,6 +68,9 @@ describe('routes — an allow-list of the spec, never a proxy', () => {
     ['GET', 'gates/abc'], ['GET', 'gates/0'], ['GET', 'gates/12/'], ['GET', 'gates//responses'],
     ['POST', 'gates/12'], ['GET', 'sources/x;drop/rows'], ['GET', 'sources/PGD_x/rows/extra'],
     ['GET', 'outputs/..'], ['GET', ''], ['GET', 'me/'],
+    ['GET', 'minds-eye'], ['GET', 'minds-eye/sessions/abc/messages'], ['GET', 'minds-eye/sessions/0'],
+    ['DELETE', 'minds-eye/sessions/12'], ['PATCH', 'minds-eye/sessions'], ['GET', 'minds-eye/sessions/12/entries'],
+    ['POST', 'minds-eye/sessions/12'], ['GET', 'minds-eye/sessions/12/responses'],
   ]) {
     it(`refuses ${method} /${proxy} with 404 route_not_found and calls nothing`, async () => {
       const res = await handler(event(method, proxy));
@@ -92,10 +97,13 @@ describe('each operation calls its PROC route as the principal', () => {
     ['GET',  'inbox',                'inbox'],
     ['GET',  'gates',                'gates'],
     ['GET',  'gates/42',             'gates/42'],
+    ['GET',  'minds-eye/sessions',   'minds-eye/sessions'],
+    ['GET',  'minds-eye/sessions/7/messages', 'minds-eye/sessions/7/messages'],
   ];
   for (const [method, proxy, procPath] of cases) {
     it(`${method} /${proxy} → ${method} /proc/${procPath}`, async () => {
       if (proxy === 'inbox') answers.push(() => json(200, { success: true, messages: [], cursor: 0, more: false }));
+      if (proxy.endsWith('/messages')) answers.push(() => json(200, { success: true, messages: [], cursor: { after: 0, afterSeq: 0 }, more: false }));
       const res = await handler(event(method, proxy));
       assert.equal(res.statusCode, 200);
       assert.equal(calls.length, 1);
@@ -127,10 +135,11 @@ describe('each operation calls its PROC route as the principal', () => {
 
   it('a records read passes its filter through intact', async () => {
     const filter = JSON.stringify([{ column: 'a', op: 'eq', value: 'b&c=d' }]);
-    await handler(event('GET', 'sources/PGD_t/rows', { query: { filter, order_by: 'a DESC' } }));
+    await handler(event('GET', 'sources/PGD_t/rows', { query: { filter, order_by: 'a DESC', offset: '100' } }));
     const url = new URL(calls[0].url);
     assert.equal(url.searchParams.get('filter'), filter);
     assert.equal(url.searchParams.get('order_by'), 'a DESC');
+    assert.equal(url.searchParams.get('offset'), '100', 'the next page reaches PROC (item 9)');
   });
 
   it('returns PROC\'s body and status unchanged — a started run is 202', async () => {
@@ -149,6 +158,40 @@ describe('each operation calls its PROC route as the principal', () => {
     assert.equal(res.statusCode, 202);
     assert.equal(calls[0].url, `${PROC_URL}/api/v1/proc/gates/42/responses`);
     assert.deepEqual(JSON.parse(calls[0].init.body), answer);
+  });
+});
+
+describe('minds-eye sessions — bodies and queries pass through', () => {
+  for (const [method, proxy, body] of [
+    ['POST',  'minds-eye/sessions',             { text: 'hello', topic: 'garden' }],
+    ['PATCH', 'minds-eye/sessions/7',           { label: 'Garden plans' }],
+    ['POST',  'minds-eye/sessions/7/messages',  { answers: [{ id: 'q1', answer: 'Yes' }], note: null }],
+    ['POST',  'minds-eye/sessions/7/responses', { atSeq: 12, action: 'continue' }],
+  ]) {
+    it(`${method} /${proxy} passes its body to /proc/${proxy}`, async () => {
+      answers.push(() => json(202, { success: true, sessionId: 7 }));
+      const res = await handler(event(method, proxy, { body: JSON.stringify(body) }));
+      assert.equal(res.statusCode, 202);
+      assert.equal(calls[0].url, `${PROC_URL}/api/v1/proc/${proxy}`);
+      assert.equal(calls[0].init.method, method);
+      assert.deepEqual(JSON.parse(calls[0].init.body), body);
+    });
+  }
+
+  it('a session list passes on topic, limit and before only', async () => {
+    await handler(event('GET', 'minds-eye/sessions', { query: { topic: 'garden', limit: '5', before: '2026-11-19T10:00:00.000Z', session_type: 'general_chat' } }));
+    const url = new URL(calls[0].url);
+    assert.deepEqual(Object.fromEntries(url.searchParams), { topic: 'garden', limit: '5', before: '2026-11-19T10:00:00.000Z' });
+  });
+
+  it('a conversation\'s WORKFLOW_ERROR is summarised as the inbox\'s is, the person\'s entries untouched', async () => {
+    const person = { kind: 'person', seq: 1, text: 'hi', createdAt: '2026-11-19T10:00:00.000Z' };
+    const error  = { kind: 'inbox', id: 9, messageType: 'WORKFLOW_ERROR', payload: { message: 'SERV getRows failed: 500 boom' }, createdAt: '2026-11-19T10:00:01.000Z' };
+    answers.push(() => json(200, { success: true, session: {}, messages: [person, error], cursor: { after: 9, afterSeq: 1 }, more: false, repliesKeptFrom: null }));
+    const body = parse(await handler(event('GET', 'minds-eye/sessions/7/messages')));
+    assert.deepEqual(body.messages[0], person);
+    assert.equal(body.messages[1].payload.message, undefined);
+    assert.equal(typeof body.messages[1].payload.summary, 'string');
   });
 });
 

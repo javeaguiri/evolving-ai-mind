@@ -41,6 +41,7 @@ import { handle as explain }            from './explain.mjs';
 import { handle as deleteWorkflow }     from './delete-workflow.mjs';
 import { handle as writeMemory }        from './memory-writer.mjs';
 import { handle as mindsEye }           from './minds-eye.mjs';
+import { handle as mindsEyeSessions }   from './minds-eye-sessions.mjs';
 import { handle as replay }             from './replay.mjs';
 import { handle as gates }              from './gates.mjs';
 import { handle as inbox }              from './inbox.mjs';
@@ -292,6 +293,10 @@ async function dispatch(req) {
   }
   if ((req.proxy || '').split('/').filter(Boolean)[0] === 'sources') {
     return sources(req);
+  }
+  // Novia's sessions for the web (/minds-eye/sessions[/{id}[/messages|/responses]]).
+  if ((req.proxy || '').split('/').filter(Boolean)[0] === 'minds-eye') {
+    return mindsEyeSessions(req);
   }
   // One run names its id in the path (/runs/{runId}); the list and a start are /runs alone.
   if ((req.proxy || '').split('/').filter(Boolean)[0] === 'runs') {

@@ -29,20 +29,11 @@ import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { WebClient }                     from '@slack/web-api';
 import { ok, err }                       from '../../shared/lambda-utils.mjs';
 import { randomUUID }                    from 'crypto';
-import { FORM_BLOCK_PREFIX, LIST_ID_BLOCK_PREFIX, collectFormValues, collectListIdValue, invalidNumberFields, collectNoviaAnswers } from './form-fields.mjs';
+import { FORM_BLOCK_PREFIX, LIST_ID_BLOCK_PREFIX, collectFormValues, collectListIdValue, invalidNumberFields, collectNoviaAnswers, preservedContentBlocks } from './form-fields.mjs';
 
 const sqs   = new SQSClient({});
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
-// preservedContentBlocks — drops interactive/action-affordance blocks (buttons,
-// text inputs) from a message's blocks, keeping everything else (section,
-// markdown, context, container/reveal). Used on every gate response so
-// chat.update replaces only the stale controls, never the original content —
-// Slack's chat.update has no partial-edit primitive, so preserving anything
-// means resending it explicitly (Sprint 7 Track D4).
-function preservedContentBlocks(blocks) {
-  return (blocks ?? []).filter(b => b.type !== 'actions' && b.type !== 'input');
-}
 
 // buildPrivateMetadata — JSON-encodes private_metadata, keeping contentBlocks
 // only if the result fits Slack's 3000-char private_metadata limit; drops it
@@ -593,6 +584,20 @@ export function answersEcho(answers, note) {
   return `🧠 ${lines.join('\n')}`;
 }
 
+// Send answers clicked with every box empty sends nothing. Only the person who clicked is told
+// why, in the thread: a reply typed in Slack's own thread box never reaches Novia.
+export const EMPTY_ANSWERS_TEXT = 'Nothing to send — fill in an answer, or use *Continue with Novia* to write a reply.';
+
+/** The private notice for an empty Send answers click. Pure — exported for test. */
+export function emptyAnswersNotice(payload) {
+  return {
+    channel: payload.channel?.id,
+    user:    payload.user?.id,
+    text:    EMPTY_ANSWERS_TEXT,
+    ...(payload.message?.thread_ts ? { thread_ts: payload.message.thread_ts } : {}),
+  };
+}
+
 async function handleMindsEyeAnswers(buttonValue, payload, correlationId) {
   const { sessionId } = buttonValue;
   const channel  = payload.channel?.id;
@@ -607,6 +612,11 @@ async function handleMindsEyeAnswers(buttonValue, payload, correlationId) {
   const { answers, note } = collectNoviaAnswers(payload.state?.values ?? {}, payload.message?.blocks ?? []);
   if (answers.length === 0 && !note) {
     console.info('interactive: minds_eye_answers clicked with nothing filled in', { sessionId, traceId });
+    try {
+      await slack.chat.postEphemeral(emptyAnswersNotice(payload));
+    } catch (error) {
+      console.error('interactive: postEphemeral failed', { error: error.message, sessionId, traceId });
+    }
     return { statusCode: 200, body: '' };
   }
 
@@ -641,7 +651,7 @@ async function handleMindsEyeAnswers(buttonValue, payload, correlationId) {
         sessionId,
         answers:    answers.map(({ id, answer, comment }) => ({ id, answer, comment })),
         note,
-        slackUser:  payload.user?.id,
+        user:       payload.user?.id,
         callback:   { provider: 'slack', channel, threadId: ackTs ?? threadTs },
         enqueuedAt: new Date().toISOString(),
       }),
@@ -757,7 +767,7 @@ async function handleMindsEyeActionGate(buttonValue, payload, correlationId) {
         approved:  !!approved,
         ...(approved && test ? { test: true } : {}),
         ...(buttonValue.atSeq != null ? { atSeq: buttonValue.atSeq } : {}),
-        slackUser: payload.user?.id,
+        user:      payload.user?.id,
         callback:  { provider: 'slack', channel, threadId: threadTs },
         traceId,
         enqueuedAt: new Date().toISOString(),
@@ -814,7 +824,8 @@ async function handleMindsEyeContinueGate(buttonValue, payload, correlationId) {
         approved:         !!approved,
         resetActionCount: !!buttonValue.resetActionCount,
         ...(buttonValue.atSeq != null ? { atSeq: buttonValue.atSeq } : {}),
-        slackUser:        payload.user?.id,
+        ...(buttonValue.afterTruncation ? { afterTruncation: true } : {}),
+        user:             payload.user?.id,
         callback:         { provider: 'slack', channel, threadId: threadTs },
         traceId,
         enqueuedAt:       new Date().toISOString(),
@@ -835,7 +846,7 @@ async function handleMindsEyeContinueGate(buttonValue, payload, correlationId) {
 // ---------------------------------------------------------------------------
 
 async function handleMindsEyeContinueFollowupButton(buttonValue, payload, correlationId) {
-  const { sessionId } = buttonValue;
+  const { sessionId, afterTruncation = false } = buttonValue;
   const triggerId     = payload.trigger_id;
   const channel       = payload.channel?.id;
   const threadTs      = payload.container?.message_ts ?? payload.message?.ts;
@@ -854,7 +865,7 @@ async function handleMindsEyeContinueFollowupButton(buttonValue, payload, correl
           type:             'modal',
           callback_id:      'minds_eye_continue_followup_modal',
           notify_on_close:  false,
-          private_metadata: buildPrivateMetadata({ sessionId, channel, threadTs, traceId }, preservedContentBlocks(payload.message?.blocks)),
+          private_metadata: buildPrivateMetadata({ sessionId, channel, threadTs, traceId, ...(afterTruncation ? { afterTruncation: true } : {}) }, preservedContentBlocks(payload.message?.blocks)),
           title:  { type: 'plain_text', text: 'Ask Novia' },
           submit: { type: 'plain_text', text: 'Send' },
           close:  { type: 'plain_text', text: 'Cancel' },
@@ -904,7 +915,7 @@ async function handleMindsEyeContinueFollowupSubmission(payload, traceId) {
     return err(400, 'Invalid private_metadata', traceId);
   }
 
-  const { sessionId, channel, threadTs, traceId: metaTraceId, contentBlocks } = meta;
+  const { sessionId, channel, threadTs, traceId: metaTraceId, contentBlocks, afterTruncation = false } = meta;
   if (!sessionId || !channel) {
     console.warn('interactive: minds_eye_continue_followup_modal missing sessionId or channel', { meta, traceId });
     return err(400, 'minds_eye_continue_followup_modal private_metadata must contain sessionId and channel', traceId);
@@ -957,7 +968,8 @@ async function handleMindsEyeContinueFollowupSubmission(payload, traceId) {
         resumeType:   'followup',
         sessionId,
         followupText: inputValue,
-        slackUser:    payload.user?.id,
+        ...(afterTruncation ? { afterTruncation: true } : {}),
+        user:         payload.user?.id,
         callback:     { provider: 'slack', channel, threadId: threadTs },
         traceId:      effectiveTrace,
         enqueuedAt:   new Date().toISOString(),
@@ -1214,7 +1226,7 @@ async function handleMindsEyeViewSubmission(payload, traceId) {
         traceId:           effectiveTrace,
         prompt:            inputValue,
         sessionId,
-        slackUser:         payload.user?.id,
+        user:              payload.user?.id,
         callback:          { provider: 'slack', channel, threadId: ackTs ?? threadTs },
         enqueuedAt:        new Date().toISOString(),
       }),

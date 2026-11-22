@@ -174,7 +174,8 @@ h1, h2 { margin: 0; text-wrap: balance; }
   font-weight: 500;
 }
 .banner.info { background: var(--accent-soft); color: var(--accent-ink); display: flex; align-items: center; gap: 10px; }
-.main { flex: 1 1 auto; min-block-size: 0; overflow: auto; padding-block: 18px 40px; padding-inline: 20px; }
+.body { flex: 1 1 auto; min-block-size: 0; display: flex; }
+.main { container: main / inline-size; flex: 1 1 auto; min-inline-size: 0; min-block-size: 0; overflow: auto; padding-block: 18px 40px; padding-inline: 20px; }
 .pagehead { display: flex; align-items: center; gap: 12px; margin-block-end: 14px; flex-wrap: wrap; }
 .pagehead h1 { font-size: 20px; font-weight: 600; }
 .panel {
@@ -195,7 +196,8 @@ h1, h2 { margin: 0; text-wrap: balance; }
 .w-half { grid-column: span 3; }
 .w-two-thirds { grid-column: span 4; }
 .w-full { grid-column: span 6; }
-@media (max-width: 1100px) { .w-third { grid-column: span 3; } .w-two-thirds { grid-column: span 6; } }
+/* by the page's own width, not the window's: her region widens and the page narrows */
+@container main (max-width: 740px) { .w-third { grid-column: span 3; } .w-half, .w-two-thirds { grid-column: span 6; } }
 .phead { display: flex; align-items: center; gap: 8px; }
 .phead h2 { font-size: 15px; font-weight: 600; flex: 1 1 auto; min-inline-size: 0; }
 .pfoot { margin: 0; font-size: 12px; color: var(--muted); }
@@ -231,6 +233,9 @@ table.grid .num { text-align: end; font-variant-numeric: tabular-nums; white-spa
 .rlist button:hover { background: var(--ground); }
 .rlist button[aria-current="true"] { background: var(--accent-soft); }
 .rlist .rd { color: var(--muted); text-align: end; }
+/* a read that has more ends on this: it reads on as it scrolls into view */
+.more { display: flex; justify-content: center; padding-block: 10px; }
+.rlist .more .btn { inline-size: auto; border: 1px solid var(--control); background: var(--paper); padding-inline: 14px; }
 
 .skeleton { display: flex; flex-direction: column; gap: 8px; }
 .skeleton i { display: block; block-size: 14px; border-radius: 4px; background: var(--soft); }
@@ -304,7 +309,7 @@ table.grid .num { text-align: end; font-variant-numeric: tabular-nums; white-spa
   .w-third, .w-half, .w-two-thirds, .w-full { grid-column: auto; }
   .tabbar {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     background: var(--paper);
     border-block-start: 1px solid var(--line);
     padding-block-end: 10px;
@@ -466,3 +471,58 @@ td.bad .cell { border-color: var(--bad); }
 .signin h1 { font-size: 1.5rem; font-weight: 600; }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* ---------- her region (§4.1, §4.5) ---------- */
+.region { position: relative; flex: 0 0 320px; min-inline-size: 0; max-inline-size: 60vw; min-block-size: 0; display: flex; flex-direction: column; background: var(--paper); border-inline-end: 1px solid var(--line); }
+.region.collapsed { flex-basis: 48px; align-items: center; padding-block: 10px; }
+.region-handle { position: absolute; inset-block: 0; inset-inline-end: -4px; inline-size: 8px; cursor: col-resize; touch-action: none; z-index: 1; }
+.region-handle:hover, .region-handle:focus-visible { background: linear-gradient(to right, transparent 3px, var(--accent) 3px, var(--accent) 5px, transparent 5px); outline: none; }
+.region.collapsed .strip { display: flex; flex-direction: column; align-items: center; gap: 10px; border: 0; background: transparent; color: var(--muted); padding-block: 4px; padding-inline: 8px; border-radius: 8px; cursor: pointer; }
+.region.collapsed .strip:hover { background: var(--ground); color: var(--ink); }
+.region.collapsed .strip .name { writing-mode: vertical-rl; font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.region-head { display: flex; align-items: center; gap: 8px; padding-block: 10px; padding-inline: 14px; border-block-end: 1px solid var(--line); }
+.region-head h2 { flex: 1 1 auto; font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.region-body { flex: 1 1 auto; min-block-size: 0; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.region-body > .btn { align-self: flex-start; }
+.panel .region-body { padding: 0; max-block-size: 70vh; }
+.sessions { list-style: none; margin: 0; padding: 0; }
+.sessions button {
+  inline-size: 100%; display: flex; align-items: baseline; gap: 8px; border: 0; background: transparent; text-align: start;
+  padding-block: 8px; padding-inline: 8px; border-radius: 8px; color: var(--ink);
+}
+.sessions button:hover { background: var(--ground); }
+.sessions button[aria-current="true"] { background: var(--accent-soft); }
+.sessions .lbl { flex: 1 1 auto; min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sessions .when { flex: none; font-size: 12px; color: var(--muted); }
+.convo-title { font-size: 15px; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
+.convo-head { display: flex; align-items: flex-start; gap: 6px; flex-wrap: wrap; }
+.convo-head .convo-title { flex: 1 1 auto; min-inline-size: 0; }
+.convo-rename { flex: 1 1 auto; min-inline-size: 0; font: inherit; font-size: 16px; font-weight: 600; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding-block: 4px; padding-inline: 8px; }
+.convo-head .hint { flex-basis: 100%; margin: 0; }
+.convo { display: flex; flex-direction: column; gap: 8px; }
+.msg.mine { background: var(--accent-soft); align-self: flex-end; max-inline-size: 90%; }
+.turn { font-size: 13px; color: var(--muted); padding-inline: 4px; }
+.turn .md p { margin: 0; }
+.turn summary { cursor: pointer; }
+.turn ul { margin-block: 4px 0; padding-inline-start: 18px; }
+.questions { margin-block: 8px 0; padding-inline-start: 20px; }
+.questions .muted { margin: 2px 0 0; font-size: 12px; }
+.notkept { font-size: 12px; margin: 0; }
+.composer { display: flex; flex-direction: column; gap: 6px; margin-block-start: auto; }
+.composer textarea {
+  inline-size: 100%; box-sizing: border-box; resize: vertical; font: inherit; color: var(--ink); background: var(--paper);
+  border: 1px solid var(--line); border-radius: 8px; padding-block: 8px; padding-inline: 10px;
+}
+.composer .hint { margin: 0; font-size: 12px; color: var(--accent-ink); }
+.msg.waiting { border: 1px solid var(--accent); background: var(--paper); }
+.questions > li + li { margin-block-start: 10px; }
+.questions .fld { margin-block-start: 6px; }
+.answers { display: flex; flex-direction: column; gap: 8px; margin-block-start: 10px; }
+.msg.mine.pending { opacity: .75; }
+.msg .sent { margin: 4px 0 0; font-size: 11px; color: var(--muted); text-align: end; }
+
+/* iOS Safari zooms into a text box whose text is under 16px, and leaves the page wider than the
+   screen. A phone's controls are 16px; pinch-zoom stays allowed. */
+@media (max-width: 640px), (pointer: coarse) {
+  input, select, textarea, .fld input, .fld select, .fld textarea, .composer textarea, .cell { font-size: 16px; }
+}

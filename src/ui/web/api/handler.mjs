@@ -8,7 +8,8 @@
 // API Gateway's Cognito authorizer has already verified the access token (docs/arch-web-app.md
 // §1); the user is its `sub`, never a request field. Each allowed route (routes.mjs) calls its
 // PROC route as that principal and returns PROC's body unchanged, except /me, joined with
-// Cognito, and /inbox, whose WORKFLOW_ERRORs are summarised. Errors are WebError bodies.
+// Cognito, and /inbox and a minds-eye session's messages, whose WORKFLOW_ERRORs are
+// summarised. Errors are WebError bodies.
 
 import { randomUUID }           from 'node:crypto';
 import { respond }              from '../../../shared/lambda-utils.mjs';
@@ -53,7 +54,8 @@ async function serve(event, correlationId) {
     sub,
     correlationId,
   });
-  return { status, body: route.operationId === 'webReadInbox' ? summariseInbox(body) : body };
+  const summarised = route.operationId === 'webReadInbox' || route.operationId === 'webReadMindsEyeMessages';
+  return { status, body: summarised ? summariseInbox(body) : body };
 }
 
 export async function handler(event) {
