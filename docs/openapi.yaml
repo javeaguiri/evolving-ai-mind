@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: evolving-mind-ai
-  version: 3.14.0
+  version: 3.14.1
   description: >
     Self-evolving cognitive automation system.
     Slack → Lambda → PostgreSQL → LLM pipeline.
@@ -658,9 +658,10 @@ components:
       description: >
         A domain's records, from the registry (docs/arch-web-app.md §4.4): what its domain page
         draws a records panel for. An entity with child tables — joins whose registered foreign
-        key references its root — is one source and replaces its root table; every other table
-        and view of the domain is its own source, child tables included. Entities first, then
-        tables, then views, each by label.
+        key references its root — is one source and replaces its root table. Its child tables are
+        shown inside its documents, not as their own sources, unless a child table is itself the
+        root of a registered entity. Every other table and view of the domain is its own source.
+        Entities first, then tables, then views, each by label.
       required: [domain, sources]
       properties:
         domain: { type: string }
@@ -2965,7 +2966,8 @@ paths:
       description: >
         The domain's tables and views (PGC_Schema.domain) and its entities
         (PGC_EntitySchema.domain), as DomainSources: an entity with child tables replaces its
-        root table; every other table and view is its own source. Never stored — a household
+        root table, and its child tables are left to its documents unless one is itself an
+        entity's root; every other table and view is its own source. Never stored — a household
         cannot break a domain page by editing it (docs/arch-web-app.md §4.4). A domain with no
         records is an empty list. The household role is required.
       operationId: getDomain

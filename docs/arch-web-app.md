@@ -427,7 +427,10 @@ A question is only ever shown inside its run. 🔔 is a way to reach it, not a s
 Each domain has a page, `/d/{domain}`, drawn from the registry rather than stored — a household
 cannot break one by editing it. First a workflow panel over the domain's workflows (`display.menu`
 not `false`), then a records panel for each table, registered view and entity, opening on its
-`display.view` (`grid` when none) with the view switch. This is where anything not yet on a household page is
+`display.view` (`grid` when none) with the view switch. An entity with child tables is one panel,
+in place of its root table, and its rows open as documents; its child tables are shown inside the
+documents, not as panels of their own, unless a child table is itself an entity's root — an
+expense is a spending category's child and an entity of its own (`GET /domains/{domain}`). This is where anything not yet on a household page is
 found. **Phase 0 draws the workflow panel only**; Phase 1 adds the records panels and *Copy to a new
 page*, which turns the domain page into a household page the user can rearrange.
 
